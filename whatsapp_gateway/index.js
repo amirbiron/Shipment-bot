@@ -26,15 +26,20 @@ async function initializeClient() {
 
         client = await wppconnect.create({
             session: 'shipment-bot',
-            catchQR: (base64Qr, asciiQR) => {
+            autoClose: 0, // Disable auto-close (0 = never)
+            tokenStore: 'file',
+            folderNameToken: './sessions',
+            catchQR: (base64Qr, asciiQR, attempts, urlCode) => {
                 console.log('=== QR CODE READY ===');
+                console.log(`Attempt ${attempts} of 10`);
                 console.log('Scan with WhatsApp:');
                 console.log(asciiQR);
                 console.log('=== END QR CODE ===');
                 // Store QR code for API access
                 currentQR = {
                     base64: base64Qr,
-                    ascii: asciiQR
+                    ascii: asciiQR,
+                    attempts: attempts
                 };
                 qrTimestamp = Date.now();
             },
@@ -45,12 +50,17 @@ async function initializeClient() {
                     isConnected = true;
                     currentQR = null;
                 }
+                if (statusSession === 'qrReadError' || statusSession === 'qrReadFail') {
+                    console.log('QR read failed, will retry...');
+                }
             },
             headless: true,
             devtools: false,
             useChrome: true,
             debug: false,
             logQR: true,
+            waitForLogin: true,
+            qrTimeout: 0, // No timeout for QR
             puppeteerOptions: {
                 executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
                 args: [
