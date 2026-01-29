@@ -43,7 +43,6 @@ services:
     name: shipment-bot-worker
     runtime: python
     region: frankfurt
-    plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: celery -A app.workers.celery_app worker --beat --loglevel=info --concurrency=2
     envVars:
