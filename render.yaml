@@ -74,7 +74,6 @@ services:
     region: frankfurt
     plan: free
     dockerfilePath: ./whatsapp_gateway/Dockerfile
-    dockerContext: ./whatsapp_gateway
     healthCheckPath: /health
     disk:
       name: wa-session

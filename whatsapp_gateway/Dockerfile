@@ -27,14 +27,14 @@ ENV CHROME_PATH=/usr/bin/chromium
 # Create app directory
 WORKDIR /app
 
-# Copy package files first for better caching
-COPY package*.json ./
+# Copy package files from whatsapp_gateway folder (context is repo root)
+COPY whatsapp_gateway/package.json ./
 
 # Install dependencies
-RUN npm ci --only=production || npm install --only=production
+RUN npm install --omit=dev
 
 # Copy application code
-COPY . .
+COPY whatsapp_gateway/index.js ./
 
 # Create directories for sessions and tokens
 RUN mkdir -p sessions tokens && \
@@ -43,8 +43,5 @@ RUN mkdir -p sessions tokens && \
 # Use PORT env variable (Render sets this)
 ENV PORT=10000
 EXPOSE 10000
-
-# Run as non-root for security (but wppconnect needs write access)
-# USER node
 
 CMD ["node", "index.js"]
