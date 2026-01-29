@@ -73,7 +73,7 @@ services:
     runtime: docker
     region: frankfurt
     plan: free
-    dockerfilePath: ./whatsapp_gateway/Dockerfile
+    dockerfilePath: ./Dockerfile
     dockerContext: ./whatsapp_gateway
     healthCheckPath: /health
     disk:
