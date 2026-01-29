@@ -84,7 +84,7 @@ services:
       - key: NODE_ENV
         value: production
       - key: API_WEBHOOK_URL
-        value: "http://shipment-bot-api:10000/api/whatsapp/webhook"
+        value: "https://shipment-bot-api.onrender.com/api/webhooks/whatsapp/webhook"
 
   # =====================================================
   # Redis
