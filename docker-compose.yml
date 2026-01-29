@@ -1,0 +1,91 @@
+version: '3.8'
+
+services:
+  # FastAPI Application
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/shipment_bot
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - WHATSAPP_GATEWAY_URL=http://whatsapp-gateway:3000
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - ./app:/app/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Celery Worker
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/shipment_bot
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - ./app:/app/app
+    command: celery -A app.workers.celery_app worker --loglevel=info
+
+  # Celery Beat (Scheduler)
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/shipment_bot
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - ./app:/app/app
+    command: celery -A app.workers.celery_app beat --loglevel=info
+
+  # PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=shipment_bot
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  # WhatsApp Gateway (Node.js with WPPConnect)
+  whatsapp-gateway:
+    build:
+      context: ./whatsapp_gateway
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    volumes:
+      - whatsapp_sessions:/app/sessions
+
+volumes:
+  postgres_data:
+  redis_data:
+  whatsapp_sessions:

@@ -1,0 +1,23 @@
+# FastAPI and server
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+
+# Database
+sqlalchemy[asyncio]==2.0.25
+asyncpg==0.29.0
+alembic==1.13.1
+
+# Configuration
+pydantic-settings==2.1.0
+python-dotenv==1.0.0
+
+# HTTP client
+httpx==0.26.0
+
+# Redis and Celery
+redis==5.0.1
+celery[redis]==5.3.6
+
+# Utilities
+python-dateutil==2.8.2
