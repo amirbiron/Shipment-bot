@@ -7,6 +7,8 @@
 
 const express = require('express');
 const cors = require('cors');
+const fs = require('fs');
+const path = require('path');
 const wppconnect = require('@wppconnect-team/wppconnect');
 
 const app = express();
@@ -15,6 +17,31 @@ app.use(express.json());
 
 // Get API webhook URL from environment variable
 const API_WEBHOOK_URL = process.env.API_WEBHOOK_URL || 'http://localhost:8000/api/webhooks/whatsapp/webhook';
+
+// Session folder path
+const SESSION_FOLDER = './sessions';
+const SESSION_NAME = 'shipment-bot';
+
+/**
+ * Clean up stale Chrome lock files that prevent browser from starting.
+ * This happens when the container restarts but the persistent disk keeps the lock.
+ */
+function cleanupStaleLocks() {
+    const sessionPath = path.join(SESSION_FOLDER, SESSION_NAME);
+    const lockFiles = ['SingletonLock', 'SingletonSocket', 'SingletonCookie'];
+
+    lockFiles.forEach(lockFile => {
+        const lockPath = path.join(sessionPath, lockFile);
+        try {
+            if (fs.existsSync(lockPath)) {
+                fs.unlinkSync(lockPath);
+                console.log(`Removed stale lock file: ${lockFile}`);
+            }
+        } catch (err) {
+            console.log(`Could not remove ${lockFile}:`, err.message);
+        }
+    });
+}
 
 let client = null;
 let isConnected = false;
@@ -26,6 +53,9 @@ async function initializeClient() {
     try {
         console.log('Initializing WhatsApp client...');
         console.log('Chrome path:', process.env.PUPPETEER_EXECUTABLE_PATH || 'default');
+
+        // Clean up stale lock files from previous runs
+        cleanupStaleLocks();
 
         client = await wppconnect.create({
             session: 'shipment-bot',
