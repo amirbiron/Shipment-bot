@@ -21,11 +21,16 @@ let qrTimestamp = null;
 // Initialize WPPConnect client
 async function initializeClient() {
     try {
+        console.log('Initializing WhatsApp client...');
+        console.log('Chrome path:', process.env.PUPPETEER_EXECUTABLE_PATH || 'default');
+
         client = await wppconnect.create({
             session: 'shipment-bot',
             catchQR: (base64Qr, asciiQR) => {
-                console.log('Scan QR Code:');
+                console.log('=== QR CODE READY ===');
+                console.log('Scan with WhatsApp:');
                 console.log(asciiQR);
+                console.log('=== END QR CODE ===');
                 // Store QR code for API access
                 currentQR = {
                     base64: base64Qr,
@@ -36,21 +41,31 @@ async function initializeClient() {
             statusFind: (statusSession, session) => {
                 console.log('Status Session:', statusSession);
                 console.log('Session name:', session);
+                if (statusSession === 'isLogged' || statusSession === 'inChat') {
+                    isConnected = true;
+                    currentQR = null;
+                }
             },
             headless: true,
             devtools: false,
-            useChrome: false,
+            useChrome: true,
             debug: false,
             logQR: true,
-            browserArgs: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-accelerated-2d-canvas',
-                '--no-first-run',
-                '--no-zygote',
-                '--disable-gpu'
-            ],
+            puppeteerOptions: {
+                executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
+                args: [
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-accelerated-2d-canvas',
+                    '--no-first-run',
+                    '--no-zygote',
+                    '--single-process',
+                    '--disable-gpu',
+                    '--disable-extensions',
+                    '--disable-software-rasterizer'
+                ],
+            },
         });
 
         isConnected = true;
