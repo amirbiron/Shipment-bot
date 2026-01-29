@@ -15,6 +15,8 @@ app.use(express.json());
 
 let client = null;
 let isConnected = false;
+let currentQR = null;
+let qrTimestamp = null;
 
 // Initialize WPPConnect client
 async function initializeClient() {
@@ -24,6 +26,12 @@ async function initializeClient() {
             catchQR: (base64Qr, asciiQR) => {
                 console.log('Scan QR Code:');
                 console.log(asciiQR);
+                // Store QR code for API access
+                currentQR = {
+                    base64: base64Qr,
+                    ascii: asciiQR
+                };
+                qrTimestamp = Date.now();
             },
             statusFind: (statusSession, session) => {
                 console.log('Status Session:', statusSession);
@@ -46,6 +54,7 @@ async function initializeClient() {
         });
 
         isConnected = true;
+        currentQR = null; // Clear QR once connected
         console.log('WhatsApp client connected successfully');
 
         // Listen for incoming messages
@@ -149,10 +158,46 @@ app.post('/send-buttons', async (req, res) => {
 
 // Get QR code for authentication
 app.get('/qr', (req, res) => {
-    // QR code is logged to console during initialization
+    if (isConnected) {
+        return res.json({
+            status: 'connected',
+            message: 'WhatsApp is already connected'
+        });
+    }
+
+    if (!currentQR) {
+        return res.json({
+            status: 'waiting',
+            message: 'QR code not yet generated. Please wait and refresh.'
+        });
+    }
+
+    // Return QR code data
     res.json({
-        message: 'Check server console for QR code'
+        status: 'pending',
+        qr: currentQR.base64,
+        ascii: currentQR.ascii,
+        timestamp: qrTimestamp,
+        message: 'Scan QR code with WhatsApp on your phone'
     });
+});
+
+// Get QR code as image
+app.get('/qr/image', (req, res) => {
+    if (isConnected) {
+        return res.status(200).send('Already connected');
+    }
+
+    if (!currentQR || !currentQR.base64) {
+        return res.status(404).send('QR code not available');
+    }
+
+    // Extract base64 data and send as image
+    const base64Data = currentQR.base64.replace(/^data:image\/\w+;base64,/, '');
+    const imageBuffer = Buffer.from(base64Data, 'base64');
+
+    res.set('Content-Type', 'image/png');
+    res.send(imageBuffer);
 });
 
 // Disconnect endpoint
