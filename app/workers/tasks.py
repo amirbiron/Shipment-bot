@@ -99,25 +99,32 @@ async def _process_single_message(message: OutboxMessage) -> tuple:
             # Handle broadcast messages
             if message.recipient_id == "BROADCAST_COURIERS":
                 recipients = await _get_courier_recipients(db, message.platform)
-                success = True
 
-                for recipient in recipients:
-                    if message.platform == MessagePlatform.WHATSAPP:
-                        result = await _send_whatsapp_message(
-                            recipient.phone_number, content
-                        )
-                    else:
-                        result = await _send_telegram_message(
-                            recipient.telegram_chat_id, content
-                        )
-                    success = success and result
-
-                if success:
-                    await outbox_service.mark_as_sent(message.id)
-                    return True, "Broadcast sent successfully"
+                # Send to all recipients in parallel for better performance
+                if message.platform == MessagePlatform.WHATSAPP:
+                    tasks = [
+                        _send_whatsapp_message(r.phone_number, content)
+                        for r in recipients
+                    ]
                 else:
-                    await outbox_service.mark_as_failed(message.id, "Some recipients failed")
-                    return False, "Partial broadcast failure"
+                    tasks = [
+                        _send_telegram_message(r.telegram_chat_id, content)
+                        for r in recipients if r.telegram_chat_id
+                    ]
+
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                success_count = sum(1 for r in results if r is True)
+                total_count = len(results)
+
+                if success_count == total_count:
+                    await outbox_service.mark_as_sent(message.id)
+                    return True, f"Broadcast sent to {success_count}/{total_count} recipients"
+                elif success_count > 0:
+                    await outbox_service.mark_as_sent(message.id)
+                    return True, f"Partial broadcast: {success_count}/{total_count} succeeded"
+                else:
+                    await outbox_service.mark_as_failed(message.id, "All recipients failed")
+                    return False, "Broadcast failed"
 
             # Handle direct messages
             else:
@@ -194,7 +201,7 @@ def send_message(message_id: int):
 
 @celery_app.task(name="app.workers.tasks.broadcast_to_couriers")
 def broadcast_to_couriers(message_text: str, delivery_id: int = None):
-    """Broadcast a message to all active couriers"""
+    """Broadcast a message to all active couriers using parallel sending"""
 
     async def _broadcast():
         async with get_task_session() as db:
@@ -207,31 +214,38 @@ def broadcast_to_couriers(message_text: str, delivery_id: int = None):
                 "delivery_id": delivery_id
             }
 
-            results = []
-
-            # Send to WhatsApp couriers
-            for courier in whatsapp_couriers:
-                success = await _send_whatsapp_message(courier.phone_number, content)
-                results.append({
-                    "courier_id": courier.id,
-                    "platform": "whatsapp",
-                    "success": success
-                })
-
-            # Send to Telegram couriers
-            for courier in telegram_couriers:
-                if courier.telegram_chat_id:
+            # Build task list for parallel execution
+            async def send_to_courier(courier, platform: str):
+                if platform == "whatsapp":
+                    success = await _send_whatsapp_message(courier.phone_number, content)
+                else:
+                    if not courier.telegram_chat_id:
+                        return {"courier_id": courier.id, "platform": platform, "success": False}
                     success = await _send_telegram_message(courier.telegram_chat_id, content)
-                    results.append({
-                        "courier_id": courier.id,
-                        "platform": "telegram",
-                        "success": success
-                    })
+                return {"courier_id": courier.id, "platform": platform, "success": success}
+
+            # Create all tasks
+            tasks = []
+            for courier in whatsapp_couriers:
+                tasks.append(send_to_courier(courier, "whatsapp"))
+            for courier in telegram_couriers:
+                tasks.append(send_to_courier(courier, "telegram"))
+
+            # Execute all sends in parallel
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            # Filter out exceptions and convert to proper results
+            final_results = []
+            for r in results:
+                if isinstance(r, Exception):
+                    final_results.append({"success": False, "error": str(r)})
+                else:
+                    final_results.append(r)
 
             return {
-                "total_sent": len(results),
-                "successful": sum(1 for r in results if r["success"]),
-                "results": results
+                "total_sent": len(final_results),
+                "successful": sum(1 for r in final_results if r.get("success")),
+                "results": final_results
             }
 
     return run_async(_broadcast())

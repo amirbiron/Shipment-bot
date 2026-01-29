@@ -3,9 +3,11 @@ State Handlers - Process messages based on current state
 """
 from typing import Tuple, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from app.state_machine.states import SenderState, CourierState
 from app.state_machine.manager import StateManager
+from app.db.models.user import User
 
 
 class MessageResponse:
@@ -36,7 +38,7 @@ class SenderStateHandler:
         context = await self.state_manager.get_context(user_id, platform)
 
         handler = self._get_handler(current_state)
-        response, new_state, context_update = await handler(message, context)
+        response, new_state, context_update = await handler(message, context, user_id)
 
         if new_state != current_state:
             await self.state_manager.transition_to(
@@ -59,7 +61,7 @@ class SenderStateHandler:
         }
         return handlers.get(state, self._handle_unknown)
 
-    async def _handle_initial(self, message: str, context: dict):
+    async def _handle_initial(self, message: str, context: dict, user_id: int):
         """Handle initial state"""
         response = MessageResponse(
             "שלום! ברוכים הבאים לבוט המשלוחים.\n"
@@ -67,7 +69,7 @@ class SenderStateHandler:
         )
         return response, SenderState.REGISTER_COLLECT_NAME.value, {}
 
-    async def _handle_new(self, message: str, context: dict):
+    async def _handle_new(self, message: str, context: dict, user_id: int):
         """Handle new user"""
         response = MessageResponse(
             "שלום! בואו נתחיל בהרשמה.\n"
@@ -75,12 +77,19 @@ class SenderStateHandler:
         )
         return response, SenderState.REGISTER_COLLECT_NAME.value, {}
 
-    async def _handle_collect_name(self, message: str, context: dict):
-        """Collect user name"""
+    async def _handle_collect_name(self, message: str, context: dict, user_id: int):
+        """Collect user name and save to User table"""
         name = message.strip()
         if len(name) < 2:
             response = MessageResponse("השם קצר מדי. אנא הזינו שם תקין:")
             return response, SenderState.REGISTER_COLLECT_NAME.value, {}
+
+        # Save name to User table
+        result = await self.db.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+        if user:
+            user.name = name
+            await self.db.commit()
 
         response = MessageResponse(
             f"שלום {name}! ההרשמה הושלמה בהצלחה.\n\n"
@@ -91,7 +100,7 @@ class SenderStateHandler:
         )
         return response, SenderState.MENU.value, {"name": name}
 
-    async def _handle_menu(self, message: str, context: dict):
+    async def _handle_menu(self, message: str, context: dict, user_id: int):
         """Handle main menu"""
         if "משלוח חדש" in message or message == "1":
             response = MessageResponse(
@@ -116,7 +125,7 @@ class SenderStateHandler:
         )
         return response, SenderState.MENU.value, {}
 
-    async def _handle_collect_pickup(self, message: str, context: dict):
+    async def _handle_collect_pickup(self, message: str, context: dict, user_id: int):
         """Collect pickup address"""
         address = message.strip()
         if len(address) < 5:
@@ -132,12 +141,12 @@ class SenderStateHandler:
         )
         return response, SenderState.DELIVERY_COLLECT_DROPOFF_MODE.value, {"pickup_address": address}
 
-    async def _handle_dropoff_mode(self, message: str, context: dict):
+    async def _handle_dropoff_mode(self, message: str, context: dict, user_id: int):
         """Handle dropoff mode selection"""
         response = MessageResponse("אנא הזינו את כתובת היעד:")
         return response, SenderState.DELIVERY_COLLECT_DROPOFF_ADDRESS.value, {}
 
-    async def _handle_collect_dropoff(self, message: str, context: dict):
+    async def _handle_collect_dropoff(self, message: str, context: dict, user_id: int):
         """Collect dropoff address"""
         address = message.strip()
         if len(address) < 5:
@@ -154,7 +163,7 @@ class SenderStateHandler:
         )
         return response, SenderState.DELIVERY_CONFIRM.value, {"dropoff_address": address}
 
-    async def _handle_confirm(self, message: str, context: dict):
+    async def _handle_confirm(self, message: str, context: dict, user_id: int):
         """Handle delivery confirmation"""
         if "אישור" in message:
             response = MessageResponse(
@@ -172,7 +181,7 @@ class SenderStateHandler:
         )
         return response, SenderState.MENU.value, {}
 
-    async def _handle_unknown(self, message: str, context: dict):
+    async def _handle_unknown(self, message: str, context: dict, user_id: int):
         """Handle unknown state"""
         response = MessageResponse(
             "משהו השתבש. חוזרים לתפריט הראשי.",

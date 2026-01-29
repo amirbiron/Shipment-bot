@@ -60,9 +60,11 @@ class CourierState(str, Enum):
 
 # State transitions mapping
 SENDER_TRANSITIONS = {
-    SenderState.INITIAL: [SenderState.NEW],
+    # Allow INITIAL to go directly to REGISTER_COLLECT_NAME (shortcut) or through NEW
+    SenderState.INITIAL: [SenderState.NEW, SenderState.REGISTER_COLLECT_NAME],
     SenderState.NEW: [SenderState.REGISTER_COLLECT_NAME],
-    SenderState.REGISTER_COLLECT_NAME: [SenderState.REGISTER_COLLECT_PHONE],
+    # Allow skipping phone collection if name is sufficient for registration
+    SenderState.REGISTER_COLLECT_NAME: [SenderState.REGISTER_COLLECT_PHONE, SenderState.MENU],
     SenderState.REGISTER_COLLECT_PHONE: [SenderState.MENU],
     SenderState.MENU: [
         SenderState.DELIVERY_COLLECT_PICKUP,

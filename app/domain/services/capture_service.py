@@ -38,6 +38,28 @@ class CaptureService:
         self.db = db
         self.outbox_service = OutboxService(db)
 
+    async def capture_delivery_by_token(
+        self,
+        token: str,
+        courier_id: int
+    ) -> Tuple[bool, str, Optional[Delivery]]:
+        """
+        Capture a delivery using secure token (for smart links).
+
+        This is the preferred method as it prevents ID guessing attacks.
+        """
+        # First, get the delivery by token
+        result = await self.db.execute(
+            select(Delivery).where(Delivery.token == token)
+        )
+        delivery = result.scalar_one_or_none()
+
+        if not delivery:
+            return False, "המשלוח לא נמצא (קישור לא תקין)", None
+
+        # Delegate to the ID-based capture
+        return await self.capture_delivery(delivery.id, courier_id)
+
     async def capture_delivery(
         self,
         delivery_id: int,
