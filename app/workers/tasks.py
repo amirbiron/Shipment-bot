@@ -9,7 +9,7 @@ import asyncio
 from datetime import datetime, timedelta
 
 from app.workers.celery_app import celery_app
-from app.db.database import AsyncSessionLocal
+from app.db.database import get_task_session
 from app.db.models.outbox_message import OutboxMessage, MessagePlatform, MessageStatus
 from app.db.models.user import User, UserRole
 from app.domain.services.outbox_service import OutboxService
@@ -87,7 +87,7 @@ async def _get_courier_recipients(db, platform: MessagePlatform) -> list:
 
 async def _process_single_message(message: OutboxMessage) -> tuple:
     """Process a single outbox message"""
-    async with AsyncSessionLocal() as db:
+    async with get_task_session() as db:
         outbox_service = OutboxService(db)
 
         # Mark as processing
@@ -150,7 +150,7 @@ def process_outbox_messages():
     """
 
     async def _process():
-        async with AsyncSessionLocal() as db:
+        async with get_task_session() as db:
             outbox_service = OutboxService(db)
             messages = await outbox_service.get_pending_messages(limit=50)
 
@@ -177,7 +177,7 @@ def send_message(message_id: int):
     """Send a specific message by ID"""
 
     async def _send():
-        async with AsyncSessionLocal() as db:
+        async with get_task_session() as db:
             result = await db.execute(
                 select(OutboxMessage).where(OutboxMessage.id == message_id)
             )
@@ -197,7 +197,7 @@ def broadcast_to_couriers(message_text: str, delivery_id: int = None):
     """Broadcast a message to all active couriers"""
 
     async def _broadcast():
-        async with AsyncSessionLocal() as db:
+        async with get_task_session() as db:
             # Get all couriers
             whatsapp_couriers = await _get_courier_recipients(db, MessagePlatform.WHATSAPP)
             telegram_couriers = await _get_courier_recipients(db, MessagePlatform.TELEGRAM)
@@ -242,7 +242,7 @@ def cleanup_old_messages(days: int = 30):
     """Clean up old processed messages from the outbox"""
 
     async def _cleanup():
-        async with AsyncSessionLocal() as db:
+        async with get_task_session() as db:
             cutoff = datetime.utcnow() - timedelta(days=days)
 
             result = await db.execute(
