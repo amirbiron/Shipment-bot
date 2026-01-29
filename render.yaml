@@ -1,0 +1,141 @@
+# Render Blueprint - Shipment Bot Infrastructure
+# https://render.com/docs/blueprint-spec
+
+services:
+  # =====================================================
+  # FastAPI Web Service
+  # =====================================================
+  - type: web
+    name: shipment-bot-api
+    env: python
+    region: frankfurt  # or closest to your users
+    plan: starter  # upgrade to standard for production
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: DEBUG
+        value: "false"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: shipment-bot-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: shipment-bot-redis
+          property: connectionString
+      - key: CELERY_BROKER_URL
+        fromService:
+          type: redis
+          name: shipment-bot-redis
+          property: connectionString
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false  # Set manually in dashboard
+      - key: WHATSAPP_GATEWAY_URL
+        fromService:
+          type: pserv
+          name: shipment-bot-wa-gateway
+          property: host
+    autoDeploy: true
+
+  # =====================================================
+  # Celery Worker
+  # =====================================================
+  - type: worker
+    name: shipment-bot-worker
+    env: python
+    region: frankfurt
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: shipment-bot-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: shipment-bot-redis
+          property: connectionString
+      - key: CELERY_BROKER_URL
+        fromService:
+          type: redis
+          name: shipment-bot-redis
+          property: connectionString
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: WHATSAPP_GATEWAY_URL
+        fromService:
+          type: pserv
+          name: shipment-bot-wa-gateway
+          property: host
+
+  # =====================================================
+  # Celery Beat Scheduler
+  # =====================================================
+  - type: worker
+    name: shipment-bot-beat
+    env: python
+    region: frankfurt
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: celery -A app.workers.celery_app beat --loglevel=info
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: shipment-bot-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: shipment-bot-redis
+          property: connectionString
+      - key: CELERY_BROKER_URL
+        fromService:
+          type: redis
+          name: shipment-bot-redis
+          property: connectionString
+
+  # =====================================================
+  # WhatsApp Gateway (Node.js)
+  # =====================================================
+  - type: pserv  # Private service - not exposed to internet
+    name: shipment-bot-wa-gateway
+    env: node
+    region: frankfurt
+    plan: starter
+    rootDir: whatsapp_gateway
+    buildCommand: npm install
+    startCommand: npm start
+    disk:
+      name: wa-session
+      mountPath: /app/session
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: API_WEBHOOK_URL
+        value: http://shipment-bot-api/api/whatsapp/webhook
+
+# =====================================================
+# Databases
+# =====================================================
+databases:
+  - name: shipment-bot-db
+    plan: starter  # upgrade to standard for production
+    region: frankfurt
+    databaseName: shipment_bot
+    user: shipment_bot_user
+    ipAllowList: []  # Allow all IPs (Render handles security)
+
+# =====================================================
+# Redis
+# =====================================================
+  - type: redis
+    name: shipment-bot-redis
+    plan: starter
+    region: frankfurt
+    maxmemoryPolicy: allkeys-lru
+    ipAllowList: []
