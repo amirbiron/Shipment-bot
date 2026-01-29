@@ -1,6 +1,6 @@
-FROM node:18-slim
+FROM node:20-slim
 
-# Install Chromium dependencies for Puppeteer
+# Install Chromium and dependencies for WPPConnect/Puppeteer
 RUN apt-get update && apt-get install -y \
     chromium \
     fonts-ipafont-gothic \
@@ -8,28 +8,43 @@ RUN apt-get update && apt-get install -y \
     fonts-thai-tlwg \
     fonts-kacst \
     fonts-freefont-ttf \
+    fonts-liberation \
     libxss1 \
+    libxtst6 \
+    libnss3 \
+    libatk-bridge2.0-0 \
+    libgtk-3-0 \
+    libasound2 \
+    libgbm1 \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
-# Set Puppeteer to skip downloading Chromium
+# Set Puppeteer/WPPConnect to use system Chromium
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+ENV CHROME_PATH=/usr/bin/chromium
 
+# Create app directory
 WORKDIR /app
 
-# Copy package files
+# Copy package files first for better caching
 COPY package*.json ./
 
 # Install dependencies
-RUN npm install
+RUN npm ci --only=production || npm install --only=production
 
 # Copy application code
 COPY . .
 
-# Create sessions directory
-RUN mkdir -p sessions
+# Create directories for sessions and tokens
+RUN mkdir -p sessions tokens && \
+    chmod -R 777 sessions tokens
 
-EXPOSE 3000
+# Use PORT env variable (Render sets this)
+ENV PORT=10000
+EXPOSE 10000
 
-CMD ["npm", "start"]
+# Run as non-root for security (but wppconnect needs write access)
+# USER node
+
+CMD ["node", "index.js"]
