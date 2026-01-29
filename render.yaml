@@ -73,7 +73,6 @@ services:
     name: shipment-bot-wa-gateway
     runtime: node
     region: frankfurt
-    plan: free
     rootDir: whatsapp_gateway
     buildCommand: npm install
     startCommand: npm start
