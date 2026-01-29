@@ -24,23 +24,18 @@ ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV CHROME_PATH=/usr/bin/chromium
 
-# Create app directory
 WORKDIR /app
 
-# Copy package files from whatsapp_gateway folder (context is repo root)
-COPY whatsapp_gateway/package.json ./
-
-# Install dependencies
+# Copy package.json and install
+COPY package.json ./
 RUN npm install --omit=dev
 
-# Copy application code
-COPY whatsapp_gateway/index.js ./
+# Copy app code
+COPY index.js ./
 
-# Create directories for sessions and tokens
-RUN mkdir -p sessions tokens && \
-    chmod -R 777 sessions tokens
+# Create session directories
+RUN mkdir -p sessions tokens && chmod -R 777 sessions tokens
 
-# Use PORT env variable (Render sets this)
 ENV PORT=10000
 EXPOSE 10000
 
