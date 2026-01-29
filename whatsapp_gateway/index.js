@@ -13,6 +13,9 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Get API webhook URL from environment variable
+const API_WEBHOOK_URL = process.env.API_WEBHOOK_URL || 'http://localhost:8000/api/webhooks/whatsapp/webhook';
+
 let client = null;
 let isConnected = false;
 let currentQR = null;
@@ -88,7 +91,8 @@ async function initializeClient() {
 
             // Forward to FastAPI webhook
             try {
-                const response = await fetch('http://api:8000/api/webhooks/whatsapp/webhook', {
+                console.log('Forwarding to:', API_WEBHOOK_URL);
+                const response = await fetch(API_WEBHOOK_URL, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
