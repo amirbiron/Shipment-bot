@@ -68,7 +68,7 @@ services:
   # =====================================================
   # WhatsApp Gateway (Node.js)
   # =====================================================
-  - type: pserv  # Private service - not exposed to internet
+  - type: web  # Private service - not exposed to internet  # TODO: ציבורי לבינתיים להחזיר אחרי התחברות
     name: shipment-bot-wa-gateway
     runtime: node
     region: frankfurt
