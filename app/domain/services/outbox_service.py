@@ -48,9 +48,10 @@ class OutboxService:
         """
         messages = []
 
-        # Create broadcast message content
+        # Create broadcast message content using secure token for smart links
         content = {
             "delivery_id": delivery.id,
+            "token": delivery.token,
             "pickup_address": delivery.pickup_address,
             "dropoff_address": delivery.dropoff_address,
             "fee": delivery.fee,
@@ -59,7 +60,7 @@ class OutboxService:
                 f"📍 איסוף: {delivery.pickup_address}\n"
                 f"🎯 יעד: {delivery.dropoff_address}\n"
                 f"💰 עמלה: {delivery.fee}₪\n\n"
-                f"לתפיסת המשלוח הקלידו: /capture {delivery.id}"
+                f"לתפיסת המשלוח הקלידו: /capture {delivery.token}"
             )
         }
 

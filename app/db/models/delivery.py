@@ -2,11 +2,17 @@
 Delivery Model - Shipment Records
 """
 import enum
+import secrets
 from datetime import datetime
 from sqlalchemy import Column, Integer, String, DateTime, Enum as SQLEnum, Float, ForeignKey, Text
 from sqlalchemy.orm import relationship
 
 from app.db.database import Base
+
+
+def generate_secure_token():
+    """Generate a secure URL-safe token for delivery smart links"""
+    return secrets.token_urlsafe(16)
 
 
 class DeliveryStatus(str, enum.Enum):
@@ -23,6 +29,8 @@ class Delivery(Base):
     __tablename__ = "deliveries"
 
     id = Column(Integer, primary_key=True, index=True)
+    # Secure token for smart links (prevents ID guessing attacks)
+    token = Column(String(32), unique=True, nullable=False, default=generate_secure_token, index=True)
 
     # Sender info
     sender_id = Column(Integer, ForeignKey("users.id"), nullable=False)

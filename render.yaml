@@ -11,6 +11,7 @@ services:
     region: frankfurt
     plan: free  # upgrade to starter for production
     buildCommand: pip install -r requirements.txt
+    preDeployCommand: python scripts/run_migrations.py
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
