@@ -43,6 +43,8 @@ COMMENT ON TABLE users IS 'All system users - senders, couriers, and admins';
 
 CREATE TABLE deliveries (
     id SERIAL PRIMARY KEY,
+    -- Secure token for smart links (prevents ID guessing attacks)
+    token VARCHAR(32) UNIQUE NOT NULL DEFAULT encode(gen_random_bytes(16), 'base64'),
     sender_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
     courier_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
 
@@ -72,6 +74,7 @@ CREATE TABLE deliveries (
     cancelled_at TIMESTAMP WITH TIME ZONE
 );
 
+CREATE INDEX idx_deliveries_token ON deliveries(token);
 CREATE INDEX idx_deliveries_status ON deliveries(status);
 CREATE INDEX idx_deliveries_sender ON deliveries(sender_id);
 CREATE INDEX idx_deliveries_courier ON deliveries(courier_id);
