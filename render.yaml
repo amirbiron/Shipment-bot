@@ -33,7 +33,7 @@ services:
       - key: TELEGRAM_BOT_TOKEN
         sync: false  # Set manually in dashboard
       - key: WHATSAPP_GATEWAY_URL
-        value: "http://shipment-bot-wa-gateway:3000"
+        value: "http://shipment-bot-wa-gateway:10000"
     autoDeploy: true
 
   # =====================================================
@@ -63,21 +63,22 @@ services:
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: WHATSAPP_GATEWAY_URL
-        value: "http://shipment-bot-wa-gateway:3000"
+        value: "http://shipment-bot-wa-gateway:10000"
 
   # =====================================================
-  # WhatsApp Gateway (Node.js)
+  # WhatsApp Gateway (Node.js with Docker for Chrome)
   # =====================================================
-  - type: web  # Private service - not exposed to internet  # TODO: ציבורי לבינתיים להחזיר אחרי התחברות
+  - type: web  # Changed to web so /qr endpoint is accessible
     name: shipment-bot-wa-gateway
-    runtime: node
+    runtime: docker
     region: frankfurt
-    rootDir: whatsapp_gateway
-    buildCommand: npm install
-    startCommand: npm start
+    plan: free
+    dockerfilePath: ./whatsapp_gateway/Dockerfile
+    dockerContext: ./whatsapp_gateway
+    healthCheckPath: /health
     disk:
       name: wa-session
-      mountPath: /app/session
+      mountPath: /app/sessions
       sizeGB: 1
     envVars:
       - key: NODE_ENV
