@@ -119,6 +119,15 @@ services:
       - key: API_WEBHOOK_URL
         value: http://shipment-bot-api/api/whatsapp/webhook
 
+  # =====================================================
+  # Redis
+  # =====================================================
+  - type: redis
+    name: shipment-bot-redis
+    plan: starter
+    region: frankfurt
+    ipAllowList: []
+
 # =====================================================
 # Databases
 # =====================================================
@@ -129,13 +138,3 @@ databases:
     databaseName: shipment_bot
     user: shipment_bot_user
     ipAllowList: []  # Allow all IPs (Render handles security)
-
-# =====================================================
-# Redis
-# =====================================================
-  - type: redis
-    name: shipment-bot-redis
-    plan: starter
-    region: frankfurt
-    maxmemoryPolicy: allkeys-lru
-    ipAllowList: []
