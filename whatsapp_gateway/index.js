@@ -18,8 +18,8 @@ app.use(express.json());
 // Get API webhook URL from environment variable
 const API_WEBHOOK_URL = process.env.API_WEBHOOK_URL || 'http://localhost:8000/api/webhooks/whatsapp/webhook';
 
-// Session folder path
-const SESSION_FOLDER = './sessions';
+// Session folder path - use absolute path for Render's disk mount
+const SESSION_FOLDER = '/app/sessions';
 const SESSION_NAME = 'shipment-bot';
 
 /**
@@ -30,17 +30,28 @@ function cleanupStaleLocks() {
     const sessionPath = path.join(SESSION_FOLDER, SESSION_NAME);
     const lockFiles = ['SingletonLock', 'SingletonSocket', 'SingletonCookie'];
 
-    lockFiles.forEach(lockFile => {
-        const lockPath = path.join(sessionPath, lockFile);
-        try {
-            if (fs.existsSync(lockPath)) {
-                fs.unlinkSync(lockPath);
-                console.log(`Removed stale lock file: ${lockFile}`);
+    // Check multiple possible locations
+    const locations = [
+        sessionPath,                           // /app/sessions/shipment-bot/
+        path.join(sessionPath, 'Default'),     // /app/sessions/shipment-bot/Default/
+        './sessions/shipment-bot',             // relative path fallback
+    ];
+
+    locations.forEach(location => {
+        lockFiles.forEach(lockFile => {
+            const lockPath = path.join(location, lockFile);
+            try {
+                if (fs.existsSync(lockPath)) {
+                    fs.unlinkSync(lockPath);
+                    console.log(`Removed stale lock file: ${lockPath}`);
+                }
+            } catch (err) {
+                console.log(`Could not remove ${lockPath}:`, err.message);
             }
-        } catch (err) {
-            console.log(`Could not remove ${lockFile}:`, err.message);
-        }
+        });
     });
+
+    console.log('Lock cleanup completed');
 }
 
 let client = null;
