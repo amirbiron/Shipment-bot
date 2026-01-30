@@ -378,8 +378,9 @@ class CourierStateHandler:
 5. אני מתחייב/ת לבצע את המשלוחים בזמן סביר ובצורה מקצועית.
 """
 
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession, platform: str = "telegram"):
         self.db = db
+        self.platform = platform
         self.state_manager = StateManager(db)
 
     async def handle_message(
@@ -389,20 +390,21 @@ class CourierStateHandler:
         photo_file_id: str = None
     ) -> Tuple[MessageResponse, str]:
         """Process incoming message for courier and return response with new state"""
-        current_state = await self.state_manager.get_current_state(user.id, "telegram")
-        context = await self.state_manager.get_context(user.id, "telegram")
+        platform = self.platform or user.platform
+        current_state = await self.state_manager.get_current_state(user.id, platform)
+        context = await self.state_manager.get_context(user.id, platform)
 
         handler = self._get_handler(current_state)
         response, new_state, context_update = await handler(user, message, context, photo_file_id)
 
         if new_state != current_state:
             await self.state_manager.force_state(
-                user.id, "telegram", new_state,
+                user.id, platform, new_state,
                 {**context, **context_update} if context_update else context
             )
         elif context_update:
             for key, value in context_update.items():
-                await self.state_manager.update_context(user.id, "telegram", key, value)
+                await self.state_manager.update_context(user.id, platform, key, value)
 
         return response, new_state
 
