@@ -39,10 +39,15 @@ class Settings(BaseSettings):
 
     # Telegram
     TELEGRAM_BOT_TOKEN: Optional[str] = None
+    TELEGRAM_ADMIN_CHAT_ID: Optional[str] = None  # Admin chat for notifications
 
     # Credit settings
-    DEFAULT_CREDIT_LIMIT: float = -100.0  # Minimum balance allowed
+    DEFAULT_CREDIT_LIMIT: float = -500.0  # Minimum balance allowed (500₪ credit)
     DELIVERY_FEE: float = 10.0  # Fee per delivery
+
+    # File Upload
+    UPLOAD_DIR: str = "./uploads"
+    MAX_FILE_SIZE: int = 10 * 1024 * 1024  # 10MB
 
     class Config:
         env_file = ".env"
