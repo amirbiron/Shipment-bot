@@ -22,12 +22,13 @@ class SenderState(str, Enum):
     PICKUP_CITY = "SENDER.DELIVERY.PICKUP_CITY"
     PICKUP_STREET = "SENDER.DELIVERY.PICKUP_STREET"
     PICKUP_NUMBER = "SENDER.DELIVERY.PICKUP_NUMBER"
+    PICKUP_APARTMENT = "SENDER.DELIVERY.PICKUP_APARTMENT"
 
     # Delivery creation flow - Dropoff address wizard
-    DROPOFF_MODE = "SENDER.DELIVERY.DROPOFF_MODE"
     DROPOFF_CITY = "SENDER.DELIVERY.DROPOFF_CITY"
     DROPOFF_STREET = "SENDER.DELIVERY.DROPOFF_STREET"
     DROPOFF_NUMBER = "SENDER.DELIVERY.DROPOFF_NUMBER"
+    DROPOFF_APARTMENT = "SENDER.DELIVERY.DROPOFF_APARTMENT"
 
     # Confirmation
     DELIVERY_CONFIRM = "SENDER.DELIVERY.CONFIRM"
@@ -85,18 +86,17 @@ SENDER_TRANSITIONS = {
         SenderState.VIEW_DELIVERIES
     ],
 
-    # Pickup address wizard: City -> Street -> Number -> Dropoff mode
+    # Pickup address wizard: City -> Street -> Number -> Apartment -> Dropoff
     SenderState.PICKUP_CITY: [SenderState.PICKUP_STREET],
     SenderState.PICKUP_STREET: [SenderState.PICKUP_NUMBER],
-    SenderState.PICKUP_NUMBER: [SenderState.DROPOFF_MODE],
+    SenderState.PICKUP_NUMBER: [SenderState.PICKUP_APARTMENT],
+    SenderState.PICKUP_APARTMENT: [SenderState.DROPOFF_CITY],
 
-    # Dropoff mode selection -> Dropoff wizard
-    SenderState.DROPOFF_MODE: [SenderState.DROPOFF_CITY],
-
-    # Dropoff address wizard: City -> Street -> Number -> Confirm
+    # Dropoff address wizard: City -> Street -> Number -> Apartment -> Confirm
     SenderState.DROPOFF_CITY: [SenderState.DROPOFF_STREET],
     SenderState.DROPOFF_STREET: [SenderState.DROPOFF_NUMBER],
-    SenderState.DROPOFF_NUMBER: [SenderState.DELIVERY_CONFIRM, SenderState.MENU],
+    SenderState.DROPOFF_NUMBER: [SenderState.DROPOFF_APARTMENT],
+    SenderState.DROPOFF_APARTMENT: [SenderState.DELIVERY_CONFIRM, SenderState.MENU],
 
     # Confirmation -> Menu
     SenderState.DELIVERY_CONFIRM: [SenderState.MENU],
