@@ -137,36 +137,72 @@ async function initializeClient() {
             console.log('From:', message.from);
             console.log('ChatId:', message.chatId);
             console.log('Sender:', JSON.stringify(message.sender));
+            console.log('NotifyName:', message.notifyName);
 
             // Get the correct ID to reply to
-            // Priority: sender.id (real phone) > chatId > from
             let replyTo = message.from;
 
-            // Try to get real phone number from sender object
-            if (message.sender && message.sender.id) {
-                replyTo = message.sender.id;
-                console.log('Using sender.id:', replyTo);
-            } else if (message.chatId) {
-                replyTo = message.chatId;
-                console.log('Using chatId:', replyTo);
+            // If it's a LID (@lid), try to get the real phone number
+            if (replyTo.includes('@lid')) {
+                console.log('LID detected, trying to get real phone number...');
+
+                try {
+                    // Try to get contact info which might have real phone
+                    const contact = await client.getContact(replyTo);
+                    console.log('Contact info:', JSON.stringify(contact));
+
+                    if (contact && contact.id && contact.id._serialized && !contact.id._serialized.includes('@lid')) {
+                        replyTo = contact.id._serialized;
+                        console.log('Got real phone from contact:', replyTo);
+                    } else if (contact && contact.number) {
+                        replyTo = `${contact.number}@c.us`;
+                        console.log('Got number from contact:', replyTo);
+                    }
+                } catch (e) {
+                    console.log('Could not get contact:', e.message);
+                }
+
+                // Try getChatById for additional info
+                if (replyTo.includes('@lid') && message.chatId) {
+                    try {
+                        const chat = await client.getChatById(message.chatId);
+                        console.log('Chat info:', JSON.stringify(chat?.contact || chat?.id));
+                        if (chat && chat.contact && chat.contact.number) {
+                            replyTo = `${chat.contact.number}@c.us`;
+                            console.log('Got number from chat contact:', replyTo);
+                        } else if (chat && chat.id && chat.id._serialized && !chat.id._serialized.includes('@lid')) {
+                            replyTo = chat.id._serialized;
+                            console.log('Got ID from chat:', replyTo);
+                        }
+                    } catch (e) {
+                        console.log('Could not get chat:', e.message);
+                    }
+                }
+
+                // If still LID, try chatId directly
+                if (replyTo.includes('@lid') && message.chatId && !message.chatId.includes('@lid')) {
+                    replyTo = message.chatId;
+                    console.log('Using chatId instead:', replyTo);
+                }
+
+                // Last resort: sender.id
+                if (replyTo.includes('@lid') && message.sender && message.sender.id && !message.sender.id.includes('@lid')) {
+                    replyTo = message.sender.id;
+                    console.log('Using sender.id instead:', replyTo);
+                }
+
+                // If still LID after all attempts, log warning but continue
+                // WPPConnect sendText might still work with LID in some cases
+                if (replyTo.includes('@lid')) {
+                    console.log('WARNING: Could not resolve LID to phone number, will try sending to LID directly');
+                }
             }
 
-            // If it's a LID (@lid), we need to convert to phone format
-            // LID format: number@lid -> need to use number@c.us
-            if (replyTo.includes('@lid')) {
-                const number = replyTo.replace('@lid', '');
-                // Try to get actual phone - WPPConnect might have it
-                if (message.sender && message.sender.verifiedName) {
-                    console.log('Sender verified name:', message.sender.verifiedName);
-                }
-                // For now, try sending to the same ID but let WPPConnect handle it
-                console.log('LID detected, will try direct send');
-            }
+            console.log('Final replyTo:', replyTo);
 
             // Forward to FastAPI webhook
             try {
                 console.log('Forwarding to:', API_WEBHOOK_URL);
-                console.log('Reply will be sent to:', replyTo);
                 const response = await fetch(API_WEBHOOK_URL, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
