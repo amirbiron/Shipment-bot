@@ -200,20 +200,59 @@ async function initializeClient() {
 
             console.log('Final replyTo:', replyTo);
 
+            // Check if message has media (image)
+            let mediaUrl = null;
+            let mediaType = null;
+
+            if (message.isMedia || message.type === 'image' || message.mimetype) {
+                console.log('Media message detected!');
+                console.log('Message type:', message.type);
+                console.log('Mimetype:', message.mimetype);
+
+                try {
+                    // Download media as base64
+                    const mediaData = await client.downloadMedia(message);
+                    if (mediaData) {
+                        // Create a data URL from base64
+                        mediaUrl = `data:${message.mimetype || 'image/jpeg'};base64,${mediaData}`;
+                        mediaType = message.type || 'image';
+                        console.log('Media downloaded, type:', mediaType);
+                    }
+                } catch (mediaError) {
+                    console.log('Error downloading media:', mediaError.message);
+                    // Try alternative method
+                    try {
+                        const buffer = await message.downloadMedia();
+                        if (buffer) {
+                            mediaUrl = `data:${message.mimetype || 'image/jpeg'};base64,${buffer.toString('base64')}`;
+                            mediaType = message.type || 'image';
+                            console.log('Media downloaded via alternative method');
+                        }
+                    } catch (altError) {
+                        console.log('Alternative media download also failed:', altError.message);
+                    }
+                }
+            }
+
             // Forward to FastAPI webhook
             try {
                 console.log('Forwarding to:', API_WEBHOOK_URL);
+                const payload = {
+                    messages: [{
+                        from_number: replyTo,
+                        message_id: message.id,
+                        text: message.body || '',
+                        timestamp: message.timestamp,
+                        media_url: mediaUrl,
+                        media_type: mediaType
+                    }]
+                };
+                console.log('Payload has media:', !!mediaUrl);
+
                 const response = await fetch(API_WEBHOOK_URL, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        messages: [{
-                            from_number: replyTo,
-                            message_id: message.id,
-                            text: message.body,
-                            timestamp: message.timestamp
-                        }]
-                    })
+                    body: JSON.stringify(payload)
                 });
                 console.log('Forwarded to API, status:', response.status);
             } catch (error) {
