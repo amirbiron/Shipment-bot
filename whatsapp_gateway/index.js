@@ -272,31 +272,36 @@ app.post('/send', async (req, res) => {
 
         let result;
 
-        // Try to send with buttons if keyboard is provided
+        // Try to send with interactive list if keyboard is provided
         if (keyboard && Array.isArray(keyboard) && keyboard.length > 0) {
-            // Flatten keyboard array and create buttons
-            const buttons = keyboard.flat().map((text, index) => ({
-                id: `btn_${index}`,
-                text: text
-            }));
+            // Flatten keyboard array
+            const options = keyboard.flat();
 
-            // Try sendButtons first (works with some WhatsApp versions)
+            // Try sendListMessage (works better than buttons)
             try {
-                result = await client.sendButtons(
-                    chatId,
-                    'בחרו אפשרות:',  // Title
-                    buttons.map(b => ({ buttonId: b.id, buttonText: { displayText: b.text }, type: 1 })),
-                    message  // Description/body
-                );
-                console.log('Message sent with buttons to:', chatId);
-            } catch (btnError) {
-                console.log('sendButtons failed, falling back to sendText:', btnError.message);
-                // Fallback: send as plain text with options listed
+                result = await client.sendListMessage(chatId, {
+                    buttonText: 'בחרו 👆',
+                    description: message,
+                    title: '',
+                    footer: '',
+                    sections: [{
+                        title: 'אפשרויות',
+                        rows: options.map((text, index) => ({
+                            rowId: `option_${index}`,
+                            title: text,
+                            description: ''
+                        }))
+                    }]
+                });
+                console.log('Message sent with list to:', chatId);
+            } catch (listError) {
+                console.log('sendListMessage failed:', listError.message);
+                // Fallback: send as plain text
                 result = await client.sendText(chatId, message);
-                console.log('Message sent as text (buttons fallback) to:', chatId);
+                console.log('Message sent as text (list fallback) to:', chatId);
             }
         } else {
-            // Send message directly - WPPConnect handles LID internally
+            // Send message directly
             result = await client.sendText(chatId, message);
             console.log('Message sent to:', chatId);
         }

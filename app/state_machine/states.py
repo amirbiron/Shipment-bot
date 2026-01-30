@@ -70,11 +70,19 @@ SENDER_TRANSITIONS = {
         SenderState.DELIVERY_COLLECT_PICKUP,
         SenderState.VIEW_DELIVERIES
     ],
-    SenderState.DELIVERY_COLLECT_PICKUP: [SenderState.DELIVERY_COLLECT_PICKUP_CONTACT],
+    # Allow direct jump to DROPOFF_MODE (skipping contact/notes for simpler flow)
+    SenderState.DELIVERY_COLLECT_PICKUP: [
+        SenderState.DELIVERY_COLLECT_PICKUP_CONTACT,
+        SenderState.DELIVERY_COLLECT_DROPOFF_MODE  # Direct shortcut
+    ],
     SenderState.DELIVERY_COLLECT_PICKUP_CONTACT: [SenderState.DELIVERY_COLLECT_PICKUP_NOTES],
     SenderState.DELIVERY_COLLECT_PICKUP_NOTES: [SenderState.DELIVERY_COLLECT_DROPOFF_MODE],
     SenderState.DELIVERY_COLLECT_DROPOFF_MODE: [SenderState.DELIVERY_COLLECT_DROPOFF_ADDRESS],
-    SenderState.DELIVERY_COLLECT_DROPOFF_ADDRESS: [SenderState.DELIVERY_COLLECT_DROPOFF_CONTACT],
+    # Allow direct jump to CONFIRM (skipping contact/notes for simpler flow)
+    SenderState.DELIVERY_COLLECT_DROPOFF_ADDRESS: [
+        SenderState.DELIVERY_COLLECT_DROPOFF_CONTACT,
+        SenderState.DELIVERY_CONFIRM  # Direct shortcut
+    ],
     SenderState.DELIVERY_COLLECT_DROPOFF_CONTACT: [SenderState.DELIVERY_COLLECT_DROPOFF_NOTES],
     SenderState.DELIVERY_COLLECT_DROPOFF_NOTES: [SenderState.DELIVERY_CONFIRM],
     SenderState.DELIVERY_CONFIRM: [SenderState.MENU],
