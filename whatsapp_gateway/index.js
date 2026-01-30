@@ -69,10 +69,10 @@ async function initializeClient() {
         cleanupStaleLocks();
 
         client = await wppconnect.create({
-            session: 'shipment-bot',
+            session: SESSION_NAME,
             autoClose: 0, // Disable auto-close (0 = never)
             tokenStore: 'file',
-            folderNameToken: './sessions',
+            folderNameToken: SESSION_FOLDER,  // Use absolute path to match disk mount
             catchQR: (base64Qr, asciiQR, attempts, urlCode) => {
                 console.log('=== QR CODE READY ===');
                 console.log(`Attempt ${attempts} of 10`);
