@@ -58,8 +58,8 @@ async def get_or_create_user(
     db: AsyncSession,
     telegram_chat_id: str,
     name: Optional[str] = None
-) -> User:
-    """Get existing user or create new one"""
+) -> tuple[User, bool]:
+    """Get existing user or create new one. Returns (user, is_new)"""
     result = await db.execute(
         select(User).where(User.telegram_chat_id == telegram_chat_id)
     )
@@ -75,8 +75,9 @@ async def get_or_create_user(
         db.add(user)
         await db.commit()
         await db.refresh(user)
+        return user, True  # New user
 
-    return user
+    return user, False  # Existing user
 
 
 async def send_telegram_message(
@@ -166,10 +167,15 @@ async def telegram_webhook(
             name += f" {message.from_user.last_name}"
 
     # Get or create user
-    user = await get_or_create_user(db, chat_id, name)
+    user, is_new_user = await get_or_create_user(db, chat_id, name)
 
     # Initialize state manager
     state_manager = StateManager(db)
+
+    # New user - show welcome message with role selection [1.1]
+    if is_new_user:
+        background_tasks.add_task(send_welcome_message, chat_id)
+        return {"ok": True, "new_user": True}
 
     # Check if user wants to be a courier [1.1]
     if "שליח" in text and user.role == UserRole.SENDER:
@@ -250,8 +256,9 @@ async def telegram_webhook(
 
     # Check current state for senders
     current_state = await state_manager.get_current_state(user.id, "telegram")
-    if current_state and current_state != "INITIAL":
-        # User is in a flow - continue it
+
+    # If user is in the middle of a sender flow, continue it
+    if current_state and not current_state.startswith("COURIER.") and current_state not in ["INITIAL", "SENDER.INITIAL"]:
         handler = SenderStateHandler(db)
         response, new_state = await handler.handle_message(
             user_id=user.id,
@@ -267,6 +274,6 @@ async def telegram_webhook(
         )
         return {"ok": True, "new_state": new_state}
 
-    # Default: show welcome message
+    # Default: show welcome message with role selection
     background_tasks.add_task(send_welcome_message, chat_id)
     return {"ok": True}
