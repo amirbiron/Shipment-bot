@@ -143,8 +143,29 @@ class SenderStateHandler:
 
     async def _handle_dropoff_mode(self, message: str, context: dict, user_id: int):
         """Handle dropoff mode selection"""
-        response = MessageResponse("אנא הזינו את כתובת היעד:")
-        return response, SenderState.DELIVERY_COLLECT_DROPOFF_ADDRESS.value, {}
+        msg = message.strip()
+
+        # User chose manual typing
+        if msg == "1" or "הקלדה" in msg or "ידנית" in msg:
+            response = MessageResponse("אנא הזינו את כתובת היעד:")
+            return response, SenderState.DELIVERY_COLLECT_DROPOFF_ADDRESS.value, {}
+
+        # User chose location sharing
+        if msg == "2" or "מיקום" in msg or "שליחת" in msg:
+            response = MessageResponse(
+                "אנא שלחו את המיקום שלכם.\n"
+                "(לחצו על סמל ה-📎 ובחרו 'מיקום')"
+            )
+            return response, SenderState.DELIVERY_COLLECT_DROPOFF_ADDRESS.value, {"dropoff_mode": "location"}
+
+        # Invalid choice - show menu again
+        response = MessageResponse(
+            "לא הבנתי. אנא בחרו אפשרות:\n\n"
+            "1. הקלדה ידנית\n"
+            "2. שליחת מיקום",
+            keyboard=[["הקלדה ידנית", "שליחת מיקום"]]
+        )
+        return response, SenderState.DELIVERY_COLLECT_DROPOFF_MODE.value, {}
 
     async def _handle_collect_dropoff(self, message: str, context: dict, user_id: int):
         """Collect dropoff address"""

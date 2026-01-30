@@ -240,6 +240,7 @@ app.post('/send', async (req, res) => {
     const { phone, message, keyboard } = req.body;
 
     console.log('Send request received - phone:', phone, 'message:', message?.substring(0, 50));
+    console.log('Keyboard:', keyboard);
 
     if (!client || !isConnected) {
         return res.status(503).json({
@@ -269,11 +270,38 @@ app.post('/send', async (req, res) => {
 
         console.log('Sending to:', chatId);
 
-        // Send message directly - WPPConnect handles LID internally
-        const result = await client.sendText(chatId, message);
+        let result;
 
-        console.log('Message sent to:', chatId);
-        res.json({ success: true, messageId: result.id });
+        // Try to send with buttons if keyboard is provided
+        if (keyboard && Array.isArray(keyboard) && keyboard.length > 0) {
+            // Flatten keyboard array and create buttons
+            const buttons = keyboard.flat().map((text, index) => ({
+                id: `btn_${index}`,
+                text: text
+            }));
+
+            // Try sendButtons first (works with some WhatsApp versions)
+            try {
+                result = await client.sendButtons(
+                    chatId,
+                    'בחרו אפשרות:',  // Title
+                    buttons.map(b => ({ buttonId: b.id, buttonText: { displayText: b.text }, type: 1 })),
+                    message  // Description/body
+                );
+                console.log('Message sent with buttons to:', chatId);
+            } catch (btnError) {
+                console.log('sendButtons failed, falling back to sendText:', btnError.message);
+                // Fallback: send as plain text with options listed
+                result = await client.sendText(chatId, message);
+                console.log('Message sent as text (buttons fallback) to:', chatId);
+            }
+        } else {
+            // Send message directly - WPPConnect handles LID internally
+            result = await client.sendText(chatId, message);
+            console.log('Message sent to:', chatId);
+        }
+
+        res.json({ success: true, messageId: result?.id });
 
     } catch (error) {
         console.error('Error sending message:', error.message);
