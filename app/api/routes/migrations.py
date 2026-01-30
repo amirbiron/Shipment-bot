@@ -10,7 +10,7 @@ from app.db.database import get_db
 router = APIRouter()
 
 
-@router.post("/run-migration-001")
+@router.api_route("/run-migration-001", methods=["GET", "POST"])
 async def run_courier_fields_migration(
     db: AsyncSession = Depends(get_db)
 ):
