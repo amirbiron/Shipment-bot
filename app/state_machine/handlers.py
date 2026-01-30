@@ -62,16 +62,29 @@ class SenderStateHandler:
     def _get_handler(self, state: str):
         """Get handler function for state"""
         handlers = {
+            # Initial & Registration
             SenderState.INITIAL.value: self._handle_initial,
             SenderState.NEW.value: self._handle_new,
             SenderState.REGISTER_COLLECT_NAME.value: self._handle_collect_name,
             SenderState.MENU.value: self._handle_menu,
-            SenderState.DELIVERY_COLLECT_PICKUP.value: self._handle_collect_pickup,
-            SenderState.DELIVERY_COLLECT_DROPOFF_MODE.value: self._handle_dropoff_mode,
-            SenderState.DELIVERY_COLLECT_DROPOFF_ADDRESS.value: self._handle_collect_dropoff,
+
+            # Pickup address wizard
+            SenderState.PICKUP_CITY.value: self._handle_pickup_city,
+            SenderState.PICKUP_STREET.value: self._handle_pickup_street,
+            SenderState.PICKUP_NUMBER.value: self._handle_pickup_number,
+
+            # Dropoff mode & address wizard
+            SenderState.DROPOFF_MODE.value: self._handle_dropoff_mode,
+            SenderState.DROPOFF_CITY.value: self._handle_dropoff_city,
+            SenderState.DROPOFF_STREET.value: self._handle_dropoff_street,
+            SenderState.DROPOFF_NUMBER.value: self._handle_dropoff_number,
+
+            # Confirmation
             SenderState.DELIVERY_CONFIRM.value: self._handle_confirm,
         }
         return handlers.get(state, self._handle_unknown)
+
+    # ==================== Initial & Registration ====================
 
     async def _handle_initial(self, message: str, context: dict, user_id: int):
         """Handle initial state"""
@@ -112,14 +125,17 @@ class SenderStateHandler:
         )
         return response, SenderState.MENU.value, {"name": name}
 
+    # ==================== Main Menu ====================
+
     async def _handle_menu(self, message: str, context: dict, user_id: int):
         """Handle main menu"""
         if "משלוח חדש" in message or message == "1":
             response = MessageResponse(
-                "בואו ניצור משלוח חדש!\n"
-                "אנא הזינו את כתובת האיסוף:"
+                "בואו ניצור משלוח חדש!\n\n"
+                "📍 *כתובת איסוף*\n"
+                "מה העיר?"
             )
-            return response, SenderState.DELIVERY_COLLECT_PICKUP.value, {}
+            return response, SenderState.PICKUP_CITY.value, {}
 
         elif "משלוחים" in message or message == "2":
             response = MessageResponse(
@@ -137,82 +153,162 @@ class SenderStateHandler:
         )
         return response, SenderState.MENU.value, {}
 
-    async def _handle_collect_pickup(self, message: str, context: dict, user_id: int):
-        """Collect pickup address"""
-        address = message.strip()
-        if len(address) < 5:
-            response = MessageResponse("הכתובת קצרה מדי. אנא הזינו כתובת מלאה:")
-            return response, SenderState.DELIVERY_COLLECT_PICKUP.value, {}
+    # ==================== Pickup Address Wizard ====================
+
+    async def _handle_pickup_city(self, message: str, context: dict, user_id: int):
+        """Collect pickup city"""
+        city = message.strip()
+
+        if len(city) < 2:
+            response = MessageResponse("שם העיר קצר מדי. אנא הזינו שם עיר תקין:")
+            return response, SenderState.PICKUP_CITY.value, {}
 
         response = MessageResponse(
-            "כתובת האיסוף נשמרה.\n\n"
-            "כיצד תרצו להזין את כתובת היעד?\n"
-            "1. הקלדה ידנית\n"
-            "2. שליחת מיקום",
-            keyboard=[["הקלדה ידנית", "שליחת מיקום"]]
+            f"עיר: {city} ✓\n\n"
+            "מה שם הרחוב?"
         )
-        return response, SenderState.DELIVERY_COLLECT_DROPOFF_MODE.value, {"pickup_address": address}
+        return response, SenderState.PICKUP_STREET.value, {"pickup_city": city}
+
+    async def _handle_pickup_street(self, message: str, context: dict, user_id: int):
+        """Collect pickup street"""
+        street = message.strip()
+
+        if len(street) < 2:
+            response = MessageResponse("שם הרחוב קצר מדי. אנא הזינו שם רחוב תקין:")
+            return response, SenderState.PICKUP_STREET.value, {}
+
+        city = context.get("pickup_city", "")
+        response = MessageResponse(
+            f"עיר: {city} ✓\n"
+            f"רחוב: {street} ✓\n\n"
+            "מה מספר הבית?"
+        )
+        return response, SenderState.PICKUP_NUMBER.value, {"pickup_street": street}
+
+    async def _handle_pickup_number(self, message: str, context: dict, user_id: int):
+        """Collect pickup house number"""
+        number = message.strip()
+
+        # Check if contains a digit
+        if not any(char.isdigit() for char in number):
+            response = MessageResponse("מספר הבית חייב להכיל ספרה. אנא הזינו מספר תקין:")
+            return response, SenderState.PICKUP_NUMBER.value, {}
+
+        city = context.get("pickup_city", "")
+        street = context.get("pickup_street", "")
+        full_address = f"{street} {number}, {city}"
+
+        response = MessageResponse(
+            f"📍 כתובת איסוף נשמרה:\n"
+            f"{full_address}\n\n"
+            "עכשיו נזין את כתובת היעד.\n"
+            "מה העיר?"
+        )
+        return response, SenderState.DROPOFF_MODE.value, {
+            "pickup_number": number,
+            "pickup_address": full_address
+        }
+
+    # ==================== Dropoff Mode & Address Wizard ====================
 
     async def _handle_dropoff_mode(self, message: str, context: dict, user_id: int):
-        """Handle dropoff mode selection"""
-        msg = message.strip()
+        """Collect dropoff city (first step of dropoff wizard)"""
+        city = message.strip()
 
-        # User chose manual typing
-        if msg == "1" or "הקלדה" in msg or "ידנית" in msg:
-            response = MessageResponse("אנא הזינו את כתובת היעד:")
-            return response, SenderState.DELIVERY_COLLECT_DROPOFF_ADDRESS.value, {}
+        if len(city) < 2:
+            response = MessageResponse("שם העיר קצר מדי. אנא הזינו שם עיר תקין:")
+            return response, SenderState.DROPOFF_MODE.value, {}
 
-        # User chose location sharing
-        if msg == "2" or "מיקום" in msg or "שליחת" in msg:
-            response = MessageResponse(
-                "אנא שלחו את המיקום שלכם.\n"
-                "(לחצו על סמל ה-📎 ובחרו 'מיקום')"
-            )
-            return response, SenderState.DELIVERY_COLLECT_DROPOFF_ADDRESS.value, {"dropoff_mode": "location"}
-
-        # Invalid choice - show menu again
         response = MessageResponse(
-            "לא הבנתי. אנא בחרו אפשרות:\n\n"
-            "1. הקלדה ידנית\n"
-            "2. שליחת מיקום",
-            keyboard=[["הקלדה ידנית", "שליחת מיקום"]]
+            f"🎯 *כתובת יעד*\n"
+            f"עיר: {city} ✓\n\n"
+            "מה שם הרחוב?"
         )
-        return response, SenderState.DELIVERY_COLLECT_DROPOFF_MODE.value, {}
+        return response, SenderState.DROPOFF_CITY.value, {"dropoff_city": city}
 
-    async def _handle_collect_dropoff(self, message: str, context: dict, user_id: int):
-        """Collect dropoff address"""
-        address = message.strip()
-        if len(address) < 5:
-            response = MessageResponse("הכתובת קצרה מדי. אנא הזינו כתובת מלאה:")
-            return response, SenderState.DELIVERY_COLLECT_DROPOFF_ADDRESS.value, {}
+    async def _handle_dropoff_city(self, message: str, context: dict, user_id: int):
+        """Collect dropoff street"""
+        street = message.strip()
 
-        pickup = context.get("pickup_address", "לא צוין")
+        if len(street) < 2:
+            response = MessageResponse("שם הרחוב קצר מדי. אנא הזינו שם רחוב תקין:")
+            return response, SenderState.DROPOFF_CITY.value, {}
+
+        city = context.get("dropoff_city", "")
         response = MessageResponse(
-            f"פרטי המשלוח:\n"
+            f"עיר: {city} ✓\n"
+            f"רחוב: {street} ✓\n\n"
+            "מה מספר הבית?"
+        )
+        return response, SenderState.DROPOFF_STREET.value, {"dropoff_street": street}
+
+    async def _handle_dropoff_street(self, message: str, context: dict, user_id: int):
+        """This state now collects house number"""
+        number = message.strip()
+
+        # Check if contains a digit
+        if not any(char.isdigit() for char in number):
+            response = MessageResponse("מספר הבית חייב להכיל ספרה. אנא הזינו מספר תקין:")
+            return response, SenderState.DROPOFF_STREET.value, {}
+
+        city = context.get("dropoff_city", "")
+        street = context.get("dropoff_street", "")
+        full_dropoff = f"{street} {number}, {city}"
+        pickup = context.get("pickup_address", "לא צוין")
+
+        response = MessageResponse(
+            f"📋 *סיכום המשלוח:*\n\n"
             f"📍 איסוף: {pickup}\n"
-            f"🎯 יעד: {address}\n\n"
+            f"🎯 יעד: {full_dropoff}\n\n"
             "לאשר את המשלוח?",
             keyboard=[["אישור ושליחה", "ביטול"]]
         )
-        return response, SenderState.DELIVERY_CONFIRM.value, {"dropoff_address": address}
+        return response, SenderState.DROPOFF_NUMBER.value, {
+            "dropoff_number": number,
+            "dropoff_address": full_dropoff
+        }
+
+    async def _handle_dropoff_number(self, message: str, context: dict, user_id: int):
+        """Handle confirmation from dropoff number state"""
+        # This redirects to confirm handler
+        return await self._handle_confirm(message, context, user_id)
+
+    # ==================== Confirmation ====================
 
     async def _handle_confirm(self, message: str, context: dict, user_id: int):
         """Handle delivery confirmation"""
-        if "אישור" in message:
+        if "אישור" in message or "כן" in message.lower():
+            pickup = context.get("pickup_address", "לא צוין")
+            dropoff = context.get("dropoff_address", "לא צוין")
+
             response = MessageResponse(
-                "המשלוח נוצר בהצלחה! 🎉\n"
-                "השליחים יקבלו התראה בקרוב.\n\n"
+                "המשלוח נוצר בהצלחה! 🎉\n\n"
+                f"📍 מ: {pickup}\n"
+                f"🎯 אל: {dropoff}\n\n"
+                "השליחים יקבלו התראה בקרוב.\n"
                 "מה תרצו לעשות עכשיו?",
                 keyboard=[["משלוח חדש", "המשלוחים שלי"]]
             )
             return response, SenderState.MENU.value, {}
 
+        if "ביטול" in message or "לא" in message.lower():
+            response = MessageResponse(
+                "המשלוח בוטל.\n\n"
+                "מה תרצו לעשות?",
+                keyboard=[["משלוח חדש", "המשלוחים שלי"]]
+            )
+            return response, SenderState.MENU.value, {}
+
+        # Invalid response
         response = MessageResponse(
-            "המשלוח בוטל.\n\n"
-            "מה תרצו לעשות?",
-            keyboard=[["משלוח חדש", "המשלוחים שלי"]]
+            "אנא בחרו אפשרות:\n"
+            "1. אישור ושליחה\n"
+            "2. ביטול",
+            keyboard=[["אישור ושליחה", "ביטול"]]
         )
-        return response, SenderState.MENU.value, {}
+        return response, SenderState.DELIVERY_CONFIRM.value, {}
+
+    # ==================== Unknown State ====================
 
     async def _handle_unknown(self, message: str, context: dict, user_id: int):
         """Handle unknown state"""

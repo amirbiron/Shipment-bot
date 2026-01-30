@@ -18,7 +18,24 @@ class SenderState(str, Enum):
     # Main menu
     MENU = "SENDER.MENU"
 
-    # Delivery creation flow
+    # Delivery creation flow - Pickup address wizard
+    PICKUP_CITY = "SENDER.DELIVERY.PICKUP_CITY"
+    PICKUP_STREET = "SENDER.DELIVERY.PICKUP_STREET"
+    PICKUP_NUMBER = "SENDER.DELIVERY.PICKUP_NUMBER"
+
+    # Delivery creation flow - Dropoff address wizard
+    DROPOFF_MODE = "SENDER.DELIVERY.DROPOFF_MODE"
+    DROPOFF_CITY = "SENDER.DELIVERY.DROPOFF_CITY"
+    DROPOFF_STREET = "SENDER.DELIVERY.DROPOFF_STREET"
+    DROPOFF_NUMBER = "SENDER.DELIVERY.DROPOFF_NUMBER"
+
+    # Confirmation
+    DELIVERY_CONFIRM = "SENDER.DELIVERY.CONFIRM"
+
+    # History view
+    VIEW_DELIVERIES = "SENDER.VIEW_DELIVERIES"
+
+    # Legacy states (for backwards compatibility)
     DELIVERY_COLLECT_PICKUP = "SENDER.DELIVERY.COLLECT_PICKUP"
     DELIVERY_COLLECT_PICKUP_CONTACT = "SENDER.DELIVERY.COLLECT_PICKUP_CONTACT"
     DELIVERY_COLLECT_PICKUP_NOTES = "SENDER.DELIVERY.COLLECT_PICKUP_NOTES"
@@ -26,10 +43,6 @@ class SenderState(str, Enum):
     DELIVERY_COLLECT_DROPOFF_ADDRESS = "SENDER.DELIVERY.COLLECT_DROPOFF_ADDRESS"
     DELIVERY_COLLECT_DROPOFF_CONTACT = "SENDER.DELIVERY.COLLECT_DROPOFF_CONTACT"
     DELIVERY_COLLECT_DROPOFF_NOTES = "SENDER.DELIVERY.COLLECT_DROPOFF_NOTES"
-    DELIVERY_CONFIRM = "SENDER.DELIVERY.CONFIRM"
-
-    # History view
-    VIEW_DELIVERIES = "SENDER.VIEW_DELIVERIES"
 
 
 class CourierState(str, Enum):
@@ -60,31 +73,32 @@ class CourierState(str, Enum):
 
 # State transitions mapping
 SENDER_TRANSITIONS = {
-    # Allow INITIAL to go directly to REGISTER_COLLECT_NAME (shortcut) or through NEW
+    # Initial & Registration
     SenderState.INITIAL: [SenderState.NEW, SenderState.REGISTER_COLLECT_NAME],
     SenderState.NEW: [SenderState.REGISTER_COLLECT_NAME],
-    # Allow skipping phone collection if name is sufficient for registration
     SenderState.REGISTER_COLLECT_NAME: [SenderState.REGISTER_COLLECT_PHONE, SenderState.MENU],
     SenderState.REGISTER_COLLECT_PHONE: [SenderState.MENU],
+
+    # Menu
     SenderState.MENU: [
-        SenderState.DELIVERY_COLLECT_PICKUP,
+        SenderState.PICKUP_CITY,  # New wizard flow
         SenderState.VIEW_DELIVERIES
     ],
-    # Allow direct jump to DROPOFF_MODE (skipping contact/notes for simpler flow)
-    SenderState.DELIVERY_COLLECT_PICKUP: [
-        SenderState.DELIVERY_COLLECT_PICKUP_CONTACT,
-        SenderState.DELIVERY_COLLECT_DROPOFF_MODE  # Direct shortcut
-    ],
-    SenderState.DELIVERY_COLLECT_PICKUP_CONTACT: [SenderState.DELIVERY_COLLECT_PICKUP_NOTES],
-    SenderState.DELIVERY_COLLECT_PICKUP_NOTES: [SenderState.DELIVERY_COLLECT_DROPOFF_MODE],
-    SenderState.DELIVERY_COLLECT_DROPOFF_MODE: [SenderState.DELIVERY_COLLECT_DROPOFF_ADDRESS],
-    # Allow direct jump to CONFIRM (skipping contact/notes for simpler flow)
-    SenderState.DELIVERY_COLLECT_DROPOFF_ADDRESS: [
-        SenderState.DELIVERY_COLLECT_DROPOFF_CONTACT,
-        SenderState.DELIVERY_CONFIRM  # Direct shortcut
-    ],
-    SenderState.DELIVERY_COLLECT_DROPOFF_CONTACT: [SenderState.DELIVERY_COLLECT_DROPOFF_NOTES],
-    SenderState.DELIVERY_COLLECT_DROPOFF_NOTES: [SenderState.DELIVERY_CONFIRM],
+
+    # Pickup address wizard: City -> Street -> Number -> Dropoff mode
+    SenderState.PICKUP_CITY: [SenderState.PICKUP_STREET],
+    SenderState.PICKUP_STREET: [SenderState.PICKUP_NUMBER],
+    SenderState.PICKUP_NUMBER: [SenderState.DROPOFF_MODE],
+
+    # Dropoff mode selection -> Dropoff wizard
+    SenderState.DROPOFF_MODE: [SenderState.DROPOFF_CITY],
+
+    # Dropoff address wizard: City -> Street -> Number -> Confirm
+    SenderState.DROPOFF_CITY: [SenderState.DROPOFF_STREET],
+    SenderState.DROPOFF_STREET: [SenderState.DROPOFF_NUMBER],
+    SenderState.DROPOFF_NUMBER: [SenderState.DELIVERY_CONFIRM, SenderState.MENU],
+
+    # Confirmation -> Menu
     SenderState.DELIVERY_CONFIRM: [SenderState.MENU],
     SenderState.VIEW_DELIVERIES: [SenderState.MENU],
 }
