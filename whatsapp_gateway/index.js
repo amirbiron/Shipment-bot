@@ -134,6 +134,11 @@ async function initializeClient() {
         // Listen for incoming messages
         client.onMessage(async (message) => {
             console.log('Received message:', message.body);
+            console.log('From:', message.from);
+            console.log('ChatId:', message.chatId);
+
+            // Use chatId for reply (more reliable than from which can be LID)
+            const replyTo = message.chatId || message.from;
 
             // Forward to FastAPI webhook
             try {
@@ -143,7 +148,7 @@ async function initializeClient() {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         messages: [{
-                            from_number: message.from.replace('@c.us', ''),
+                            from_number: replyTo,  // Keep full ID including @c.us
                             message_id: message.id,
                             text: message.body,
                             timestamp: message.timestamp
@@ -174,6 +179,8 @@ app.get('/health', (req, res) => {
 app.post('/send', async (req, res) => {
     const { phone, message, keyboard } = req.body;
 
+    console.log('Send request received - phone:', phone, 'message:', message?.substring(0, 50));
+
     if (!client || !isConnected) {
         return res.status(503).json({
             error: 'WhatsApp client not connected'
@@ -181,39 +188,31 @@ app.post('/send', async (req, res) => {
     }
 
     try {
-        // Format phone number - ensure country code and @c.us suffix
-        let cleanPhone = phone.replace(/\D/g, '');  // Remove non-digits
+        let chatId = phone;
 
-        // Add Israel country code if missing (starts with 0)
-        if (cleanPhone.startsWith('0')) {
-            cleanPhone = '972' + cleanPhone.substring(1);
+        // If it already has @c.us or @g.us, use as-is
+        if (!chatId.includes('@c.us') && !chatId.includes('@g.us')) {
+            // Format phone number - ensure country code and @c.us suffix
+            let cleanPhone = phone.replace(/\D/g, '');  // Remove non-digits
+
+            // Add Israel country code if missing (starts with 0)
+            if (cleanPhone.startsWith('0')) {
+                cleanPhone = '972' + cleanPhone.substring(1);
+            }
+
+            chatId = `${cleanPhone}@c.us`;
         }
 
-        // Add @c.us suffix if not present
-        const formattedPhone = cleanPhone.includes('@c.us')
-            ? cleanPhone
-            : `${cleanPhone}@c.us`;
+        console.log('Sending to:', chatId);
 
-        console.log('Sending to:', formattedPhone);
+        // Send message directly
+        const result = await client.sendText(chatId, message);
 
-        // Validate number exists on WhatsApp
-        const numberId = await client.getNumberId(formattedPhone);
-        if (!numberId) {
-            console.error('Number not found on WhatsApp:', formattedPhone);
-            return res.status(400).json({
-                error: 'Number not registered on WhatsApp',
-                phone: formattedPhone
-            });
-        }
-
-        // Send message using the validated ID
-        const result = await client.sendText(numberId._serialized, message);
-
-        console.log('Message sent to:', formattedPhone);
+        console.log('Message sent to:', chatId);
         res.json({ success: true, messageId: result.id });
 
     } catch (error) {
-        console.error('Error sending message:', error);
+        console.error('Error sending message:', error.message);
         res.status(500).json({
             error: 'Failed to send message',
             details: error.message
@@ -232,27 +231,20 @@ app.post('/send-buttons', async (req, res) => {
     }
 
     try {
-        // Format phone number - ensure country code and @c.us suffix
-        let cleanPhone = phone.replace(/\D/g, '');
-        if (cleanPhone.startsWith('0')) {
-            cleanPhone = '972' + cleanPhone.substring(1);
-        }
-        const formattedPhone = `${cleanPhone}@c.us`;
-
-        // Validate number exists on WhatsApp
-        const numberId = await client.getNumberId(formattedPhone);
-        if (!numberId) {
-            return res.status(400).json({ error: 'Number not on WhatsApp' });
+        let chatId = phone;
+        if (!chatId.includes('@c.us') && !chatId.includes('@g.us')) {
+            let cleanPhone = phone.replace(/\D/g, '');
+            if (cleanPhone.startsWith('0')) {
+                cleanPhone = '972' + cleanPhone.substring(1);
+            }
+            chatId = `${cleanPhone}@c.us`;
         }
 
-        // Note: Button support depends on WhatsApp version
-        // Fallback to regular text if buttons not supported
-        const result = await client.sendText(numberId._serialized, message);
-
+        const result = await client.sendText(chatId, message);
         res.json({ success: true, messageId: result.id });
 
     } catch (error) {
-        console.error('Error sending message with buttons:', error);
+        console.error('Error sending message with buttons:', error.message);
         res.status(500).json({
             error: 'Failed to send message',
             details: error.message
