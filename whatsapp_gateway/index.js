@@ -136,19 +136,43 @@ async function initializeClient() {
             console.log('Received message:', message.body);
             console.log('From:', message.from);
             console.log('ChatId:', message.chatId);
+            console.log('Sender:', JSON.stringify(message.sender));
 
-            // Use chatId for reply (more reliable than from which can be LID)
-            const replyTo = message.chatId || message.from;
+            // Get the correct ID to reply to
+            // Priority: sender.id (real phone) > chatId > from
+            let replyTo = message.from;
+
+            // Try to get real phone number from sender object
+            if (message.sender && message.sender.id) {
+                replyTo = message.sender.id;
+                console.log('Using sender.id:', replyTo);
+            } else if (message.chatId) {
+                replyTo = message.chatId;
+                console.log('Using chatId:', replyTo);
+            }
+
+            // If it's a LID (@lid), we need to convert to phone format
+            // LID format: number@lid -> need to use number@c.us
+            if (replyTo.includes('@lid')) {
+                const number = replyTo.replace('@lid', '');
+                // Try to get actual phone - WPPConnect might have it
+                if (message.sender && message.sender.verifiedName) {
+                    console.log('Sender verified name:', message.sender.verifiedName);
+                }
+                // For now, try sending to the same ID but let WPPConnect handle it
+                console.log('LID detected, will try direct send');
+            }
 
             // Forward to FastAPI webhook
             try {
                 console.log('Forwarding to:', API_WEBHOOK_URL);
+                console.log('Reply will be sent to:', replyTo);
                 const response = await fetch(API_WEBHOOK_URL, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         messages: [{
-                            from_number: replyTo,  // Keep full ID including @c.us
+                            from_number: replyTo,
                             message_id: message.id,
                             text: message.body,
                             timestamp: message.timestamp
@@ -190,8 +214,12 @@ app.post('/send', async (req, res) => {
     try {
         let chatId = phone;
 
-        // If it already has @c.us or @g.us, use as-is
-        if (!chatId.includes('@c.us') && !chatId.includes('@g.us')) {
+        // If it already has a valid suffix (@c.us, @g.us, @lid), use as-is
+        const hasValidSuffix = chatId.includes('@c.us') ||
+                               chatId.includes('@g.us') ||
+                               chatId.includes('@lid');
+
+        if (!hasValidSuffix) {
             // Format phone number - ensure country code and @c.us suffix
             let cleanPhone = phone.replace(/\D/g, '');  // Remove non-digits
 
@@ -205,7 +233,7 @@ app.post('/send', async (req, res) => {
 
         console.log('Sending to:', chatId);
 
-        // Send message directly
+        // Send message directly - WPPConnect handles LID internally
         const result = await client.sendText(chatId, message);
 
         console.log('Message sent to:', chatId);
@@ -232,7 +260,11 @@ app.post('/send-buttons', async (req, res) => {
 
     try {
         let chatId = phone;
-        if (!chatId.includes('@c.us') && !chatId.includes('@g.us')) {
+        const hasValidSuffix = chatId.includes('@c.us') ||
+                               chatId.includes('@g.us') ||
+                               chatId.includes('@lid');
+
+        if (!hasValidSuffix) {
             let cleanPhone = phone.replace(/\D/g, '');
             if (cleanPhone.startsWith('0')) {
                 cleanPhone = '972' + cleanPhone.substring(1);
