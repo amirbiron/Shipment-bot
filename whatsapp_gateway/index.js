@@ -25,32 +25,37 @@ const SESSION_NAME = 'shipment-bot';
 /**
  * Clean up stale Chrome lock files that prevent browser from starting.
  * This happens when the container restarts but the persistent disk keeps the lock.
+ * Searches recursively for lock files.
  */
 function cleanupStaleLocks() {
-    const sessionPath = path.join(SESSION_FOLDER, SESSION_NAME);
     const lockFiles = ['SingletonLock', 'SingletonSocket', 'SingletonCookie'];
 
-    // Check multiple possible locations
-    const locations = [
-        sessionPath,                           // /app/sessions/shipment-bot/
-        path.join(sessionPath, 'Default'),     // /app/sessions/shipment-bot/Default/
-        './sessions/shipment-bot',             // relative path fallback
-    ];
+    function findAndDeleteLocks(dir) {
+        if (!fs.existsSync(dir)) return;
 
-    locations.forEach(location => {
-        lockFiles.forEach(lockFile => {
-            const lockPath = path.join(location, lockFile);
-            try {
-                if (fs.existsSync(lockPath)) {
-                    fs.unlinkSync(lockPath);
-                    console.log(`Removed stale lock file: ${lockPath}`);
+        try {
+            const items = fs.readdirSync(dir, { withFileTypes: true });
+            for (const item of items) {
+                const fullPath = path.join(dir, item.name);
+                if (item.isDirectory()) {
+                    findAndDeleteLocks(fullPath);  // Recurse into subdirectories
+                } else if (lockFiles.includes(item.name)) {
+                    try {
+                        fs.unlinkSync(fullPath);
+                        console.log(`Removed stale lock file: ${fullPath}`);
+                    } catch (err) {
+                        console.log(`Could not remove ${fullPath}:`, err.message);
+                    }
                 }
-            } catch (err) {
-                console.log(`Could not remove ${lockPath}:`, err.message);
             }
-        });
-    });
+        } catch (err) {
+            console.log(`Error reading ${dir}:`, err.message);
+        }
+    }
 
+    console.log('Starting lock cleanup in:', SESSION_FOLDER);
+    findAndDeleteLocks(SESSION_FOLDER);
+    findAndDeleteLocks('./sessions');  // Also check relative path
     console.log('Lock cleanup completed');
 }
 
