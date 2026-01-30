@@ -134,6 +134,11 @@ async function initializeClient() {
         // Listen for incoming messages
         client.onMessage(async (message) => {
             console.log('Received message:', message.body);
+            console.log('From:', message.from);
+            console.log('ChatId:', message.chatId);
+
+            // Use chatId for reply (more reliable than from which can be LID)
+            const replyTo = message.chatId || message.from;
 
             // Forward to FastAPI webhook
             try {
@@ -143,7 +148,7 @@ async function initializeClient() {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         messages: [{
-                            from_number: message.from.replace('@c.us', ''),
+                            from_number: replyTo,  // Keep full ID including @c.us
                             message_id: message.id,
                             text: message.body,
                             timestamp: message.timestamp
@@ -183,27 +188,27 @@ app.post('/send', async (req, res) => {
     }
 
     try {
-        // Format phone number - ensure country code and @c.us suffix
-        let cleanPhone = phone.replace(/\D/g, '');  // Remove non-digits
+        let chatId = phone;
 
-        // Add Israel country code if missing (starts with 0)
-        if (cleanPhone.startsWith('0')) {
-            cleanPhone = '972' + cleanPhone.substring(1);
+        // If it already has @c.us or @g.us, use as-is
+        if (!chatId.includes('@c.us') && !chatId.includes('@g.us')) {
+            // Format phone number - ensure country code and @c.us suffix
+            let cleanPhone = phone.replace(/\D/g, '');  // Remove non-digits
+
+            // Add Israel country code if missing (starts with 0)
+            if (cleanPhone.startsWith('0')) {
+                cleanPhone = '972' + cleanPhone.substring(1);
+            }
+
+            chatId = `${cleanPhone}@c.us`;
         }
 
-        // Ensure it's not too long (WhatsApp IDs can be weird)
-        if (cleanPhone.length > 15) {
-            console.log('Phone number too long, truncating:', cleanPhone);
-            cleanPhone = cleanPhone.substring(0, 15);
-        }
-
-        const formattedPhone = `${cleanPhone}@c.us`;
-        console.log('Sending to:', formattedPhone);
+        console.log('Sending to:', chatId);
 
         // Send message directly
-        const result = await client.sendText(formattedPhone, message);
+        const result = await client.sendText(chatId, message);
 
-        console.log('Message sent to:', formattedPhone);
+        console.log('Message sent to:', chatId);
         res.json({ success: true, messageId: result.id });
 
     } catch (error) {
@@ -226,16 +231,16 @@ app.post('/send-buttons', async (req, res) => {
     }
 
     try {
-        let cleanPhone = phone.replace(/\D/g, '');
-        if (cleanPhone.startsWith('0')) {
-            cleanPhone = '972' + cleanPhone.substring(1);
+        let chatId = phone;
+        if (!chatId.includes('@c.us') && !chatId.includes('@g.us')) {
+            let cleanPhone = phone.replace(/\D/g, '');
+            if (cleanPhone.startsWith('0')) {
+                cleanPhone = '972' + cleanPhone.substring(1);
+            }
+            chatId = `${cleanPhone}@c.us`;
         }
-        if (cleanPhone.length > 15) {
-            cleanPhone = cleanPhone.substring(0, 15);
-        }
-        const formattedPhone = `${cleanPhone}@c.us`;
 
-        const result = await client.sendText(formattedPhone, message);
+        const result = await client.sendText(chatId, message);
         res.json({ success: true, messageId: result.id });
 
     } catch (error) {
