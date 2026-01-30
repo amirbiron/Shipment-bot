@@ -111,7 +111,10 @@ async def whatsapp_webhook(
 
     for message in payload.messages:
         text = message.text or ""
-        photo_file_id = message.media_url if message.media_type == "image" else None
+        # Accept image media (WPPConnect may return 'image' or have image in mimetype)
+        photo_file_id = message.media_url if message.media_type and 'image' in message.media_type.lower() else None
+
+        print(f"WhatsApp message - text: '{text[:50] if text else ''}', media_type: {message.media_type}, has_media_url: {bool(message.media_url)}")
 
         # Skip empty messages
         if not text and not photo_file_id:
