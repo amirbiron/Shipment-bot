@@ -50,26 +50,37 @@ class CourierState(str, Enum):
     """States for courier conversation flow"""
 
     # Initial states
-    INITIAL = "INITIAL"
+    INITIAL = "COURIER.INITIAL"
     NEW = "COURIER.NEW"
 
-    # Registration flow
+    # Registration flow [1.2]
     REGISTER_COLLECT_NAME = "COURIER.REGISTER.COLLECT_NAME"
-    REGISTER_COLLECT_VEHICLE = "COURIER.REGISTER.COLLECT_VEHICLE"
+    REGISTER_COLLECT_DOCUMENT = "COURIER.REGISTER.COLLECT_DOCUMENT"
+    REGISTER_COLLECT_AREA = "COURIER.REGISTER.COLLECT_AREA"
+    REGISTER_TERMS = "COURIER.REGISTER.TERMS"
 
-    # Main menu
+    # Pending approval [1.4]
+    PENDING_APPROVAL = "COURIER.PENDING_APPROVAL"
+
+    # Main menu (after approval) [4]
     MENU = "COURIER.MENU"
 
-    # Delivery capture
+    # Delivery operations [2]
     VIEW_AVAILABLE = "COURIER.VIEW_AVAILABLE"
     CAPTURE_CONFIRM = "COURIER.CAPTURE_CONFIRM"
-
-    # Active deliveries
     VIEW_ACTIVE = "COURIER.VIEW_ACTIVE"
+    MARK_PICKED_UP = "COURIER.MARK_PICKED_UP"
     MARK_DELIVERED = "COURIER.MARK_DELIVERED"
 
-    # Wallet
+    # Wallet [3]
     VIEW_WALLET = "COURIER.VIEW_WALLET"
+    DEPOSIT_REQUEST = "COURIER.DEPOSIT_REQUEST"
+    DEPOSIT_UPLOAD = "COURIER.DEPOSIT_UPLOAD"
+
+    # Settings
+    CHANGE_AREA = "COURIER.CHANGE_AREA"
+    VIEW_HISTORY = "COURIER.VIEW_HISTORY"
+    SUPPORT = "COURIER.SUPPORT"
 
 
 # State transitions mapping
@@ -104,18 +115,42 @@ SENDER_TRANSITIONS = {
 }
 
 COURIER_TRANSITIONS = {
-    CourierState.INITIAL: [CourierState.NEW],
+    # Registration flow
+    CourierState.INITIAL: [CourierState.REGISTER_COLLECT_NAME],
     CourierState.NEW: [CourierState.REGISTER_COLLECT_NAME],
-    CourierState.REGISTER_COLLECT_NAME: [CourierState.REGISTER_COLLECT_VEHICLE],
-    CourierState.REGISTER_COLLECT_VEHICLE: [CourierState.MENU],
+    CourierState.REGISTER_COLLECT_NAME: [CourierState.REGISTER_COLLECT_DOCUMENT],
+    CourierState.REGISTER_COLLECT_DOCUMENT: [CourierState.REGISTER_COLLECT_AREA],
+    CourierState.REGISTER_COLLECT_AREA: [CourierState.REGISTER_TERMS],
+    CourierState.REGISTER_TERMS: [CourierState.PENDING_APPROVAL],
+    CourierState.PENDING_APPROVAL: [CourierState.MENU],
+
+    # Main menu navigation
     CourierState.MENU: [
         CourierState.VIEW_AVAILABLE,
         CourierState.VIEW_ACTIVE,
-        CourierState.VIEW_WALLET
+        CourierState.VIEW_WALLET,
+        CourierState.CHANGE_AREA,
+        CourierState.VIEW_HISTORY,
+        CourierState.SUPPORT,
+        CourierState.DEPOSIT_REQUEST,
     ],
+
+    # Delivery capture
     CourierState.VIEW_AVAILABLE: [CourierState.CAPTURE_CONFIRM, CourierState.MENU],
-    CourierState.CAPTURE_CONFIRM: [CourierState.MENU],
-    CourierState.VIEW_ACTIVE: [CourierState.MARK_DELIVERED, CourierState.MENU],
+    CourierState.CAPTURE_CONFIRM: [CourierState.VIEW_ACTIVE, CourierState.MENU],
+
+    # Active delivery flow
+    CourierState.VIEW_ACTIVE: [CourierState.MARK_PICKED_UP, CourierState.MENU],
+    CourierState.MARK_PICKED_UP: [CourierState.MARK_DELIVERED, CourierState.VIEW_ACTIVE],
     CourierState.MARK_DELIVERED: [CourierState.MENU],
-    CourierState.VIEW_WALLET: [CourierState.MENU],
+
+    # Wallet flow
+    CourierState.VIEW_WALLET: [CourierState.DEPOSIT_REQUEST, CourierState.MENU],
+    CourierState.DEPOSIT_REQUEST: [CourierState.DEPOSIT_UPLOAD, CourierState.MENU],
+    CourierState.DEPOSIT_UPLOAD: [CourierState.VIEW_WALLET, CourierState.MENU],
+
+    # Settings
+    CourierState.CHANGE_AREA: [CourierState.MENU],
+    CourierState.VIEW_HISTORY: [CourierState.MENU],
+    CourierState.SUPPORT: [CourierState.MENU],
 }

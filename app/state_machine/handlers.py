@@ -361,3 +361,358 @@ class SenderStateHandler:
             keyboard=[["משלוח חדש", "המשלוחים שלי"]]
         )
         return response, SenderState.MENU.value, {}
+
+
+class CourierStateHandler:
+    """Handles courier conversation states - Full registration and operational flow"""
+
+    TERMS_TEXT = """
+📜 <b>תקנון שליחים - הצהרת קבלן עצמאי</b>
+
+בלחיצה על "קראתי ואני מאשר" אני מאשר/ת כי:
+
+1. אני קבלן/ית עצמאי/ת ולא עובד/ת של המערכת.
+2. אני אחראי/ת באופן מלא על ביצוע המשלוחים.
+3. אני מתחייב/ת לשמור על סודיות פרטי הלקוחות.
+4. אני מודע/ת לכך שעמלות יקוזזו מיתרתי בגין כל משלוח.
+5. אני מתחייב/ת לבצע את המשלוחים בזמן סביר ובצורה מקצועית.
+"""
+
+    def __init__(self, db: AsyncSession):
+        self.db = db
+        self.state_manager = StateManager(db)
+
+    async def handle_message(
+        self,
+        user: User,
+        message: str,
+        photo_file_id: str = None
+    ) -> Tuple[MessageResponse, str]:
+        """Process incoming message for courier and return response with new state"""
+        current_state = await self.state_manager.get_current_state(user.id, "telegram")
+        context = await self.state_manager.get_context(user.id, "telegram")
+
+        handler = self._get_handler(current_state)
+        response, new_state, context_update = await handler(user, message, context, photo_file_id)
+
+        if new_state != current_state:
+            await self.state_manager.force_state(
+                user.id, "telegram", new_state,
+                {**context, **context_update} if context_update else context
+            )
+        elif context_update:
+            for key, value in context_update.items():
+                await self.state_manager.update_context(user.id, "telegram", key, value)
+
+        return response, new_state
+
+    def _get_handler(self, state: str):
+        """Get handler function for state"""
+        handlers = {
+            CourierState.INITIAL.value: self._handle_initial,
+            CourierState.NEW.value: self._handle_initial,
+            CourierState.REGISTER_COLLECT_NAME.value: self._handle_collect_name,
+            CourierState.REGISTER_COLLECT_DOCUMENT.value: self._handle_collect_document,
+            CourierState.REGISTER_COLLECT_AREA.value: self._handle_collect_area,
+            CourierState.REGISTER_TERMS.value: self._handle_terms,
+            CourierState.PENDING_APPROVAL.value: self._handle_pending_approval,
+            CourierState.MENU.value: self._handle_menu,
+            CourierState.VIEW_WALLET.value: self._handle_view_wallet,
+            CourierState.DEPOSIT_REQUEST.value: self._handle_deposit_request,
+            CourierState.DEPOSIT_UPLOAD.value: self._handle_deposit_upload,
+            CourierState.CHANGE_AREA.value: self._handle_change_area,
+            CourierState.VIEW_HISTORY.value: self._handle_view_history,
+            CourierState.VIEW_ACTIVE.value: self._handle_view_active,
+            CourierState.SUPPORT.value: self._handle_support,
+        }
+        return handlers.get(state, self._handle_unknown)
+
+    # ==================== Registration Flow [1.2] ====================
+
+    async def _handle_initial(self, user: User, message: str, context: dict, photo_file_id: str):
+        """Welcome message and start registration"""
+        response = MessageResponse(
+            "ברוכים הבאים למערכת משלוח בצ'יק! 🚚\n\n"
+            "כדי להתחיל לקחת משלוחים, עלינו להכיר אותך.\n\n"
+            "<b>שלב א' - שם מלא:</b>\n"
+            "אנא הזן את שמך המלא כפי שמופיע בתעודת הזהות."
+        )
+        return response, CourierState.REGISTER_COLLECT_NAME.value, {}
+
+    async def _handle_collect_name(self, user: User, message: str, context: dict, photo_file_id: str):
+        """Collect full name - Step a"""
+        name = message.strip()
+        if len(name) < 2:
+            response = MessageResponse("השם שהוזן קצר מדי. אנא הזן את שמך המלא (לפחות 2 תווים).")
+            return response, CourierState.REGISTER_COLLECT_NAME.value, {}
+
+        if len(name) > 150:
+            response = MessageResponse("השם שהוזן ארוך מדי. אנא הזן שם קצר יותר.")
+            return response, CourierState.REGISTER_COLLECT_NAME.value, {}
+
+        # Save name
+        user.full_name = name
+        user.name = name.split()[0] if name.split() else name
+        await self.db.commit()
+
+        response = MessageResponse(
+            f"תודה {user.name}!\n\n"
+            "<b>שלב ב' - תיעוד רשמי:</b>\n"
+            "אנא צלם ושלח כעת תעודת זהות או רישיון נהיגה בתוקף.\n\n"
+            "📸 שלח תמונה של המסמך (ודא שהפרטים קריאים)."
+        )
+        return response, CourierState.REGISTER_COLLECT_DOCUMENT.value, {}
+
+    async def _handle_collect_document(self, user: User, message: str, context: dict, photo_file_id: str):
+        """Collect ID document - Step b"""
+        if not photo_file_id:
+            response = MessageResponse(
+                "לא התקבלה תמונה. אנא שלח תמונה של תעודת זהות או רישיון נהיגה."
+            )
+            return response, CourierState.REGISTER_COLLECT_DOCUMENT.value, {}
+
+        response = MessageResponse(
+            "המסמך התקבל בהצלחה!\n\n"
+            "<b>שלב ג' - התמחות גיאוגרפית:</b>\n"
+            "באיזו עיר או אזור אתה מתמקד בעיקר?\n\n"
+            "לדוגמה: בני ברק, ירושלים, אזור המרכז, גוש דן"
+        )
+        return response, CourierState.REGISTER_COLLECT_AREA.value, {"document_file_id": photo_file_id}
+
+    async def _handle_collect_area(self, user: User, message: str, context: dict, photo_file_id: str):
+        """Collect service area - Step c"""
+        area = message.strip()
+        if len(area) < 2:
+            response = MessageResponse("אנא הזן אזור תקין (לפחות 2 תווים).")
+            return response, CourierState.REGISTER_COLLECT_AREA.value, {}
+
+        user.service_area = area
+        await self.db.commit()
+
+        response = MessageResponse(
+            self.TERMS_TEXT,
+            keyboard=[["קראתי ואני מאשר ✅"]]
+        )
+        return response, CourierState.REGISTER_TERMS.value, {}
+
+    async def _handle_terms(self, user: User, message: str, context: dict, photo_file_id: str):
+        """Handle terms acceptance [1.3]"""
+        from datetime import datetime
+        from app.db.models.user import ApprovalStatus, UserRole
+
+        if "מאשר" not in message and "אישור" not in message:
+            response = MessageResponse(
+                "כדי להמשיך, עליך ללחוץ על הכפתור 'קראתי ואני מאשר'.",
+                keyboard=[["קראתי ואני מאשר ✅"]]
+            )
+            return response, CourierState.REGISTER_TERMS.value, {}
+
+        # Update user status
+        user.terms_accepted_at = datetime.utcnow()
+        user.role = UserRole.COURIER
+        user.approval_status = ApprovalStatus.PENDING
+
+        # Save document URL from context
+        if context.get("document_file_id"):
+            user.id_document_url = context["document_file_id"]
+
+        await self.db.commit()
+
+        response = MessageResponse(
+            "<b>הרישום הושלם בהצלחה!</b>\n\n"
+            "פרטיך הועברו לבדיקת הנהלה.\n"
+            "תקבל הודעה ברגע שחשבונך יאושר.\n\n"
+            "⏳ בדרך כלל האישור מתבצע תוך 24 שעות."
+        )
+        return response, CourierState.PENDING_APPROVAL.value, {}
+
+    async def _handle_pending_approval(self, user: User, message: str, context: dict, photo_file_id: str):
+        """Handle messages while pending approval [1.4]"""
+        from app.db.models.user import ApprovalStatus
+
+        await self.db.refresh(user)
+
+        if user.approval_status == ApprovalStatus.APPROVED:
+            return await self._handle_menu(user, message, context, photo_file_id)
+
+        if user.approval_status == ApprovalStatus.REJECTED:
+            response = MessageResponse(
+                "לצערנו, בקשתך להצטרף כשליח נדחתה. לפרטים נוספים, פנה להנהלה."
+            )
+            return response, CourierState.PENDING_APPROVAL.value, {}
+
+        response = MessageResponse(
+            "⏳ בקשתך עדיין בבדיקה. תקבל הודעה ברגע שחשבונך יאושר."
+        )
+        return response, CourierState.PENDING_APPROVAL.value, {}
+
+    # ==================== Main Menu [4] ====================
+
+    async def _handle_menu(self, user: User, message: str, context: dict, photo_file_id: str):
+        """Handle main menu display and navigation"""
+        from app.db.models.user import ApprovalStatus
+
+        if user.approval_status != ApprovalStatus.APPROVED:
+            return await self._handle_pending_approval(user, message, context, photo_file_id)
+
+        # Navigation by button text
+        if "ארנק" in message or "יתרה" in message:
+            return await self._handle_view_wallet(user, message, context, photo_file_id)
+        if "אזור" in message or "הגדרות" in message:
+            return await self._handle_change_area(user, message, context, photo_file_id)
+        if "היסטוריה" in message or "עבודות" in message:
+            return await self._handle_view_history(user, message, context, photo_file_id)
+        if "תמיכה" in message or "עזרה" in message:
+            return await self._handle_support(user, message, context, photo_file_id)
+        if "הפקדה" in message or "טעינה" in message:
+            return await self._handle_deposit_request(user, message, context, photo_file_id)
+        if "משלוח פעיל" in message or "משלוח נוכחי" in message:
+            return await self._handle_view_active(user, message, context, photo_file_id)
+
+        # Default menu display
+        response = MessageResponse(
+            f"📋 <b>תפריט שליח</b>\n\n"
+            f"שלום {user.name}! 👋\n\n"
+            f"💰 <b>מצב הארנק:</b> 0.00 ₪\n"
+            f"📍 <b>האזור שלך:</b> {user.service_area or 'לא הוגדר'}\n\n"
+            "בחר פעולה:",
+            keyboard=[
+                ["💰 מצב הארנק", "📍 הגדרות אזור"],
+                ["📦 היסטוריית עבודות", "📦 משלוח פעיל"],
+                ["💳 הפקדה", "❓ תמיכה"],
+            ]
+        )
+        return response, CourierState.MENU.value, {}
+
+    # ==================== Wallet Module [3] ====================
+
+    async def _handle_view_wallet(self, user: User, message: str, context: dict, photo_file_id: str):
+        """Handle wallet view [3.1]"""
+        from app.core.config import settings
+
+        response = MessageResponse(
+            "💰 <b>פרטי הארנק</b>\n\n"
+            "🟢 סטטוס: פעיל\n\n"
+            "💵 יתרה נוכחית: <b>0.00 ₪</b>\n"
+            f"📊 מסגרת אשראי: {settings.DEFAULT_CREDIT_LIMIT:.2f} ₪\n"
+            f"🎯 נותר עד לחסימה: {-settings.DEFAULT_CREDIT_LIMIT:.2f} ₪\n\n"
+            "לטעינת הארנק, לחץ על 'הפקדה'.",
+            keyboard=[["💳 הפקדה"], ["🔙 חזרה לתפריט"]]
+        )
+        return response, CourierState.VIEW_WALLET.value, {}
+
+    async def _handle_deposit_request(self, user: User, message: str, context: dict, photo_file_id: str):
+        """Handle deposit request [3.2]"""
+        if "חזרה" in message or "תפריט" in message:
+            return await self._handle_menu(user, "תפריט", context, None)
+
+        response = MessageResponse(
+            "💳 <b>טעינת ארנק</b>\n\n"
+            "לטעינת הארנק, בצע העברה לאחד מהאמצעים הבאים:\n\n"
+            "📱 <b>ביט:</b> 050-1234567\n"
+            "📱 <b>פייבוקס:</b> 050-1234567\n"
+            "🏦 <b>העברה בנקאית:</b>\n"
+            "   בנק: לאומי (10)\n"
+            "   סניף: 800\n"
+            "   חשבון: 12345678\n\n"
+            "לאחר ההעברה, שלח צילום מסך של אישור ההעברה.",
+            keyboard=[["🔙 חזרה לתפריט"]]
+        )
+        return response, CourierState.DEPOSIT_UPLOAD.value, {}
+
+    async def _handle_deposit_upload(self, user: User, message: str, context: dict, photo_file_id: str):
+        """Handle deposit screenshot upload"""
+        if "חזרה" in message or "תפריט" in message:
+            return await self._handle_menu(user, "תפריט", context, None)
+
+        if not photo_file_id:
+            response = MessageResponse(
+                "📸 אנא שלח צילום מסך של אישור ההעברה, או לחץ 'חזרה לתפריט'.",
+                keyboard=[["🔙 חזרה לתפריט"]]
+            )
+            return response, CourierState.DEPOSIT_UPLOAD.value, {}
+
+        response = MessageResponse(
+            "<b>בקשת ההפקדה התקבלה!</b>\n\n"
+            "הבקשה הועברה למנהל לאישור.\n"
+            "היתרה תתעדכן לאחר אישור ההפקדה.\n\n"
+            "⏳ זמן טיפול: עד 24 שעות.",
+            keyboard=[["🔙 חזרה לתפריט"]]
+        )
+        return response, CourierState.MENU.value, {"deposit_screenshot": photo_file_id}
+
+    # ==================== Settings ====================
+
+    async def _handle_change_area(self, user: User, message: str, context: dict, photo_file_id: str):
+        """Handle area change"""
+        if "חזרה" in message or "תפריט" in message:
+            return await self._handle_menu(user, "תפריט", context, None)
+
+        # Check if this is a new area being set
+        if context.get("changing_area"):
+            new_area = message.strip()
+            if len(new_area) >= 2:
+                user.service_area = new_area
+                await self.db.commit()
+
+                response = MessageResponse(
+                    f"האזור עודכן בהצלחה!\n\nהאזור החדש: <b>{new_area}</b>",
+                    keyboard=[["🔙 חזרה לתפריט"]]
+                )
+                return response, CourierState.MENU.value, {"changing_area": False}
+
+        response = MessageResponse(
+            f"📍 <b>הגדרות אזור</b>\n\n"
+            f"האזור הנוכחי שלך: <b>{user.service_area or 'לא הוגדר'}</b>\n\n"
+            "לשינוי האזור, הקלד את האזור החדש.",
+            keyboard=[["🔙 חזרה לתפריט"]]
+        )
+        return response, CourierState.CHANGE_AREA.value, {"changing_area": True}
+
+    async def _handle_view_history(self, user: User, message: str, context: dict, photo_file_id: str):
+        """Handle work history view"""
+        if "חזרה" in message or "תפריט" in message:
+            return await self._handle_menu(user, "תפריט", context, None)
+
+        response = MessageResponse(
+            "📦 <b>היסטוריית עבודות</b>\n\n"
+            "אין משלוחים בהיסטוריה עדיין.\n"
+            "התחל לקחת משלוחים כדי לראות את ההיסטוריה שלך!",
+            keyboard=[["🔙 חזרה לתפריט"]]
+        )
+        return response, CourierState.VIEW_HISTORY.value, {}
+
+    async def _handle_view_active(self, user: User, message: str, context: dict, photo_file_id: str):
+        """Handle viewing active delivery"""
+        if "חזרה" in message or "תפריט" in message:
+            return await self._handle_menu(user, "תפריט", context, None)
+
+        response = MessageResponse(
+            "📦 אין לך משלוח פעיל כרגע.\nתפוס משלוח חדש מהקבוצה!",
+            keyboard=[["🔙 חזרה לתפריט"]]
+        )
+        return response, CourierState.MENU.value, {}
+
+    async def _handle_support(self, user: User, message: str, context: dict, photo_file_id: str):
+        """Handle support requests"""
+        if "חזרה" in message or "תפריט" in message:
+            return await self._handle_menu(user, "תפריט", context, None)
+
+        response = MessageResponse(
+            "❓ <b>תמיכה</b>\n\n"
+            "לתמיכה טכנית או שאלות:\n\n"
+            "📧 שלח הודעה למנהל - פשוט כתוב את ההודעה כאן והיא תועבר.\n\n"
+            "📞 מוקד: 050-1234567\n"
+            "שעות פעילות: א'-ה' 08:00-20:00",
+            keyboard=[["🔙 חזרה לתפריט"]]
+        )
+        return response, CourierState.SUPPORT.value, {}
+
+    async def _handle_unknown(self, user: User, message: str, context: dict, photo_file_id: str):
+        """Handle unknown state"""
+        from app.db.models.user import ApprovalStatus
+
+        if user.approval_status == ApprovalStatus.APPROVED:
+            return await self._handle_menu(user, message, context, photo_file_id)
+
+        return await self._handle_pending_approval(user, message, context, photo_file_id)
