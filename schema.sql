@@ -9,6 +9,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- =====================================================
 
 CREATE TYPE user_role AS ENUM ('sender', 'courier', 'admin');
+CREATE TYPE approval_status AS ENUM ('pending', 'approved', 'rejected', 'blocked');
 CREATE TYPE delivery_status AS ENUM ('open', 'captured', 'in_transit', 'delivered', 'cancelled');
 CREATE TYPE ledger_type AS ENUM ('delivery_fee_debit', 'payment', 'bonus', 'refund', 'adjustment');
 CREATE TYPE message_platform AS ENUM ('whatsapp', 'telegram');
@@ -23,9 +24,17 @@ CREATE TABLE users (
     phone_number VARCHAR(20) UNIQUE,
     telegram_chat_id VARCHAR(50) UNIQUE,
     name VARCHAR(100),
+    full_name VARCHAR(150),
     role user_role NOT NULL DEFAULT 'sender',
     platform VARCHAR(20) NOT NULL,
     is_active BOOLEAN DEFAULT TRUE,
+
+    -- Courier-specific fields
+    approval_status approval_status,
+    id_document_url TEXT,
+    service_area VARCHAR(100),
+    terms_accepted_at TIMESTAMP WITH TIME ZONE,
+
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -34,8 +43,14 @@ CREATE INDEX idx_users_role ON users(role);
 CREATE INDEX idx_users_platform ON users(platform);
 CREATE INDEX idx_users_phone ON users(phone_number);
 CREATE INDEX idx_users_telegram ON users(telegram_chat_id);
+CREATE INDEX idx_users_approval_status ON users(approval_status);
 
 COMMENT ON TABLE users IS 'All system users - senders, couriers, and admins';
+COMMENT ON COLUMN users.full_name IS 'Legal name as appears on ID document';
+COMMENT ON COLUMN users.approval_status IS 'Courier approval status (pending/approved/rejected/blocked)';
+COMMENT ON COLUMN users.id_document_url IS 'Path or file_id of uploaded ID/license document';
+COMMENT ON COLUMN users.service_area IS 'Geographic area where courier operates';
+COMMENT ON COLUMN users.terms_accepted_at IS 'When courier accepted terms and conditions';
 
 -- =====================================================
 -- Deliveries Table
@@ -90,7 +105,7 @@ CREATE TABLE courier_wallets (
     id SERIAL PRIMARY KEY,
     courier_id INTEGER UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     balance DECIMAL(10, 2) DEFAULT 0.00,
-    credit_limit DECIMAL(10, 2) DEFAULT -100.00,
+    credit_limit DECIMAL(10, 2) DEFAULT -500.00,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
