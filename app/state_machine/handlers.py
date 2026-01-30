@@ -13,9 +13,10 @@ from app.db.models.user import User
 class MessageResponse:
     """Response to be sent to user"""
 
-    def __init__(self, text: str, keyboard: Optional[list] = None):
+    def __init__(self, text: str, keyboard: Optional[list] = None, inline: bool = False):
         self.text = text
         self.keyboard = keyboard
+        self.inline = inline
 
 
 class SenderStateHandler:
@@ -80,6 +81,13 @@ class SenderStateHandler:
             SenderState.DROPOFF_NUMBER.value: self._handle_dropoff_number,
             SenderState.DROPOFF_APARTMENT.value: self._handle_dropoff_apartment,
 
+            # Delivery details
+            SenderState.DELIVERY_LOCATION.value: self._handle_delivery_location,
+            SenderState.DELIVERY_URGENCY.value: self._handle_delivery_urgency,
+            SenderState.DELIVERY_TIME.value: self._handle_delivery_time,
+            SenderState.DELIVERY_PRICE.value: self._handle_delivery_price,
+            SenderState.DELIVERY_DESCRIPTION.value: self._handle_delivery_description,
+
             # Confirmation
             SenderState.DELIVERY_CONFIRM.value: self._handle_confirm,
         }
@@ -122,7 +130,8 @@ class SenderStateHandler:
             "מה תרצו לעשות?\n"
             "1. יצירת משלוח חדש\n"
             "2. צפייה במשלוחים שלי",
-            keyboard=[["משלוח חדש", "המשלוחים שלי"]]
+            keyboard=[["➕ משלוח חדש", "📦 המשלוחים שלי"]],
+            inline=True
         )
         return response, SenderState.MENU.value, {"name": name}
 
@@ -130,7 +139,7 @@ class SenderStateHandler:
 
     async def _handle_menu(self, message: str, context: dict, user_id: int):
         """Handle main menu"""
-        if "משלוח חדש" in message or message == "1":
+        if "משלוח חדש" in message or "➕" in message or message == "1":
             response = MessageResponse(
                 "בואו ניצור משלוח חדש!\n\n"
                 "📍 *כתובת איסוף*\n"
@@ -138,11 +147,12 @@ class SenderStateHandler:
             )
             return response, SenderState.PICKUP_CITY.value, {}
 
-        elif "משלוחים" in message or message == "2":
+        elif "משלוחים" in message or "📦" in message or message == "2":
             response = MessageResponse(
                 "המשלוחים שלך:\n(אין משלוחים עדיין)\n\n"
                 "חזרה לתפריט:",
-                keyboard=[["משלוח חדש", "המשלוחים שלי"]]
+                keyboard=[["➕ משלוח חדש", "📦 המשלוחים שלי"]],
+                inline=True
             )
             return response, SenderState.MENU.value, {}
 
@@ -150,7 +160,8 @@ class SenderStateHandler:
             "לא הבנתי. אנא בחרו אפשרות:\n"
             "1. משלוח חדש\n"
             "2. המשלוחים שלי",
-            keyboard=[["משלוח חדש", "המשלוחים שלי"]]
+            keyboard=[["➕ משלוח חדש", "📦 המשלוחים שלי"]],
+            inline=True
         )
         return response, SenderState.MENU.value, {}
 
@@ -289,13 +300,13 @@ class SenderStateHandler:
         return response, SenderState.DROPOFF_APARTMENT.value, {"dropoff_number": number}
 
     async def _handle_dropoff_apartment(self, message: str, context: dict, user_id: int):
-        """Collect dropoff apartment/floor (optional) and show summary"""
+        """Collect dropoff apartment/floor (optional) and ask about delivery location"""
         msg = message.strip()
 
         city = context.get("dropoff_city", "")
         street = context.get("dropoff_street", "")
         number = context.get("dropoff_number", "")
-        pickup = context.get("pickup_address", "לא צוין")
+        pickup_city = context.get("pickup_city", "")
 
         # Build full address
         if msg.lower() == "דלג" or msg == "-" or msg == "0":
@@ -305,50 +316,239 @@ class SenderStateHandler:
             full_dropoff = f"{street} {number}, {city} (קומה/דירה: {msg})"
             apartment = msg
 
+        # Check if same city or different city
+        same_city = pickup_city.strip().lower() == city.strip().lower()
+
         response = MessageResponse(
+            f"🎯 כתובת יעד נשמרה:\n{full_dropoff}\n\n"
+            "לאן תרצו להעביר את המשלוח?",
+            keyboard=[["🏙️ בתוך העיר", "🚗 מחוץ לעיר"]],
+            inline=True
+        )
+        return response, SenderState.DELIVERY_LOCATION.value, {
+            "dropoff_apartment": apartment,
+            "dropoff_address": full_dropoff,
+            "same_city": same_city
+        }
+
+    # ==================== Delivery Details ====================
+
+    async def _handle_delivery_location(self, message: str, context: dict, user_id: int):
+        """Handle delivery location selection (within/outside city)"""
+        msg = message.strip()
+
+        if "בתוך" in msg or "🏙️" in msg or msg == "1":
+            location_type = "within_city"
+            location_text = "בתוך העיר"
+        elif "מחוץ" in msg or "🚗" in msg or msg == "2":
+            location_type = "outside_city"
+            location_text = "מחוץ לעיר"
+        else:
+            response = MessageResponse(
+                "אנא בחרו אפשרות:\n"
+                "1. בתוך העיר\n"
+                "2. מחוץ לעיר",
+                keyboard=[["🏙️ בתוך העיר", "🚗 מחוץ לעיר"]],
+                inline=True
+            )
+            return response, SenderState.DELIVERY_LOCATION.value, {}
+
+        response = MessageResponse(
+            f"סוג משלוח: {location_text} ✓\n\n"
+            "האם המשלוח דחוף?",
+            keyboard=[["🚀 מיידי", "☕ בנחת"]],
+            inline=True
+        )
+        return response, SenderState.DELIVERY_URGENCY.value, {"delivery_location": location_type}
+
+    async def _handle_delivery_urgency(self, message: str, context: dict, user_id: int):
+        """Handle urgency selection (immediate/later)"""
+        msg = message.strip()
+
+        if "מיידי" in msg or "🚀" in msg or msg == "1":
+            # Immediate - skip time and price questions, go directly to description
+            response = MessageResponse(
+                "⚡ משלוח מיידי!\n\n"
+                "📝 *תיאור המשלוח:*\n"
+                "מה אתם שולחים? (תיאור קצר של הפריט)"
+            )
+            return response, SenderState.DELIVERY_DESCRIPTION.value, {
+                "urgency": "immediate",
+                "delivery_time": "מיידי"
+            }
+
+        elif "בנחת" in msg or "☕" in msg or msg == "2":
+            # Later - ask for time
+            response = MessageResponse(
+                "☕ משלוח בנחת\n\n"
+                "⏰ באיזו שעה תרצו שהמשלוח יתבצע?\n"
+                "(נא להזין בפורמט HH:MM, לדוגמה: 14:30)"
+            )
+            return response, SenderState.DELIVERY_TIME.value, {"urgency": "later"}
+
+        response = MessageResponse(
+            "אנא בחרו אפשרות:\n"
+            "1. 🚀 מיידי - המשלוח יתבצע בהקדם\n"
+            "2. ☕ בנחת - תבחרו שעה מועדפת",
+            keyboard=[["🚀 מיידי", "☕ בנחת"]],
+            inline=True
+        )
+        return response, SenderState.DELIVERY_URGENCY.value, {}
+
+    async def _handle_delivery_time(self, message: str, context: dict, user_id: int):
+        """Handle delivery time input (HH:MM format) - only for 'later' urgency"""
+        import re
+        msg = message.strip()
+
+        # Validate time format HH:MM
+        time_pattern = re.compile(r'^([01]?[0-9]|2[0-3]):([0-5][0-9])$')
+        if not time_pattern.match(msg):
+            response = MessageResponse(
+                "❌ פורמט שעה לא תקין.\n\n"
+                "אנא הזינו שעה בפורמט HH:MM\n"
+                "לדוגמה: 09:00, 14:30, 18:45"
+            )
+            return response, SenderState.DELIVERY_TIME.value, {}
+
+        # Calculate minimum price based on location
+        location_type = context.get("delivery_location", "within_city")
+        if location_type == "within_city":
+            min_price = 25
+        else:
+            min_price = 45
+
+        response = MessageResponse(
+            f"⏰ שעת משלוח: {msg} ✓\n\n"
+            f"💰 *הצעת מחיר:*\n"
+            f"מה המחיר שתרצו לשלם?\n"
+            f"(מינימום להזמנה זו: {min_price} ₪)"
+        )
+        return response, SenderState.DELIVERY_PRICE.value, {"delivery_time": msg, "min_price": min_price}
+
+    async def _handle_delivery_price(self, message: str, context: dict, user_id: int):
+        """Handle customer price input - only for 'later' urgency"""
+        msg = message.strip()
+
+        # Extract number from message
+        import re
+        numbers = re.findall(r'\d+', msg)
+        if not numbers:
+            min_price = context.get("min_price", 25)
+            response = MessageResponse(
+                f"❌ אנא הזינו סכום תקין (מספר בלבד).\n"
+                f"מינימום: {min_price} ₪"
+            )
+            return response, SenderState.DELIVERY_PRICE.value, {}
+
+        price = int(numbers[0])
+        min_price = context.get("min_price", 25)
+
+        if price < min_price:
+            response = MessageResponse(
+                f"❌ המחיר נמוך מהמינימום.\n"
+                f"מינימום להזמנה זו: {min_price} ₪\n\n"
+                "אנא הזינו סכום גבוה יותר:"
+            )
+            return response, SenderState.DELIVERY_PRICE.value, {}
+
+        response = MessageResponse(
+            f"💰 מחיר: {price} ₪ ✓\n\n"
+            "📝 *תיאור המשלוח:*\n"
+            "מה אתם שולחים? (תיאור קצר של הפריט)"
+        )
+        return response, SenderState.DELIVERY_DESCRIPTION.value, {"customer_price": price}
+
+    async def _handle_delivery_description(self, message: str, context: dict, user_id: int):
+        """Handle shipment description and show final summary"""
+        description = message.strip()
+
+        if len(description) < 2:
+            response = MessageResponse(
+                "❌ התיאור קצר מדי. אנא תארו את המשלוח (לפחות 2 תווים):"
+            )
+            return response, SenderState.DELIVERY_DESCRIPTION.value, {}
+
+        # Build summary
+        pickup = context.get("pickup_address", "לא צוין")
+        dropoff = context.get("dropoff_address", "לא צוין")
+        location_type = context.get("delivery_location", "within_city")
+        location_text = "בתוך העיר" if location_type == "within_city" else "מחוץ לעיר"
+        urgency = context.get("urgency", "immediate")
+        delivery_time = context.get("delivery_time", "מיידי")
+        customer_price = context.get("customer_price", "לא הוגדר")
+
+        summary = (
             f"📋 *סיכום המשלוח:*\n\n"
             f"📍 איסוף: {pickup}\n"
-            f"🎯 יעד: {full_dropoff}\n\n"
-            "לאשר את המשלוח?",
-            keyboard=[["אישור ושליחה", "ביטול"]]
+            f"🎯 יעד: {dropoff}\n"
+            f"🗺️ סוג: {location_text}\n"
+            f"⏰ זמן: {delivery_time}\n"
         )
-        return response, SenderState.DELIVERY_CONFIRM.value, {
-            "dropoff_apartment": apartment,
-            "dropoff_address": full_dropoff
-        }
+
+        if urgency == "later" and customer_price != "לא הוגדר":
+            summary += f"💰 מחיר מוצע: {customer_price} ₪\n"
+
+        summary += f"📦 תיאור: {description}\n\n"
+        summary += "לאשר את המשלוח?"
+
+        response = MessageResponse(
+            summary,
+            keyboard=[["✅ אישור ושליחה", "❌ ביטול"]],
+            inline=True
+        )
+        return response, SenderState.DELIVERY_CONFIRM.value, {"description": description}
 
     # ==================== Confirmation ====================
 
     async def _handle_confirm(self, message: str, context: dict, user_id: int):
         """Handle delivery confirmation"""
-        if "אישור" in message or "כן" in message.lower():
+        if "אישור" in message or "✅" in message or "כן" in message.lower():
             pickup = context.get("pickup_address", "לא צוין")
             dropoff = context.get("dropoff_address", "לא צוין")
+            description = context.get("description", "")
+            urgency = context.get("urgency", "immediate")
+            delivery_time = context.get("delivery_time", "מיידי")
+            customer_price = context.get("customer_price")
 
-            response = MessageResponse(
+            success_msg = (
                 "המשלוח נוצר בהצלחה! 🎉\n\n"
                 f"📍 מ: {pickup}\n"
-                f"🎯 אל: {dropoff}\n\n"
-                "השליחים יקבלו התראה בקרוב.\n"
-                "מה תרצו לעשות עכשיו?",
-                keyboard=[["משלוח חדש", "המשלוחים שלי"]]
+                f"🎯 אל: {dropoff}\n"
+                f"⏰ זמן: {delivery_time}\n"
+            )
+            if description:
+                success_msg += f"📦 תיאור: {description}\n"
+            if customer_price:
+                success_msg += f"💰 מחיר: {customer_price} ₪\n"
+
+            success_msg += (
+                "\nהשליחים יקבלו התראה בקרוב.\n"
+                "מה תרצו לעשות עכשיו?"
+            )
+
+            response = MessageResponse(
+                success_msg,
+                keyboard=[["➕ משלוח חדש", "📦 המשלוחים שלי"]],
+                inline=True
             )
             return response, SenderState.MENU.value, {}
 
-        if "ביטול" in message or "לא" in message.lower():
+        if "ביטול" in message or "❌" in message or "לא" in message.lower():
             response = MessageResponse(
                 "המשלוח בוטל.\n\n"
                 "מה תרצו לעשות?",
-                keyboard=[["משלוח חדש", "המשלוחים שלי"]]
+                keyboard=[["➕ משלוח חדש", "📦 המשלוחים שלי"]],
+                inline=True
             )
             return response, SenderState.MENU.value, {}
 
         # Invalid response
         response = MessageResponse(
             "אנא בחרו אפשרות:\n"
-            "1. אישור ושליחה\n"
-            "2. ביטול",
-            keyboard=[["אישור ושליחה", "ביטול"]]
+            "1. ✅ אישור ושליחה\n"
+            "2. ❌ ביטול",
+            keyboard=[["✅ אישור ושליחה", "❌ ביטול"]],
+            inline=True
         )
         return response, SenderState.DELIVERY_CONFIRM.value, {}
 
@@ -358,7 +558,8 @@ class SenderStateHandler:
         """Handle unknown state"""
         response = MessageResponse(
             "משהו השתבש. חוזרים לתפריט הראשי.",
-            keyboard=[["משלוח חדש", "המשלוחים שלי"]]
+            keyboard=[["➕ משלוח חדש", "📦 המשלוחים שלי"]],
+            inline=True
         )
         return response, SenderState.MENU.value, {}
 

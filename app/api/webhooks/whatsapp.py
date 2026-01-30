@@ -87,6 +87,8 @@ async def send_welcome_message(phone_number: str):
 
 מה תרצה לעשות?
 
+בכל שלב תוכלו לחזור לתפריט הראשי על ידי הקשה של #
+
 1️⃣ אני רוצה לשלוח חבילה
 2️⃣ אני שליח"""
 
@@ -133,6 +135,36 @@ async def whatsapp_webhook(
                 "from": message.from_number,
                 "response": "welcome",
                 "new_user": True
+            })
+            continue
+
+        # Handle "#" to return to main menu
+        if text.strip() == "#":
+            # Reset state to menu
+            if user.role == UserRole.COURIER:
+                await state_manager.force_state(user.id, "whatsapp", CourierState.MENU.value, context={})
+                handler = CourierStateHandler(db, platform="whatsapp")
+                response, new_state = await handler.handle_message(user, "תפריט", None)
+            else:
+                from app.state_machine.states import SenderState
+                await state_manager.force_state(user.id, "whatsapp", SenderState.MENU.value, context={})
+                handler = SenderStateHandler(db)
+                response, new_state = await handler.handle_message(
+                    user_id=user.id,
+                    platform="whatsapp",
+                    message="תפריט"
+                )
+
+            background_tasks.add_task(
+                send_whatsapp_message,
+                message.from_number,
+                response.text,
+                response.keyboard
+            )
+            responses.append({
+                "from": message.from_number,
+                "response": response.text,
+                "new_state": new_state
             })
             continue
 
