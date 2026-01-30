@@ -176,15 +176,35 @@ app.post('/send', async (req, res) => {
     }
 
     try {
-        // Format phone number (add @c.us suffix if not present)
-        const formattedPhone = phone.includes('@c.us')
-            ? phone
-            : `${phone.replace(/\D/g, '')}@c.us`;
+        // Format phone number - ensure country code and @c.us suffix
+        let cleanPhone = phone.replace(/\D/g, '');  // Remove non-digits
 
-        // Send message
-        const result = await client.sendText(formattedPhone, message);
+        // Add Israel country code if missing (starts with 0)
+        if (cleanPhone.startsWith('0')) {
+            cleanPhone = '972' + cleanPhone.substring(1);
+        }
 
-        console.log('Message sent to:', phone);
+        // Add @c.us suffix if not present
+        const formattedPhone = cleanPhone.includes('@c.us')
+            ? cleanPhone
+            : `${cleanPhone}@c.us`;
+
+        console.log('Sending to:', formattedPhone);
+
+        // Validate number exists on WhatsApp
+        const numberId = await client.getNumberId(formattedPhone);
+        if (!numberId) {
+            console.error('Number not found on WhatsApp:', formattedPhone);
+            return res.status(400).json({
+                error: 'Number not registered on WhatsApp',
+                phone: formattedPhone
+            });
+        }
+
+        // Send message using the validated ID
+        const result = await client.sendText(numberId._serialized, message);
+
+        console.log('Message sent to:', formattedPhone);
         res.json({ success: true, messageId: result.id });
 
     } catch (error) {
@@ -207,13 +227,22 @@ app.post('/send-buttons', async (req, res) => {
     }
 
     try {
-        const formattedPhone = phone.includes('@c.us')
-            ? phone
-            : `${phone.replace(/\D/g, '')}@c.us`;
+        // Format phone number - ensure country code and @c.us suffix
+        let cleanPhone = phone.replace(/\D/g, '');
+        if (cleanPhone.startsWith('0')) {
+            cleanPhone = '972' + cleanPhone.substring(1);
+        }
+        const formattedPhone = `${cleanPhone}@c.us`;
+
+        // Validate number exists on WhatsApp
+        const numberId = await client.getNumberId(formattedPhone);
+        if (!numberId) {
+            return res.status(400).json({ error: 'Number not on WhatsApp' });
+        }
 
         // Note: Button support depends on WhatsApp version
         // Fallback to regular text if buttons not supported
-        const result = await client.sendText(formattedPhone, message);
+        const result = await client.sendText(numberId._serialized, message);
 
         res.json({ success: true, messageId: result.id });
 
