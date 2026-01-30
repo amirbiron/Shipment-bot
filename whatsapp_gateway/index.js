@@ -174,6 +174,8 @@ app.get('/health', (req, res) => {
 app.post('/send', async (req, res) => {
     const { phone, message, keyboard } = req.body;
 
+    console.log('Send request received - phone:', phone, 'message:', message?.substring(0, 50));
+
     if (!client || !isConnected) {
         return res.status(503).json({
             error: 'WhatsApp client not connected'
@@ -189,31 +191,23 @@ app.post('/send', async (req, res) => {
             cleanPhone = '972' + cleanPhone.substring(1);
         }
 
-        // Add @c.us suffix if not present
-        const formattedPhone = cleanPhone.includes('@c.us')
-            ? cleanPhone
-            : `${cleanPhone}@c.us`;
-
-        console.log('Sending to:', formattedPhone);
-
-        // Validate number exists on WhatsApp
-        const numberId = await client.getNumberId(formattedPhone);
-        if (!numberId) {
-            console.error('Number not found on WhatsApp:', formattedPhone);
-            return res.status(400).json({
-                error: 'Number not registered on WhatsApp',
-                phone: formattedPhone
-            });
+        // Ensure it's not too long (WhatsApp IDs can be weird)
+        if (cleanPhone.length > 15) {
+            console.log('Phone number too long, truncating:', cleanPhone);
+            cleanPhone = cleanPhone.substring(0, 15);
         }
 
-        // Send message using the validated ID
-        const result = await client.sendText(numberId._serialized, message);
+        const formattedPhone = `${cleanPhone}@c.us`;
+        console.log('Sending to:', formattedPhone);
+
+        // Send message directly
+        const result = await client.sendText(formattedPhone, message);
 
         console.log('Message sent to:', formattedPhone);
         res.json({ success: true, messageId: result.id });
 
     } catch (error) {
-        console.error('Error sending message:', error);
+        console.error('Error sending message:', error.message);
         res.status(500).json({
             error: 'Failed to send message',
             details: error.message
@@ -232,27 +226,20 @@ app.post('/send-buttons', async (req, res) => {
     }
 
     try {
-        // Format phone number - ensure country code and @c.us suffix
         let cleanPhone = phone.replace(/\D/g, '');
         if (cleanPhone.startsWith('0')) {
             cleanPhone = '972' + cleanPhone.substring(1);
         }
+        if (cleanPhone.length > 15) {
+            cleanPhone = cleanPhone.substring(0, 15);
+        }
         const formattedPhone = `${cleanPhone}@c.us`;
 
-        // Validate number exists on WhatsApp
-        const numberId = await client.getNumberId(formattedPhone);
-        if (!numberId) {
-            return res.status(400).json({ error: 'Number not on WhatsApp' });
-        }
-
-        // Note: Button support depends on WhatsApp version
-        // Fallback to regular text if buttons not supported
-        const result = await client.sendText(numberId._serialized, message);
-
+        const result = await client.sendText(formattedPhone, message);
         res.json({ success: true, messageId: result.id });
 
     } catch (error) {
-        console.error('Error sending message with buttons:', error);
+        console.error('Error sending message with buttons:', error.message);
         res.status(500).json({
             error: 'Failed to send message',
             details: error.message
