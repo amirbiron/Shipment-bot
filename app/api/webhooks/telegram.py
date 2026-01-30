@@ -49,9 +49,21 @@ class TelegramMessage(BaseModel):
         fields = {'from_user': 'from'}
 
 
+class TelegramCallbackQuery(BaseModel):
+    id: str
+    from_user: Optional[TelegramUser] = None
+    message: Optional[TelegramMessage] = None
+    data: Optional[str] = None
+
+    class Config:
+        populate_by_name = True
+        fields = {'from_user': 'from'}
+
+
 class TelegramUpdate(BaseModel):
     update_id: int
     message: Optional[TelegramMessage] = None
+    callback_query: Optional[TelegramCallbackQuery] = None
 
 
 async def get_or_create_user(
@@ -83,7 +95,8 @@ async def get_or_create_user(
 async def send_telegram_message(
     chat_id: str,
     text: str,
-    keyboard: Optional[list] = None
+    keyboard: Optional[list] = None,
+    inline: bool = False
 ):
     """Send message via Telegram Bot API"""
     import httpx
@@ -103,11 +116,26 @@ async def send_telegram_message(
         }
 
         if keyboard:
-            payload["reply_markup"] = {
-                "keyboard": keyboard,
-                "resize_keyboard": True,
-                "one_time_keyboard": True
-            }
+            if inline:
+                # Convert keyboard to inline keyboard format
+                inline_keyboard = []
+                for row in keyboard:
+                    inline_row = []
+                    for button_text in row:
+                        inline_row.append({
+                            "text": button_text,
+                            "callback_data": button_text
+                        })
+                    inline_keyboard.append(inline_row)
+                payload["reply_markup"] = {
+                    "inline_keyboard": inline_keyboard
+                }
+            else:
+                payload["reply_markup"] = {
+                    "keyboard": keyboard,
+                    "resize_keyboard": True,
+                    "one_time_keyboard": True
+                }
 
         async with httpx.AsyncClient() as client:
             await client.post(url, json=payload, timeout=30.0)
@@ -115,20 +143,38 @@ async def send_telegram_message(
         print(f"Telegram send failed: {e}")
 
 
+async def answer_callback_query(callback_query_id: str, text: str = None):
+    """Answer callback query to remove loading state"""
+    import httpx
+    from app.core.config import settings
+
+    if not settings.TELEGRAM_BOT_TOKEN:
+        return
+
+    try:
+        url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/answerCallbackQuery"
+        payload = {"callback_query_id": callback_query_id}
+        if text:
+            payload["text"] = text
+
+        async with httpx.AsyncClient() as client:
+            await client.post(url, json=payload, timeout=30.0)
+    except Exception as e:
+        print(f"Answer callback failed: {e}")
+
+
 async def send_welcome_message(chat_id: str):
     """Send initial welcome message with role selection [1.1]"""
-    welcome_text = """
-שלום וברוכים הבאים! 👋
+    welcome_text = """שלום וברוכים הבאים! 👋
 
 אני הבוט של <b>משלוח בצ'יק</b>.
 
-מה תרצה לעשות?
-"""
+מה תרצה לעשות?"""
     keyboard = [
         ["📦 אני רוצה לשלוח חבילה"],
         ["🚚 אני שליח"]
     ]
-    await send_telegram_message(chat_id, welcome_text, keyboard)
+    await send_telegram_message(chat_id, welcome_text, keyboard, inline=True)
 
 
 @router.post("/webhook")
@@ -142,29 +188,45 @@ async def telegram_webhook(
     This is the Bot Gateway layer entry point for Telegram.
     Routes to sender or courier handlers based on user role.
     """
-    if not update.message:
+    # Handle callback queries (inline button clicks)
+    if update.callback_query:
+        callback = update.callback_query
+        chat_id = str(callback.message.chat.id) if callback.message else None
+        text = callback.data or ""
+        photo_file_id = None
+
+        # Answer the callback query to remove loading state
+        background_tasks.add_task(answer_callback_query, callback.id)
+
+        # Get user name if available
+        name = None
+        if callback.from_user:
+            name = callback.from_user.first_name
+            if callback.from_user.last_name:
+                name += f" {callback.from_user.last_name}"
+    elif update.message:
+        message = update.message
+        chat_id = str(message.chat.id)
+
+        # Handle text or photo messages
+        text = message.text or ""
+        photo_file_id = None
+        if message.photo:
+            # Get largest photo (last in list)
+            photo_file_id = message.photo[-1].file_id
+
+        # Get user name if available
+        name = None
+        if message.from_user:
+            name = message.from_user.first_name
+            if message.from_user.last_name:
+                name += f" {message.from_user.last_name}"
+    else:
         return {"ok": True}
-
-    message = update.message
-    chat_id = str(message.chat.id)
-
-    # Handle text or photo messages
-    text = message.text or ""
-    photo_file_id = None
-    if message.photo:
-        # Get largest photo (last in list)
-        photo_file_id = message.photo[-1].file_id
 
     # Skip if no content
     if not text and not photo_file_id:
         return {"ok": True}
-
-    # Get user name if available
-    name = None
-    if message.from_user:
-        name = message.from_user.first_name
-        if message.from_user.last_name:
-            name += f" {message.from_user.last_name}"
 
     # Get or create user
     user, is_new_user = await get_or_create_user(db, chat_id, name)
@@ -176,6 +238,32 @@ async def telegram_webhook(
     if is_new_user:
         background_tasks.add_task(send_welcome_message, chat_id)
         return {"ok": True, "new_user": True}
+
+    # Handle "#" to return to main menu
+    if text.strip() == "#":
+        # Reset state to menu
+        if user.role == UserRole.COURIER:
+            await state_manager.force_state(user.id, "telegram", CourierState.MENU.value, context={})
+            handler = CourierStateHandler(db)
+            response, new_state = await handler.handle_message(user, "תפריט", None)
+        else:
+            from app.state_machine.states import SenderState
+            await state_manager.force_state(user.id, "telegram", SenderState.MENU.value, context={})
+            handler = SenderStateHandler(db)
+            response, new_state = await handler.handle_message(
+                user_id=user.id,
+                platform="telegram",
+                message="תפריט"
+            )
+
+        background_tasks.add_task(
+            send_telegram_message,
+            chat_id,
+            response.text,
+            response.keyboard,
+            getattr(response, 'inline', False)
+        )
+        return {"ok": True, "new_state": new_state}
 
     # Check if user wants to be a courier [1.1]
     if "שליח" in text and user.role == UserRole.SENDER:
@@ -196,7 +284,8 @@ async def telegram_webhook(
             send_telegram_message,
             chat_id,
             response.text,
-            response.keyboard
+            response.keyboard,
+            getattr(response, 'inline', False)
         )
         return {"ok": True, "new_state": new_state}
 
@@ -233,7 +322,8 @@ async def telegram_webhook(
             send_telegram_message,
             chat_id,
             response.text,
-            response.keyboard
+            response.keyboard,
+            getattr(response, 'inline', False)
         )
         return {"ok": True, "new_state": new_state}
 
@@ -250,7 +340,8 @@ async def telegram_webhook(
             send_telegram_message,
             chat_id,
             response.text,
-            response.keyboard
+            response.keyboard,
+            getattr(response, 'inline', False)
         )
         return {"ok": True, "new_state": new_state}
 
@@ -270,7 +361,8 @@ async def telegram_webhook(
             send_telegram_message,
             chat_id,
             response.text,
-            response.keyboard
+            response.keyboard,
+            getattr(response, 'inline', False)
         )
         return {"ok": True, "new_state": new_state}
 

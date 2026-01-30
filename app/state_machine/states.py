@@ -30,6 +30,13 @@ class SenderState(str, Enum):
     DROPOFF_NUMBER = "SENDER.DELIVERY.DROPOFF_NUMBER"
     DROPOFF_APARTMENT = "SENDER.DELIVERY.DROPOFF_APARTMENT"
 
+    # Delivery details flow
+    DELIVERY_LOCATION = "SENDER.DELIVERY.LOCATION"  # Within city / outside city
+    DELIVERY_URGENCY = "SENDER.DELIVERY.URGENCY"  # Immediate / Later
+    DELIVERY_TIME = "SENDER.DELIVERY.TIME"  # Time in HH:MM (only for "later")
+    DELIVERY_PRICE = "SENDER.DELIVERY.PRICE"  # Customer price (only for "later")
+    DELIVERY_DESCRIPTION = "SENDER.DELIVERY.DESCRIPTION"  # Shipment description
+
     # Confirmation
     DELIVERY_CONFIRM = "SENDER.DELIVERY.CONFIRM"
 
@@ -103,11 +110,18 @@ SENDER_TRANSITIONS = {
     SenderState.PICKUP_NUMBER: [SenderState.PICKUP_APARTMENT],
     SenderState.PICKUP_APARTMENT: [SenderState.DROPOFF_CITY],
 
-    # Dropoff address wizard: City -> Street -> Number -> Apartment -> Confirm
+    # Dropoff address wizard: City -> Street -> Number -> Apartment -> Location
     SenderState.DROPOFF_CITY: [SenderState.DROPOFF_STREET],
     SenderState.DROPOFF_STREET: [SenderState.DROPOFF_NUMBER],
     SenderState.DROPOFF_NUMBER: [SenderState.DROPOFF_APARTMENT],
-    SenderState.DROPOFF_APARTMENT: [SenderState.DELIVERY_CONFIRM, SenderState.MENU],
+    SenderState.DROPOFF_APARTMENT: [SenderState.DELIVERY_LOCATION, SenderState.MENU],
+
+    # Delivery details flow
+    SenderState.DELIVERY_LOCATION: [SenderState.DELIVERY_URGENCY],
+    SenderState.DELIVERY_URGENCY: [SenderState.DELIVERY_TIME, SenderState.DELIVERY_DESCRIPTION],
+    SenderState.DELIVERY_TIME: [SenderState.DELIVERY_PRICE],
+    SenderState.DELIVERY_PRICE: [SenderState.DELIVERY_DESCRIPTION],
+    SenderState.DELIVERY_DESCRIPTION: [SenderState.DELIVERY_CONFIRM],
 
     # Confirmation -> Menu
     SenderState.DELIVERY_CONFIRM: [SenderState.MENU],
