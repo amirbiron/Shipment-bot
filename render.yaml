@@ -34,7 +34,7 @@ services:
       - key: TELEGRAM_BOT_TOKEN
         sync: false  # Set manually in dashboard
       - key: WHATSAPP_GATEWAY_URL
-        value: "http://shipment-bot-wa-gateway:10000"
+        value: "https://shipment-bot-wa-gateway.onrender.com"
     autoDeploy: true
 
   # =====================================================
@@ -64,7 +64,7 @@ services:
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: WHATSAPP_GATEWAY_URL
-        value: "http://shipment-bot-wa-gateway:10000"
+        value: "https://shipment-bot-wa-gateway.onrender.com"
 
   # =====================================================
   # WhatsApp Gateway (Node.js with Docker for Chrome)
