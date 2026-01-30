@@ -67,14 +67,15 @@ class StateManager:
 
         # Validate transition
         if not self._is_valid_transition(current_state, new_state):
+            print(f"Invalid transition: {current_state} -> {new_state}")
             return False
 
         # Update state
         session.current_state = new_state
 
-        # Update context if provided
+        # Update context if provided - create NEW dict to trigger SQLAlchemy change detection
         if context_update:
-            current_context = session.context_data or {}
+            current_context = dict(session.context_data or {})  # Create copy!
             current_context.update(context_update)
             session.context_data = current_context
 
@@ -109,7 +110,7 @@ class StateManager:
     ) -> None:
         """Update a single context key"""
         session = await self.get_or_create_session(user_id, platform)
-        context = session.context_data or {}
+        context = dict(session.context_data or {})  # Create copy!
         context[key] = value
         session.context_data = context
         await self.db.commit()

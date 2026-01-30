@@ -41,9 +41,21 @@ class SenderStateHandler:
         response, new_state, context_update = await handler(message, context, user_id)
 
         if new_state != current_state:
-            await self.state_manager.transition_to(
+            # Try to transition to new state
+            success = await self.state_manager.transition_to(
                 user_id, platform, new_state, context_update
             )
+            if not success:
+                # Transition failed - force it (skip validation)
+                print(f"Forcing transition: {current_state} -> {new_state}")
+                await self.state_manager.force_state(
+                    user_id, platform, new_state,
+                    {**context, **context_update} if context_update else context
+                )
+        elif context_update:
+            # State didn't change but we have context to save
+            for key, value in context_update.items():
+                await self.state_manager.update_context(user_id, platform, key, value)
 
         return response, new_state
 
