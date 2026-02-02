@@ -144,7 +144,13 @@ class TextSanitizer:
     @staticmethod
     def sanitize(text: str, max_length: int = 1000) -> str:
         """
-        Sanitize text input to prevent injection attacks.
+        Sanitize text input for safe storage.
+
+        Note: This does NOT HTML escape - that should be done at display time
+        using sanitize_for_html(). This function only:
+        - Trims whitespace
+        - Enforces max length
+        - Removes null bytes and control characters
 
         Args:
             text: Text to sanitize
@@ -162,11 +168,12 @@ class TextSanitizer:
         # Enforce max length
         sanitized = sanitized[:max_length]
 
-        # HTML escape to prevent XSS
-        sanitized = html.escape(sanitized)
-
-        # Remove null bytes
+        # Remove null bytes (security)
         sanitized = sanitized.replace("\x00", "")
+
+        # Collapse multiple spaces into one
+        import re
+        sanitized = re.sub(r" +", " ", sanitized)
 
         return sanitized
 

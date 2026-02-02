@@ -122,11 +122,22 @@ class TestTextSanitizer:
     """Tests for text sanitization"""
 
     @pytest.mark.unit
-    def test_sanitize_removes_html(self):
-        """Test HTML sanitization"""
-        result = TextSanitizer.sanitize("<script>alert('xss')</script>Hello")
+    def test_sanitize_preserves_special_chars(self):
+        """Test that sanitize preserves legitimate special characters (no HTML escaping at storage)"""
+        # Names with apostrophes should be preserved
+        assert TextSanitizer.sanitize("O'Brien") == "O'Brien"
+        assert TextSanitizer.sanitize("Tom & Jerry") == "Tom & Jerry"
+        # Hebrew text should be preserved
+        assert TextSanitizer.sanitize("שלום עולם") == "שלום עולם"
+
+    @pytest.mark.unit
+    def test_sanitize_for_html_escapes(self):
+        """Test HTML escaping for display time"""
+        result = TextSanitizer.sanitize_for_html("<script>alert('xss')</script>")
+        assert "&lt;script&gt;" in result
         assert "<script>" not in result
-        assert "Hello" in result
+        # Apostrophes should be escaped for HTML
+        assert "&#x27;" in TextSanitizer.sanitize_for_html("O'Brien")
 
     @pytest.mark.unit
     def test_sanitize_enforces_max_length(self):
