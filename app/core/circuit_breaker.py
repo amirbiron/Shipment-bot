@@ -4,6 +4,7 @@ Circuit Breaker Pattern Implementation
 Provides protection for external service calls to prevent cascade failures.
 """
 import asyncio
+import threading
 import time
 from enum import Enum
 from typing import Callable, TypeVar, ParamSpec
@@ -66,7 +67,8 @@ class CircuitBreaker:
         self.service_name = service_name
         self.config = config or CircuitBreakerConfig()
         self._state = CircuitBreakerState()
-        self._lock = asyncio.Lock()
+        # שימוש ב-threading.Lock במקום asyncio.Lock כדי לתמוך ב-event loops שונים ב-Celery
+        self._lock = threading.Lock()
 
     @classmethod
     def get_instance(
@@ -113,7 +115,11 @@ class CircuitBreaker:
         return time_since_failure >= self.config.timeout_seconds
 
     async def _transition_to(self, new_state: CircuitState) -> None:
-        """Transition to a new state"""
+        """Transition to a new state (async version for backwards compatibility)"""
+        self._transition_to_sync(new_state)
+
+    def _transition_to_sync(self, new_state: CircuitState) -> None:
+        """Transition to a new state (sync version for use with threading.Lock)"""
         old_state = self._state.state
         self._state.state = new_state
 
@@ -136,18 +142,18 @@ class CircuitBreaker:
 
     async def record_success(self) -> None:
         """Record a successful call"""
-        async with self._lock:
+        with self._lock:
             if self._state.state == CircuitState.HALF_OPEN:
                 self._state.success_count += 1
                 if self._state.success_count >= self.config.success_threshold:
-                    await self._transition_to(CircuitState.CLOSED)
+                    self._transition_to_sync(CircuitState.CLOSED)
             elif self._state.state == CircuitState.CLOSED:
                 # Reset failure count on success
                 self._state.failure_count = 0
 
     async def record_failure(self, error: Exception | None = None) -> None:
         """Record a failed call"""
-        async with self._lock:
+        with self._lock:
             self._state.failure_count += 1
             self._state.last_failure_time = time.time()
 
@@ -163,19 +169,19 @@ class CircuitBreaker:
 
             if self._state.state == CircuitState.HALF_OPEN:
                 # Any failure in half-open goes back to open
-                await self._transition_to(CircuitState.OPEN)
+                self._transition_to_sync(CircuitState.OPEN)
             elif self._state.failure_count >= self.config.failure_threshold:
-                await self._transition_to(CircuitState.OPEN)
+                self._transition_to_sync(CircuitState.OPEN)
 
     async def can_execute(self) -> bool:
         """Check if a request can be executed"""
-        async with self._lock:
+        with self._lock:
             if self._state.state == CircuitState.CLOSED:
                 return True
 
             if self._state.state == CircuitState.OPEN:
                 if self._should_attempt_reset():
-                    await self._transition_to(CircuitState.HALF_OPEN)
+                    self._transition_to_sync(CircuitState.HALF_OPEN)
                     return True
                 return False
 
