@@ -179,6 +179,22 @@ async def _process_single_message(message: OutboxMessage) -> tuple:
                         for r in recipients if r.telegram_chat_id
                     ]
 
+                # בדיקה נוספת אחרי סינון - רלוונטי ל-Telegram כשיש נמענים בלי chat_id
+                if not tasks:
+                    logger.warning(
+                        "Broadcast has no valid recipients after filtering",
+                        extra_data={
+                            "message_id": message.id,
+                            "platform": message.platform.value,
+                            "total_recipients": len(recipients)
+                        }
+                    )
+                    await outbox_service.mark_as_failed(
+                        message.id,
+                        f"No valid recipients (had {len(recipients)} without chat_id)"
+                    )
+                    return False, f"No valid recipients for {message.platform.value}"
+
                 results = await asyncio.gather(*tasks, return_exceptions=True)
                 success_count = sum(1 for r in results if r is True)
                 total_count = len(results)

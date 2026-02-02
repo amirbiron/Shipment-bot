@@ -150,25 +150,59 @@ async def get_couriers(db: AsyncSession = Depends(get_db)):
 @router.patch("/{user_id}", response_model=UserResponse)
 async def update_user(
     user_id: int,
-    user_update: UserUpdate,
+    # תמיכה ב-query parameters לתאימות לאחור
+    name: Optional[str] = None,
+    is_active: Optional[bool] = None,
+    # תמיכה ב-request body (השיטה החדשה והמומלצת)
+    user_update: Optional[UserUpdate] = None,
     db: AsyncSession = Depends(get_db)
 ) -> UserResponse:
-    """Update user details"""
+    """
+    Update user details.
+
+    Supports both query parameters (legacy) and request body (recommended).
+    If both are provided, request body takes precedence.
+    """
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    if user_update.name is not None:
-        user.name = user_update.name
-    if user_update.is_active is not None:
-        user.is_active = user_update.is_active
+    # מיזוג: body עדיף על query params
+    final_name = None
+    final_is_active = None
+
+    # קודם query params
+    if name is not None:
+        # ולידציה ל-query param
+        is_valid, error = NameValidator.validate(name)
+        if not is_valid:
+            raise HTTPException(status_code=422, detail=error)
+        final_name = TextSanitizer.sanitize(name.strip(), max_length=100)
+    if is_active is not None:
+        final_is_active = is_active
+
+    # אחר כך body (גובר על query params)
+    if user_update is not None:
+        if user_update.name is not None:
+            final_name = user_update.name
+        if user_update.is_active is not None:
+            final_is_active = user_update.is_active
+
+    # עדכון המשתמש
+    updates = {}
+    if final_name is not None:
+        user.name = final_name
+        updates["name"] = final_name
+    if final_is_active is not None:
+        user.is_active = final_is_active
+        updates["is_active"] = final_is_active
 
     await db.commit()
     await db.refresh(user)
 
     logger.info(
         "User updated",
-        extra_data={"user_id": user_id, "updates": user_update.model_dump(exclude_none=True)}
+        extra_data={"user_id": user_id, "updates": updates}
     )
     return UserResponse.model_validate(user)
