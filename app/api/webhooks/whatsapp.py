@@ -15,6 +15,7 @@ from app.state_machine.manager import StateManager
 from app.domain.services import AdminNotificationService
 from app.core.logging import get_logger
 from app.core.circuit_breaker import get_whatsapp_circuit_breaker
+from app.core.validation import PhoneNumberValidator
 
 logger = get_logger(__name__)
 
@@ -82,7 +83,7 @@ async def send_whatsapp_message(phone_number: str, text: str, keyboard: list = N
     except Exception as e:
         logger.error(
             "WhatsApp send failed",
-            extra_data={"phone": phone_number[-4:] + "****", "error": str(e)},
+            extra_data={"phone": PhoneNumberValidator.mask(phone_number), "error": str(e)},
             exc_info=True
         )
 
@@ -127,7 +128,7 @@ async def whatsapp_webhook(
         logger.debug(
             "WhatsApp message received",
             extra_data={
-                "from": message.from_number[-4:] + "****",
+                "from": PhoneNumberValidator.mask(message.from_number),
                 "text_preview": text[:50] if text else "",
                 "media_type": message.media_type,
                 "has_media_url": bool(message.media_url)

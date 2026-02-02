@@ -16,6 +16,7 @@ from app.db.models.user import User, UserRole
 from app.domain.services.outbox_service import OutboxService
 from app.core.logging import get_logger, set_correlation_id
 from app.core.circuit_breaker import get_telegram_circuit_breaker, get_whatsapp_circuit_breaker
+from app.core.validation import PhoneNumberValidator
 from sqlalchemy import select
 
 logger = get_logger(__name__)
@@ -80,7 +81,7 @@ async def _send_whatsapp_message(phone: str, content: dict) -> bool:
     except Exception as e:
         logger.error(
             "WhatsApp send error",
-            extra_data={"phone": phone[-4:] + "****", "error": str(e)},
+            extra_data={"phone": PhoneNumberValidator.mask(phone), "error": str(e)},
             exc_info=True
         )
         return False
