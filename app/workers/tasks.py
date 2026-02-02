@@ -152,6 +152,21 @@ async def _process_single_message(message: OutboxMessage) -> tuple:
             if message.recipient_id == "BROADCAST_COURIERS":
                 recipients = await _get_courier_recipients(db, message.platform)
 
+                # אם אין נמענים - לא לסמן כנשלח, להחזיר שגיאה
+                if not recipients:
+                    logger.warning(
+                        "Broadcast has no recipients",
+                        extra_data={
+                            "message_id": message.id,
+                            "platform": message.platform.value
+                        }
+                    )
+                    await outbox_service.mark_as_failed(
+                        message.id,
+                        "No recipients available for broadcast"
+                    )
+                    return False, "No recipients available for broadcast"
+
                 # Send to all recipients in parallel for better performance
                 if message.platform == MessagePlatform.WHATSAPP:
                     tasks = [
@@ -282,6 +297,19 @@ def broadcast_to_couriers(message_text: str, delivery_id: int = None):
                 tasks.append(send_to_courier(courier, "whatsapp"))
             for courier in telegram_couriers:
                 tasks.append(send_to_courier(courier, "telegram"))
+
+            # אם אין שליחים - להחזיר שגיאה במקום הצלחה ריקה
+            if not tasks:
+                logger.warning(
+                    "Broadcast to couriers has no recipients",
+                    extra_data={"delivery_id": delivery_id}
+                )
+                return {
+                    "total_sent": 0,
+                    "successful": 0,
+                    "results": [],
+                    "error": "No active couriers available for broadcast"
+                }
 
             # Execute all sends in parallel
             results = await asyncio.gather(*tasks, return_exceptions=True)
