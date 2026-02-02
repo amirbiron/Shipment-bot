@@ -7,62 +7,31 @@ via WhatsApp or Telegram.
 """
 import asyncio
 from datetime import datetime, timedelta
-from contextlib import contextmanager
 
 from app.workers.celery_app import celery_app
 from app.db.database import get_task_session
 from app.db.models.outbox_message import OutboxMessage, MessagePlatform, MessageStatus
 from app.db.models.user import User, UserRole
 from app.domain.services.outbox_service import OutboxService
-from app.core.logging import get_logger, set_correlation_id
-from app.core.circuit_breaker import get_telegram_circuit_breaker, get_whatsapp_circuit_breaker
-from app.core.validation import PhoneNumberValidator
 from sqlalchemy import select
-
-logger = get_logger(__name__)
-
-
-@contextmanager
-def get_event_loop():
-    """
-    Context manager for proper event loop handling in Celery tasks.
-    Creates a new event loop and ensures proper cleanup to prevent resource leaks.
-    """
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        yield loop
-    finally:
-        try:
-            # Cancel all pending tasks
-            pending = asyncio.all_tasks(loop)
-            for task in pending:
-                task.cancel()
-            # Wait for tasks to be cancelled
-            if pending:
-                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-        finally:
-            loop.run_until_complete(loop.shutdown_asyncgens())
-            loop.close()
 
 
 def run_async(coro):
-    """Helper to run async code in sync Celery task with proper cleanup"""
-    # Set correlation ID for task tracking
-    set_correlation_id()
-
-    with get_event_loop() as loop:
+    """Helper to run async code in sync Celery task"""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
         return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 async def _send_whatsapp_message(phone: str, content: dict) -> bool:
-    """Send message via WhatsApp Gateway with circuit breaker protection"""
+    """Send message via WhatsApp Gateway"""
     import httpx
     from app.core.config import settings
 
-    circuit_breaker = get_whatsapp_circuit_breaker()
-
-    async def _send():
+    try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{settings.WHATSAPP_GATEWAY_URL}/send",
@@ -72,33 +41,21 @@ async def _send_whatsapp_message(phone: str, content: dict) -> bool:
                 },
                 timeout=30.0
             )
-            if response.status_code != 200:
-                raise Exception(f"WhatsApp API returned {response.status_code}")
-            return True
-
-    try:
-        return await circuit_breaker.execute(_send)
+            return response.status_code == 200
     except Exception as e:
-        logger.error(
-            "WhatsApp send error",
-            extra_data={"phone": PhoneNumberValidator.mask(phone), "error": str(e)},
-            exc_info=True
-        )
+        print(f"WhatsApp send error: {e}")
         return False
 
 
 async def _send_telegram_message(chat_id: str, content: dict) -> bool:
-    """Send message via Telegram Bot API with circuit breaker protection"""
+    """Send message via Telegram Bot API"""
     import httpx
     from app.core.config import settings
 
     if not settings.TELEGRAM_BOT_TOKEN:
-        logger.warning("Telegram bot token not configured")
         return False
 
-    circuit_breaker = get_telegram_circuit_breaker()
-
-    async def _send():
+    try:
         url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -110,18 +67,9 @@ async def _send_telegram_message(chat_id: str, content: dict) -> bool:
                 },
                 timeout=30.0
             )
-            if response.status_code != 200:
-                raise Exception(f"Telegram API returned {response.status_code}")
-            return True
-
-    try:
-        return await circuit_breaker.execute(_send)
+            return response.status_code == 200
     except Exception as e:
-        logger.error(
-            "Telegram send error",
-            extra_data={"chat_id": chat_id, "error": str(e)},
-            exc_info=True
-        )
+        print(f"Telegram send error: {e}")
         return False
 
 
@@ -152,21 +100,6 @@ async def _process_single_message(message: OutboxMessage) -> tuple:
             if message.recipient_id == "BROADCAST_COURIERS":
                 recipients = await _get_courier_recipients(db, message.platform)
 
-                # אם אין נמענים - לא לסמן כנשלח, להחזיר שגיאה
-                if not recipients:
-                    logger.warning(
-                        "Broadcast has no recipients",
-                        extra_data={
-                            "message_id": message.id,
-                            "platform": message.platform.value
-                        }
-                    )
-                    await outbox_service.mark_as_failed(
-                        message.id,
-                        "No recipients available for broadcast"
-                    )
-                    return False, "No recipients available for broadcast"
-
                 # Send to all recipients in parallel for better performance
                 if message.platform == MessagePlatform.WHATSAPP:
                     tasks = [
@@ -178,22 +111,6 @@ async def _process_single_message(message: OutboxMessage) -> tuple:
                         _send_telegram_message(r.telegram_chat_id, content)
                         for r in recipients if r.telegram_chat_id
                     ]
-
-                # בדיקה נוספת אחרי סינון - רלוונטי ל-Telegram כשיש נמענים בלי chat_id
-                if not tasks:
-                    logger.warning(
-                        "Broadcast has no valid recipients after filtering",
-                        extra_data={
-                            "message_id": message.id,
-                            "platform": message.platform.value,
-                            "total_recipients": len(recipients)
-                        }
-                    )
-                    await outbox_service.mark_as_failed(
-                        message.id,
-                        f"No valid recipients (had {len(recipients)} without chat_id)"
-                    )
-                    return False, f"No valid recipients for {message.platform.value}"
 
                 results = await asyncio.gather(*tasks, return_exceptions=True)
                 success_count = sum(1 for r in results if r is True)
@@ -313,19 +230,6 @@ def broadcast_to_couriers(message_text: str, delivery_id: int = None):
                 tasks.append(send_to_courier(courier, "whatsapp"))
             for courier in telegram_couriers:
                 tasks.append(send_to_courier(courier, "telegram"))
-
-            # אם אין שליחים - להחזיר שגיאה במקום הצלחה ריקה
-            if not tasks:
-                logger.warning(
-                    "Broadcast to couriers has no recipients",
-                    extra_data={"delivery_id": delivery_id}
-                )
-                return {
-                    "total_sent": 0,
-                    "successful": 0,
-                    "results": [],
-                    "error": "No active couriers available for broadcast"
-                }
 
             # Execute all sends in parallel
             results = await asyncio.gather(*tasks, return_exceptions=True)
