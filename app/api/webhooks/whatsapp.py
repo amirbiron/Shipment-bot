@@ -13,6 +13,11 @@ from app.state_machine.handlers import SenderStateHandler, CourierStateHandler
 from app.state_machine.states import CourierState
 from app.state_machine.manager import StateManager
 from app.domain.services import AdminNotificationService
+from app.core.logging import get_logger
+from app.core.circuit_breaker import get_whatsapp_circuit_breaker
+from app.core.validation import PhoneNumberValidator
+
+logger = get_logger(__name__)
 
 router = APIRouter()
 
@@ -57,16 +62,18 @@ async def get_or_create_user(
     return user, False  # Existing user
 
 
-async def send_whatsapp_message(phone_number: str, text: str, keyboard: list = None):
+async def send_whatsapp_message(phone_number: str, text: str, keyboard: list = None) -> None:
     """
-    Send message via WhatsApp Gateway (Node.js microservice).
+    Send message via WhatsApp Gateway (Node.js microservice) with circuit breaker protection.
     """
     import httpx
     from app.core.config import settings
 
-    try:
+    circuit_breaker = get_whatsapp_circuit_breaker()
+
+    async def _send():
         async with httpx.AsyncClient() as client:
-            await client.post(
+            response = await client.post(
                 f"{settings.WHATSAPP_GATEWAY_URL}/send",
                 json={
                     "phone": phone_number,
@@ -75,8 +82,17 @@ async def send_whatsapp_message(phone_number: str, text: str, keyboard: list = N
                 },
                 timeout=30.0
             )
+            if response.status_code != 200:
+                raise Exception(f"WhatsApp API returned {response.status_code}")
+
+    try:
+        await circuit_breaker.execute(_send)
     except Exception as e:
-        print(f"WhatsApp send failed: {e}")
+        logger.error(
+            "WhatsApp send failed",
+            extra_data={"phone": PhoneNumberValidator.mask(phone_number), "error": str(e)},
+            exc_info=True
+        )
 
 
 async def send_welcome_message(phone_number: str):
@@ -116,7 +132,15 @@ async def whatsapp_webhook(
         # Accept image media (WPPConnect may return 'image' or have image in mimetype)
         photo_file_id = message.media_url if message.media_type and 'image' in message.media_type.lower() else None
 
-        print(f"WhatsApp message - text: '{text[:50] if text else ''}', media_type: {message.media_type}, has_media_url: {bool(message.media_url)}")
+        logger.debug(
+            "WhatsApp message received",
+            extra_data={
+                "from": PhoneNumberValidator.mask(message.from_number),
+                "text_preview": text[:50] if text else "",
+                "media_type": message.media_type,
+                "has_media_url": bool(message.media_url)
+            }
+        )
 
         # Skip empty messages
         if not text and not photo_file_id:

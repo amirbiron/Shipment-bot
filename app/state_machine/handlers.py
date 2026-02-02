@@ -8,6 +8,9 @@ from sqlalchemy import select
 from app.state_machine.states import SenderState, CourierState
 from app.state_machine.manager import StateManager
 from app.db.models.user import User
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class MessageResponse:
@@ -48,7 +51,15 @@ class SenderStateHandler:
             )
             if not success:
                 # Transition failed - force it (skip validation)
-                print(f"Forcing transition: {current_state} -> {new_state}")
+                logger.info(
+                    "Forcing state transition",
+                    extra_data={
+                        "user_id": user_id,
+                        "platform": platform,
+                        "current_state": current_state,
+                        "new_state": new_state
+                    }
+                )
                 await self.state_manager.force_state(
                     user_id, platform, new_state,
                     {**context, **context_update} if context_update else context
