@@ -2,7 +2,6 @@
 State Handlers - Process messages based on current state
 """
 from typing import Tuple, Optional
-from html import escape
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -10,6 +9,7 @@ from app.state_machine.states import SenderState, CourierState
 from app.state_machine.manager import StateManager
 from app.db.models.user import User
 from app.core.logging import get_logger
+from app.core.validation import TextSanitizer
 
 logger = get_logger(__name__)
 
@@ -29,6 +29,28 @@ class SenderStateHandler:
     def __init__(self, db: AsyncSession):
         self.db = db
         self.state_manager = StateManager(db)
+        self._platform: str | None = None
+
+    def _is_telegram(self) -> bool:
+        return (self._platform or "").lower() == "telegram"
+
+    def _safe(self, text: str, max_length: int = 500) -> str:
+        """
+        הפיכת טקסט שמגיע מהמשתמש לבטוח לתצוגה.
+
+        - Telegram: משתמשים ב-HTML parse_mode, לכן חייבים HTML escaping.
+        - WhatsApp: טקסט "raw", לא לעשות HTML escaping כדי לא להציג &lt; / &amp; למשתמש.
+        """
+        if self._is_telegram():
+            return TextSanitizer.sanitize_for_html(text)
+        return TextSanitizer.sanitize(text, max_length=max_length)
+
+    def _bold(self, label: str) -> str:
+        """Bold לפי פלטפורמה (Telegram=HTML, WhatsApp=*...*)."""
+        safe_label = self._safe(label, max_length=200)
+        if self._is_telegram():
+            return f"<b>{safe_label}</b>"
+        return f"*{safe_label}*"
 
     async def handle_message(
         self,
@@ -39,38 +61,42 @@ class SenderStateHandler:
         """
         Process incoming message and return response with new state
         """
-        current_state = await self.state_manager.get_current_state(user_id, platform)
-        context = await self.state_manager.get_context(user_id, platform)
+        self._platform = platform
+        try:
+            current_state = await self.state_manager.get_current_state(user_id, platform)
+            context = await self.state_manager.get_context(user_id, platform)
 
-        handler = self._get_handler(current_state)
-        response, new_state, context_update = await handler(message, context, user_id)
+            handler = self._get_handler(current_state)
+            response, new_state, context_update = await handler(message, context, user_id)
 
-        if new_state != current_state:
-            # Try to transition to new state
-            success = await self.state_manager.transition_to(
-                user_id, platform, new_state, context_update
-            )
-            if not success:
-                # Transition failed - force it (skip validation)
-                logger.info(
-                    "Forcing state transition",
-                    extra_data={
-                        "user_id": user_id,
-                        "platform": platform,
-                        "current_state": current_state,
-                        "new_state": new_state
-                    }
+            if new_state != current_state:
+                # Try to transition to new state
+                success = await self.state_manager.transition_to(
+                    user_id, platform, new_state, context_update
                 )
-                await self.state_manager.force_state(
-                    user_id, platform, new_state,
-                    {**context, **context_update} if context_update else context
-                )
-        elif context_update:
-            # State didn't change but we have context to save
-            for key, value in context_update.items():
-                await self.state_manager.update_context(user_id, platform, key, value)
+                if not success:
+                    # Transition failed - force it (skip validation)
+                    logger.info(
+                        "Forcing state transition",
+                        extra_data={
+                            "user_id": user_id,
+                            "platform": platform,
+                            "current_state": current_state,
+                            "new_state": new_state
+                        }
+                    )
+                    await self.state_manager.force_state(
+                        user_id, platform, new_state,
+                        {**context, **context_update} if context_update else context
+                    )
+            elif context_update:
+                # State didn't change but we have context to save
+                for key, value in context_update.items():
+                    await self.state_manager.update_context(user_id, platform, key, value)
 
-        return response, new_state
+            return response, new_state
+        finally:
+            self._platform = None
 
     def _get_handler(self, state: str):
         """Get handler function for state"""
@@ -137,7 +163,7 @@ class SenderStateHandler:
             user.name = name
             await self.db.commit()
 
-        safe_name = escape(name)
+        safe_name = self._safe(name, max_length=100)
         response = MessageResponse(
             f"שלום {safe_name}! ההרשמה הושלמה בהצלחה.\n\n"
             "מה תרצו לעשות?\n"
@@ -167,7 +193,7 @@ class SenderStateHandler:
         if "משלוח חדש" in message or "➕" in message or message == "1":
             response = MessageResponse(
                 "בואו ניצור משלוח חדש!\n\n"
-                "📍 <b>כתובת איסוף</b>\n"
+                f"📍 {self._bold('כתובת איסוף')}\n"
                 "מה העיר?"
             )
             return response, SenderState.PICKUP_CITY.value, {}
@@ -200,7 +226,7 @@ class SenderStateHandler:
             response = MessageResponse("שם העיר קצר מדי. אנא הזינו שם עיר תקין:")
             return response, SenderState.PICKUP_CITY.value, {}
 
-        safe_city = escape(city)
+        safe_city = self._safe(city, max_length=100)
         response = MessageResponse(
             f"עיר: {safe_city} ✓\n\n"
             "מה שם הרחוב?"
@@ -216,8 +242,8 @@ class SenderStateHandler:
             return response, SenderState.PICKUP_STREET.value, {}
 
         city = context.get("pickup_city", "")
-        safe_city = escape(city)
-        safe_street = escape(street)
+        safe_city = self._safe(city, max_length=100)
+        safe_street = self._safe(street, max_length=200)
         response = MessageResponse(
             f"עיר: {safe_city} ✓\n"
             f"רחוב: {safe_street} ✓\n\n"
@@ -236,15 +262,15 @@ class SenderStateHandler:
 
         city = context.get("pickup_city", "")
         street = context.get("pickup_street", "")
-        safe_city = escape(city)
-        safe_street = escape(street)
-        safe_number = escape(number)
+        safe_city = self._safe(city, max_length=100)
+        safe_street = self._safe(street, max_length=200)
+        safe_number = self._safe(number, max_length=50)
 
         response = MessageResponse(
             f"עיר: {safe_city} ✓\n"
             f"רחוב: {safe_street} ✓\n"
             f"מספר: {safe_number} ✓\n\n"
-            "קומה ודירה? (או לחצו <b>דלג</b> אם לא רלוונטי)",
+            f"קומה ודירה? (או לחצו {self._bold('דלג')} אם לא רלוונטי)",
             keyboard=[["דלג"]],
             inline=True
         )
@@ -266,12 +292,12 @@ class SenderStateHandler:
             full_address = f"{street} {number}, {city} (קומה/דירה: {msg})"
             apartment = msg
 
-        safe_full_address = escape(full_address)
+        safe_full_address = self._safe(full_address, max_length=300)
         response = MessageResponse(
             f"📍 כתובת איסוף נשמרה:\n"
             f"{safe_full_address}\n\n"
             "עכשיו נזין את כתובת היעד.\n"
-            "🎯 <b>כתובת יעד</b>\n"
+            f"🎯 {self._bold('כתובת יעד')}\n"
             "מה העיר?"
         )
         return response, SenderState.DROPOFF_CITY.value, {
@@ -289,7 +315,7 @@ class SenderStateHandler:
             response = MessageResponse("שם העיר קצר מדי. אנא הזינו שם עיר תקין:")
             return response, SenderState.DROPOFF_CITY.value, {}
 
-        safe_city = escape(city)
+        safe_city = self._safe(city, max_length=100)
         response = MessageResponse(
             f"עיר: {safe_city} ✓\n\n"
             "מה שם הרחוב?"
@@ -305,8 +331,8 @@ class SenderStateHandler:
             return response, SenderState.DROPOFF_STREET.value, {}
 
         city = context.get("dropoff_city", "")
-        safe_city = escape(city)
-        safe_street = escape(street)
+        safe_city = self._safe(city, max_length=100)
+        safe_street = self._safe(street, max_length=200)
         response = MessageResponse(
             f"עיר: {safe_city} ✓\n"
             f"רחוב: {safe_street} ✓\n\n"
@@ -325,15 +351,15 @@ class SenderStateHandler:
 
         city = context.get("dropoff_city", "")
         street = context.get("dropoff_street", "")
-        safe_city = escape(city)
-        safe_street = escape(street)
-        safe_number = escape(number)
+        safe_city = self._safe(city, max_length=100)
+        safe_street = self._safe(street, max_length=200)
+        safe_number = self._safe(number, max_length=50)
 
         response = MessageResponse(
             f"עיר: {safe_city} ✓\n"
             f"רחוב: {safe_street} ✓\n"
             f"מספר: {safe_number} ✓\n\n"
-            "קומה ודירה? (או לחצו <b>דלג</b> אם לא רלוונטי)",
+            f"קומה ודירה? (או לחצו {self._bold('דלג')} אם לא רלוונטי)",
             keyboard=[["דלג"]],
             inline=True
         )
@@ -359,7 +385,7 @@ class SenderStateHandler:
         # Check if same city or different city
         same_city = pickup_city.strip().lower() == city.strip().lower()
 
-        safe_full_dropoff = escape(full_dropoff)
+        safe_full_dropoff = self._safe(full_dropoff, max_length=300)
         response = MessageResponse(
             f"🎯 כתובת יעד נשמרה:\n{safe_full_dropoff}\n\n"
             "לאן תרצו להעביר את המשלוח?",
@@ -410,7 +436,7 @@ class SenderStateHandler:
             # Immediate - skip time and price questions, go directly to description
             response = MessageResponse(
                 "⚡ משלוח מיידי!\n\n"
-                "📝 <b>תיאור המשלוח:</b>\n"
+                f"📝 {self._bold('תיאור המשלוח:')}\n"
                 "מה אתם שולחים? (תיאור קצר של הפריט)"
             )
             return response, SenderState.DELIVERY_DESCRIPTION.value, {
@@ -459,8 +485,8 @@ class SenderStateHandler:
             min_price = 45
 
         response = MessageResponse(
-            f"⏰ שעת משלוח: {escape(msg)} ✓\n\n"
-            f"💰 <b>הצעת מחיר:</b>\n"
+            f"⏰ שעת משלוח: {self._safe(msg, max_length=20)} ✓\n\n"
+            f"💰 {self._bold('הצעת מחיר:')}\n"
             f"מה המחיר שתרצו לשלם?\n"
             f"(מינימום להזמנה זו: {min_price} ₪)"
         )
@@ -494,7 +520,7 @@ class SenderStateHandler:
 
         response = MessageResponse(
             f"💰 מחיר: {price} ₪ ✓\n\n"
-            "📝 <b>תיאור המשלוח:</b>\n"
+            f"📝 {self._bold('תיאור המשלוח:')}\n"
             "מה אתם שולחים? (תיאור קצר של הפריט)"
         )
         return response, SenderState.DELIVERY_DESCRIPTION.value, {"customer_price": price}
@@ -518,12 +544,12 @@ class SenderStateHandler:
         delivery_time = context.get("delivery_time", "מיידי")
         customer_price = context.get("customer_price", "לא הוגדר")
 
-        safe_pickup = escape(pickup)
-        safe_dropoff = escape(dropoff)
-        safe_description = escape(description)
-        safe_delivery_time = escape(str(delivery_time))
+        safe_pickup = self._safe(pickup, max_length=300)
+        safe_dropoff = self._safe(dropoff, max_length=300)
+        safe_description = self._safe(description, max_length=300)
+        safe_delivery_time = self._safe(str(delivery_time), max_length=50)
         summary = (
-            f"📋 <b>סיכום המשלוח:</b>\n\n"
+            f"📋 {self._bold('סיכום המשלוח:')}\n\n"
             f"📍 איסוף: {safe_pickup}\n"
             f"🎯 יעד: {safe_dropoff}\n"
             f"🗺️ סוג: {location_text}\n"
@@ -555,10 +581,10 @@ class SenderStateHandler:
             delivery_time = context.get("delivery_time", "מיידי")
             customer_price = context.get("customer_price")
 
-            safe_pickup = escape(pickup)
-            safe_dropoff = escape(dropoff)
-            safe_delivery_time = escape(str(delivery_time))
-            safe_description = escape(description) if description else ""
+            safe_pickup = self._safe(pickup, max_length=300)
+            safe_dropoff = self._safe(dropoff, max_length=300)
+            safe_delivery_time = self._safe(str(delivery_time), max_length=50)
+            safe_description = self._safe(description, max_length=300) if description else ""
             success_msg = (
                 "המשלוח נוצר בהצלחה! 🎉\n\n"
                 f"📍 מ: {safe_pickup}\n"
