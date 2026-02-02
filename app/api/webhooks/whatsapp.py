@@ -183,12 +183,15 @@ async def whatsapp_webhook(
                     # מחזירים אותו להיות שולח רגיל
                     user.role = UserRole.SENDER
                     await db.commit()
+                    # מאפסים את ה-state machine ומנקים context
+                    from app.state_machine.states import SenderState
+                    await state_manager.force_state(user.id, "whatsapp", SenderState.MENU.value, context={})
                     # מציגים הודעת ברוכים הבאים מחדש
                     background_tasks.add_task(send_welcome_message, reply_to)
                     responses.append({
                         "from": sender_id,
                         "response": "welcome (switched from pending courier)",
-                        "new_state": None
+                        "new_state": SenderState.MENU.value
                     })
                     continue
 
