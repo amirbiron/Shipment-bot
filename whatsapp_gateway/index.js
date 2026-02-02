@@ -139,6 +139,24 @@ async function initializeClient() {
             console.log('Sender:', JSON.stringify(message.sender));
             console.log('NotifyName:', message.notifyName);
 
+            // בדיקה אם זו תגובה לרשימה אינטראקטיבית (list message)
+            // WPPConnect עשוי לשלוח את הבחירה בשדה listResponse
+            let messageText = message.body || '';
+            if (message.listResponse) {
+                console.log('ListResponse detected:', JSON.stringify(message.listResponse));
+                // נסה לחלץ את הטקסט מתגובת הרשימה
+                const listReply = message.listResponse.singleSelectReply || message.listResponse;
+                if (listReply && listReply.title) {
+                    messageText = listReply.title;
+                    console.log('Using listResponse title:', messageText);
+                } else if (listReply && listReply.selectedRowId) {
+                    // אם יש רק rowId, נשתמש בו (הוא יכיל את הטקסט בתיקון החדש)
+                    messageText = listReply.selectedRowId;
+                    console.log('Using listResponse rowId:', messageText);
+                }
+            }
+            console.log('Final message text:', messageText);
+
             // Get the correct ID to reply to
             let replyTo = message.from;
 
@@ -246,7 +264,8 @@ async function initializeClient() {
                         // שדה legacy לתאימות (בצד ה-API נשתמש ב-sender_id אם קיים)
                         from_number: replyTo,
                         message_id: message.id,
-                        text: message.body || '',
+                        // משתמשים ב-messageText שכבר מכיל את הטקסט הנכון (כולל מ-listResponse)
+                        text: messageText,
                         timestamp: message.timestamp,
                         media_url: mediaUrl,
                         media_type: mediaType
@@ -330,8 +349,9 @@ app.post('/send', async (req, res) => {
                     footer: '',
                     sections: [{
                         title: 'אפשרויות',
+                        // משתמשים בטקסט המקורי כ-rowId כדי שהבחירה תחזור עם הטקסט הנכון
                         rows: options.map((text, index) => ({
-                            rowId: `option_${index}`,
+                            rowId: text,
                             title: text,
                             description: ''
                         }))

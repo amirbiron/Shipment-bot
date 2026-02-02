@@ -378,6 +378,12 @@ class SenderStateHandler:
         """Handle delivery location selection (within/outside city)"""
         msg = message.strip()
 
+        # לוג לדיבוג - מה בדיוק התקבל מהמשתמש
+        logger.debug(
+            "Handling delivery location input",
+            extra_data={"user_id": user_id, "raw_input": repr(msg), "input_length": len(msg)}
+        )
+
         if "בתוך" in msg or "🏙️" in msg or msg == "1":
             location_type = "within_city"
             location_text = "בתוך העיר"
@@ -385,6 +391,11 @@ class SenderStateHandler:
             location_type = "outside_city"
             location_text = "מחוץ לעיר"
         else:
+            # לוג כשהתנאי לא מתקיים - לעזור בדיבוג
+            logger.warning(
+                "Delivery location input did not match expected patterns",
+                extra_data={"user_id": user_id, "raw_input": repr(msg)}
+            )
             response = MessageResponse(
                 "אנא בחרו אפשרות:\n"
                 "1. בתוך העיר\n"
