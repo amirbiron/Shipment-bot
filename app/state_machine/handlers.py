@@ -805,7 +805,8 @@ class CourierStateHandler:
             return response, CourierState.PENDING_APPROVAL.value, {}
 
         response = MessageResponse(
-            "⏳ בקשתך עדיין בבדיקה. תקבל הודעה ברגע שחשבונך יאושר."
+            "⏳ בקשתך עדיין בבדיקה. תקבל הודעה ברגע שחשבונך יאושר.\n\n"
+            "💡 לחזרה לתפריט הראשי (כשולח חבילות) לחצו על #"
         )
         return response, CourierState.PENDING_APPROVAL.value, {}
 
