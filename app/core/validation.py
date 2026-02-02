@@ -39,10 +39,23 @@ class ValidationPatterns:
     )
 
     # Dangerous patterns for injection prevention
-    SQL_INJECTION = re.compile(
-        r"(\b(SELECT|INSERT|UPDATE|DELETE|DROP|UNION|ALTER|CREATE|TRUNCATE)\b)",
-        re.IGNORECASE
-    )
+    # More specific patterns to avoid false positives on legitimate addresses like "Union Street"
+    SQL_INJECTION_PATTERNS = [
+        # SQL comments
+        re.compile(r"--\s*$|/\*|\*/", re.IGNORECASE),
+        # SQL with quotes and operators (e.g., ' OR 1=1, " OR "a"="a)
+        re.compile(r"['\"].*\s*(OR|AND)\s+.*['\"]?\s*=", re.IGNORECASE),
+        # Chained SQL commands (e.g., ; DROP TABLE)
+        re.compile(r";\s*(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE)\b", re.IGNORECASE),
+        # UNION SELECT pattern (common injection)
+        re.compile(r"\bUNION\s+(ALL\s+)?SELECT\b", re.IGNORECASE),
+        # SQL keywords with parentheses (function-like usage)
+        re.compile(r"\b(SELECT|INSERT|UPDATE|DELETE)\s*\(", re.IGNORECASE),
+        # Hex encoding attempts
+        re.compile(r"0x[0-9a-fA-F]+"),
+        # SQL batching with semicolons and keywords
+        re.compile(r";\s*DROP\b", re.IGNORECASE),
+    ]
 
     # Script injection patterns
     XSS_PATTERNS = [
@@ -50,6 +63,8 @@ class ValidationPatterns:
         re.compile(r"javascript:", re.IGNORECASE),
         re.compile(r"on\w+\s*=", re.IGNORECASE),
         re.compile(r"<iframe", re.IGNORECASE),
+        re.compile(r"<object", re.IGNORECASE),
+        re.compile(r"<embed", re.IGNORECASE),
     ]
 
 
@@ -186,8 +201,9 @@ class TextSanitizer:
             return True, None
 
         # Check for SQL injection patterns
-        if ValidationPatterns.SQL_INJECTION.search(text):
-            return False, "SQL injection pattern detected"
+        for pattern in ValidationPatterns.SQL_INJECTION_PATTERNS:
+            if pattern.search(text):
+                return False, "SQL injection pattern detected"
 
         # Check for XSS patterns
         for pattern in ValidationPatterns.XSS_PATTERNS:

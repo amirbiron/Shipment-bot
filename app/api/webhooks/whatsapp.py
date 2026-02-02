@@ -62,16 +62,18 @@ async def get_or_create_user(
     return user, False  # Existing user
 
 
-async def send_whatsapp_message(phone_number: str, text: str, keyboard: list = None):
+async def send_whatsapp_message(phone_number: str, text: str, keyboard: list = None) -> None:
     """
-    Send message via WhatsApp Gateway (Node.js microservice).
+    Send message via WhatsApp Gateway (Node.js microservice) with circuit breaker protection.
     """
     import httpx
     from app.core.config import settings
 
-    try:
+    circuit_breaker = get_whatsapp_circuit_breaker()
+
+    async def _send():
         async with httpx.AsyncClient() as client:
-            await client.post(
+            response = await client.post(
                 f"{settings.WHATSAPP_GATEWAY_URL}/send",
                 json={
                     "phone": phone_number,
@@ -80,6 +82,11 @@ async def send_whatsapp_message(phone_number: str, text: str, keyboard: list = N
                 },
                 timeout=30.0
             )
+            if response.status_code != 200:
+                raise Exception(f"WhatsApp API returned {response.status_code}")
+
+    try:
+        await circuit_breaker.execute(_send)
     except Exception as e:
         logger.error(
             "WhatsApp send failed",

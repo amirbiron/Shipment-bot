@@ -245,6 +245,9 @@ def circuit_breaker(
         @circuit_breaker("telegram")
         async def send_telegram_message(chat_id: str, text: str) -> bool:
             ...
+
+    Note: This decorator is designed for async functions. For sync functions,
+    use the CircuitBreaker class directly with a new event loop.
     """
     def decorator(func: Callable[P, T]) -> Callable[P, T]:
         cb = CircuitBreaker.get_instance(service_name, config)
@@ -255,8 +258,13 @@ def circuit_breaker(
 
         @wraps(func)
         def sync_wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
-            loop = asyncio.get_event_loop()
-            return loop.run_until_complete(cb.execute(func, *args, **kwargs))
+            # Create a new event loop to avoid issues with already-running loops
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                return loop.run_until_complete(cb.execute(func, *args, **kwargs))
+            finally:
+                loop.close()
 
         if asyncio.iscoroutinefunction(func):
             return async_wrapper  # type: ignore

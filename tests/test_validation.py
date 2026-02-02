@@ -136,9 +136,16 @@ class TestTextSanitizer:
         assert len(result) == 100
 
     @pytest.mark.unit
-    def test_check_for_injection_sql(self):
+    @pytest.mark.parametrize("injection_text", [
+        "'; DROP TABLE users; --",
+        "' OR 1=1 --",
+        "1; SELECT * FROM users",
+        "UNION SELECT password FROM users",
+        "test'); DELETE(",
+    ])
+    def test_check_for_injection_sql(self, injection_text: str):
         """Test SQL injection detection"""
-        is_safe, pattern = TextSanitizer.check_for_injection("SELECT * FROM users")
+        is_safe, pattern = TextSanitizer.check_for_injection(injection_text)
         assert not is_safe
         assert "SQL" in pattern
 
@@ -150,9 +157,17 @@ class TestTextSanitizer:
         assert "XSS" in pattern
 
     @pytest.mark.unit
-    def test_check_for_injection_safe(self):
-        """Test safe text passes"""
-        is_safe, pattern = TextSanitizer.check_for_injection("Hello World שלום עולם")
+    @pytest.mark.parametrize("safe_text", [
+        "Hello World שלום עולם",
+        "123 Union Street, Tel Aviv",
+        "Please update me when delivered",
+        "Drop off at the corner",
+        "Select the best option",
+        "Create a new delivery",
+    ])
+    def test_check_for_injection_safe(self, safe_text: str):
+        """Test safe text passes - including words that look like SQL keywords"""
+        is_safe, pattern = TextSanitizer.check_for_injection(safe_text)
         assert is_safe
         assert pattern is None
 
