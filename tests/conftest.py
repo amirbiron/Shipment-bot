@@ -6,9 +6,8 @@ Provides fixtures for:
 - Mock external services (Telegram, WhatsApp)
 - Test data factories
 """
-import asyncio
 import pytest
-from typing import AsyncGenerator, Generator
+from typing import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock, patch
 from httpx import Response
 
@@ -26,13 +25,8 @@ from app.main import app
 # Test database URL (SQLite in memory for fast tests)
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
-
-@pytest.fixture(scope="session")
-def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
-    """Create event loop for async tests"""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
+# הערה: לא מגדירים event_loop fixture מותאם אישית כי pytest-asyncio 0.23+
+# מטפל בזה אוטומטית עם asyncio_mode=auto ו-asyncio_default_fixture_loop_scope=function
 
 
 @pytest.fixture(scope="function")

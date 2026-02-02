@@ -56,6 +56,9 @@ async def startup() -> None:
 async def shutdown() -> None:
     """Cleanup on shutdown"""
     logger.info("Shutting down application")
+    # סגירת חיבורי מסד הנתונים למניעת connection pool exhaustion
+    await engine.dispose()
+    logger.info("Database connections disposed")
 
 
 @app.get("/health")

@@ -58,6 +58,8 @@ class CircuitBreaker:
 
     # Class-level storage for circuit breakers (singleton per service)
     _instances: dict[str, "CircuitBreaker"] = {}
+    # נעילה ברמת המחלקה להגנה על יצירת singletons
+    _instances_lock = threading.Lock()
 
     def __init__(
         self,
@@ -77,14 +79,19 @@ class CircuitBreaker:
         config: CircuitBreakerConfig | None = None
     ) -> "CircuitBreaker":
         """Get or create circuit breaker instance for a service"""
+        # בדיקה מהירה ללא נעילה (double-checked locking pattern)
         if service_name not in cls._instances:
-            cls._instances[service_name] = cls(service_name, config)
+            with cls._instances_lock:
+                # בדיקה נוספת בתוך הנעילה למניעת race condition
+                if service_name not in cls._instances:
+                    cls._instances[service_name] = cls(service_name, config)
         return cls._instances[service_name]
 
     @classmethod
     def reset_all(cls) -> None:
         """Reset all circuit breakers (for testing)"""
-        cls._instances.clear()
+        with cls._instances_lock:
+            cls._instances.clear()
 
     @property
     def state(self) -> CircuitState:
