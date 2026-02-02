@@ -12,9 +12,6 @@ from app.state_machine.states import (
     SENDER_TRANSITIONS,
     COURIER_TRANSITIONS
 )
-from app.core.logging import get_logger
-
-logger = get_logger(__name__)
 
 
 class StateManager:
@@ -70,15 +67,7 @@ class StateManager:
 
         # Validate transition
         if not self._is_valid_transition(current_state, new_state):
-            logger.warning(
-                "Invalid state transition attempted",
-                extra_data={
-                    "user_id": user_id,
-                    "platform": platform,
-                    "current_state": current_state,
-                    "target_state": new_state
-                }
-            )
+            print(f"Invalid transition: {current_state} -> {new_state}")
             return False
 
         # Update state

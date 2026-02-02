@@ -13,10 +13,6 @@ from app.state_machine.handlers import SenderStateHandler, CourierStateHandler
 from app.state_machine.states import CourierState
 from app.state_machine.manager import StateManager
 from app.domain.services import AdminNotificationService
-from app.core.logging import get_logger
-from app.core.circuit_breaker import get_telegram_circuit_breaker
-
-logger = get_logger(__name__)
 
 router = APIRouter()
 
@@ -101,92 +97,70 @@ async def send_telegram_message(
     text: str,
     keyboard: Optional[list] = None,
     inline: bool = False
-) -> None:
-    """Send message via Telegram Bot API with circuit breaker protection"""
+):
+    """Send message via Telegram Bot API"""
     import httpx
     from app.core.config import settings
 
     if not settings.TELEGRAM_BOT_TOKEN:
-        logger.warning("Telegram bot token not configured")
+        print("Telegram bot token not configured")
         return
 
-    circuit_breaker = get_telegram_circuit_breaker()
-
-    url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
-
-    payload = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "HTML"
-    }
-
-    if keyboard:
-        if inline:
-            # Convert keyboard to inline keyboard format
-            inline_keyboard = []
-            for row in keyboard:
-                inline_row = []
-                for button_text in row:
-                    inline_row.append({
-                        "text": button_text,
-                        "callback_data": button_text
-                    })
-                inline_keyboard.append(inline_row)
-            payload["reply_markup"] = {
-                "inline_keyboard": inline_keyboard
-            }
-        else:
-            payload["reply_markup"] = {
-                "keyboard": keyboard,
-                "resize_keyboard": True,
-                "one_time_keyboard": True
-            }
-
-    async def _send():
-        async with httpx.AsyncClient() as client:
-            response = await client.post(url, json=payload, timeout=30.0)
-            if response.status_code != 200:
-                raise Exception(f"Telegram API returned {response.status_code}")
-
     try:
-        await circuit_breaker.execute(_send)
+        url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
+
+        payload = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML"
+        }
+
+        if keyboard:
+            if inline:
+                # Convert keyboard to inline keyboard format
+                inline_keyboard = []
+                for row in keyboard:
+                    inline_row = []
+                    for button_text in row:
+                        inline_row.append({
+                            "text": button_text,
+                            "callback_data": button_text
+                        })
+                    inline_keyboard.append(inline_row)
+                payload["reply_markup"] = {
+                    "inline_keyboard": inline_keyboard
+                }
+            else:
+                payload["reply_markup"] = {
+                    "keyboard": keyboard,
+                    "resize_keyboard": True,
+                    "one_time_keyboard": True
+                }
+
+        async with httpx.AsyncClient() as client:
+            await client.post(url, json=payload, timeout=30.0)
     except Exception as e:
-        logger.error(
-            "Telegram send failed",
-            extra_data={"chat_id": chat_id, "error": str(e)},
-            exc_info=True
-        )
+        print(f"Telegram send failed: {e}")
 
 
-async def answer_callback_query(callback_query_id: str, text: str = None) -> None:
-    """Answer callback query to remove loading state with circuit breaker protection"""
+async def answer_callback_query(callback_query_id: str, text: str = None):
+    """Answer callback query to remove loading state"""
     import httpx
     from app.core.config import settings
 
     if not settings.TELEGRAM_BOT_TOKEN:
         return
 
-    circuit_breaker = get_telegram_circuit_breaker()
-
-    url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/answerCallbackQuery"
-    payload = {"callback_query_id": callback_query_id}
-    if text:
-        payload["text"] = text
-
-    async def _send():
-        async with httpx.AsyncClient() as client:
-            response = await client.post(url, json=payload, timeout=30.0)
-            if response.status_code != 200:
-                raise Exception(f"Telegram API returned {response.status_code}")
-
     try:
-        await circuit_breaker.execute(_send)
+        url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/answerCallbackQuery"
+        payload = {"callback_query_id": callback_query_id}
+        if text:
+            payload["text"] = text
+
+        async with httpx.AsyncClient() as client:
+            await client.post(url, json=payload, timeout=30.0)
     except Exception as e:
-        logger.error(
-            "Answer callback failed",
-            extra_data={"callback_query_id": callback_query_id, "error": str(e)},
-            exc_info=True
-        )
+        print(f"Answer callback failed: {e}")
 
 
 async def send_welcome_message(chat_id: str):
@@ -264,37 +238,6 @@ async def telegram_webhook(
     if is_new_user:
         background_tasks.add_task(send_welcome_message, chat_id)
         return {"ok": True, "new_user": True}
-
-    # טיפול ב-/start בכל שלב: איפוס ההקשר וחזרה לנקודת כניסה בטוחה
-    if update.message and text.strip().startswith("/start"):
-        if user.role == UserRole.COURIER:
-            await db.refresh(user)
-            if user.approval_status == ApprovalStatus.APPROVED:
-                await state_manager.force_state(user.id, "telegram", CourierState.MENU.value, context={})
-            else:
-                await state_manager.force_state(user.id, "telegram", CourierState.INITIAL.value, context={})
-
-            handler = CourierStateHandler(db)
-            response, new_state = await handler.handle_message(user, "תפריט", None)
-        else:
-            from app.state_machine.states import SenderState
-
-            await state_manager.force_state(user.id, "telegram", SenderState.MENU.value, context={})
-            handler = SenderStateHandler(db)
-            response, new_state = await handler.handle_message(
-                user_id=user.id,
-                platform="telegram",
-                message="תפריט"
-            )
-
-        background_tasks.add_task(
-            send_telegram_message,
-            chat_id,
-            response.text,
-            response.keyboard,
-            getattr(response, 'inline', False)
-        )
-        return {"ok": True, "new_state": new_state, "reset": True}
 
     # Handle "#" to return to main menu
     if text.strip() == "#":
