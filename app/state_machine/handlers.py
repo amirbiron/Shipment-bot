@@ -2,6 +2,7 @@
 State Handlers - Process messages based on current state
 """
 from typing import Tuple, Optional
+from html import escape
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -136,12 +137,13 @@ class SenderStateHandler:
             user.name = name
             await self.db.commit()
 
+        safe_name = escape(name)
         response = MessageResponse(
-            f"שלום {name}! ההרשמה הושלמה בהצלחה.\n\n"
+            f"שלום {safe_name}! ההרשמה הושלמה בהצלחה.\n\n"
             "מה תרצו לעשות?\n"
             "1. יצירת משלוח חדש\n"
             "2. צפייה במשלוחים שלי",
-            keyboard=[["➕ משלוח חדש", "📦 המשלוחים שלי"]],
+            keyboard=[["📦 המשלוחים שלי"], ["➕ משלוח חדש"]],
             inline=True
         )
         return response, SenderState.MENU.value, {"name": name}
@@ -150,10 +152,22 @@ class SenderStateHandler:
 
     async def _handle_menu(self, message: str, context: dict, user_id: int):
         """Handle main menu"""
+        msg = message.strip()
+        # הצגת תפריט (למשל לאחר /start או חזרה)
+        if msg in {"תפריט", "/start"}:
+            response = MessageResponse(
+                "מה תרצו לעשות?\n"
+                "1. יצירת משלוח חדש\n"
+                "2. צפייה במשלוחים שלי",
+                keyboard=[["📦 המשלוחים שלי"], ["➕ משלוח חדש"]],
+                inline=True
+            )
+            return response, SenderState.MENU.value, {}
+
         if "משלוח חדש" in message or "➕" in message or message == "1":
             response = MessageResponse(
                 "בואו ניצור משלוח חדש!\n\n"
-                "📍 *כתובת איסוף*\n"
+                "📍 <b>כתובת איסוף</b>\n"
                 "מה העיר?"
             )
             return response, SenderState.PICKUP_CITY.value, {}
@@ -162,7 +176,7 @@ class SenderStateHandler:
             response = MessageResponse(
                 "המשלוחים שלך:\n(אין משלוחים עדיין)\n\n"
                 "חזרה לתפריט:",
-                keyboard=[["➕ משלוח חדש", "📦 המשלוחים שלי"]],
+                keyboard=[["📦 המשלוחים שלי"], ["➕ משלוח חדש"]],
                 inline=True
             )
             return response, SenderState.MENU.value, {}
@@ -171,7 +185,7 @@ class SenderStateHandler:
             "לא הבנתי. אנא בחרו אפשרות:\n"
             "1. משלוח חדש\n"
             "2. המשלוחים שלי",
-            keyboard=[["➕ משלוח חדש", "📦 המשלוחים שלי"]],
+            keyboard=[["📦 המשלוחים שלי"], ["➕ משלוח חדש"]],
             inline=True
         )
         return response, SenderState.MENU.value, {}
@@ -186,8 +200,9 @@ class SenderStateHandler:
             response = MessageResponse("שם העיר קצר מדי. אנא הזינו שם עיר תקין:")
             return response, SenderState.PICKUP_CITY.value, {}
 
+        safe_city = escape(city)
         response = MessageResponse(
-            f"עיר: {city} ✓\n\n"
+            f"עיר: {safe_city} ✓\n\n"
             "מה שם הרחוב?"
         )
         return response, SenderState.PICKUP_STREET.value, {"pickup_city": city}
@@ -201,9 +216,11 @@ class SenderStateHandler:
             return response, SenderState.PICKUP_STREET.value, {}
 
         city = context.get("pickup_city", "")
+        safe_city = escape(city)
+        safe_street = escape(street)
         response = MessageResponse(
-            f"עיר: {city} ✓\n"
-            f"רחוב: {street} ✓\n\n"
+            f"עיר: {safe_city} ✓\n"
+            f"רחוב: {safe_street} ✓\n\n"
             "מה מספר הבית?"
         )
         return response, SenderState.PICKUP_NUMBER.value, {"pickup_street": street}
@@ -219,13 +236,17 @@ class SenderStateHandler:
 
         city = context.get("pickup_city", "")
         street = context.get("pickup_street", "")
+        safe_city = escape(city)
+        safe_street = escape(street)
+        safe_number = escape(number)
 
         response = MessageResponse(
-            f"עיר: {city} ✓\n"
-            f"רחוב: {street} ✓\n"
-            f"מספר: {number} ✓\n\n"
-            "קומה ודירה? (או הקלידו *דלג* אם לא רלוונטי)",
-            keyboard=[["דלג"]]
+            f"עיר: {safe_city} ✓\n"
+            f"רחוב: {safe_street} ✓\n"
+            f"מספר: {safe_number} ✓\n\n"
+            "קומה ודירה? (או לחצו <b>דלג</b> אם לא רלוונטי)",
+            keyboard=[["דלג"]],
+            inline=True
         )
         return response, SenderState.PICKUP_APARTMENT.value, {"pickup_number": number}
 
@@ -245,11 +266,12 @@ class SenderStateHandler:
             full_address = f"{street} {number}, {city} (קומה/דירה: {msg})"
             apartment = msg
 
+        safe_full_address = escape(full_address)
         response = MessageResponse(
             f"📍 כתובת איסוף נשמרה:\n"
-            f"{full_address}\n\n"
+            f"{safe_full_address}\n\n"
             "עכשיו נזין את כתובת היעד.\n"
-            "🎯 *כתובת יעד*\n"
+            "🎯 <b>כתובת יעד</b>\n"
             "מה העיר?"
         )
         return response, SenderState.DROPOFF_CITY.value, {
@@ -267,8 +289,9 @@ class SenderStateHandler:
             response = MessageResponse("שם העיר קצר מדי. אנא הזינו שם עיר תקין:")
             return response, SenderState.DROPOFF_CITY.value, {}
 
+        safe_city = escape(city)
         response = MessageResponse(
-            f"עיר: {city} ✓\n\n"
+            f"עיר: {safe_city} ✓\n\n"
             "מה שם הרחוב?"
         )
         return response, SenderState.DROPOFF_STREET.value, {"dropoff_city": city}
@@ -282,9 +305,11 @@ class SenderStateHandler:
             return response, SenderState.DROPOFF_STREET.value, {}
 
         city = context.get("dropoff_city", "")
+        safe_city = escape(city)
+        safe_street = escape(street)
         response = MessageResponse(
-            f"עיר: {city} ✓\n"
-            f"רחוב: {street} ✓\n\n"
+            f"עיר: {safe_city} ✓\n"
+            f"רחוב: {safe_street} ✓\n\n"
             "מה מספר הבית?"
         )
         return response, SenderState.DROPOFF_NUMBER.value, {"dropoff_street": street}
@@ -300,13 +325,17 @@ class SenderStateHandler:
 
         city = context.get("dropoff_city", "")
         street = context.get("dropoff_street", "")
+        safe_city = escape(city)
+        safe_street = escape(street)
+        safe_number = escape(number)
 
         response = MessageResponse(
-            f"עיר: {city} ✓\n"
-            f"רחוב: {street} ✓\n"
-            f"מספר: {number} ✓\n\n"
-            "קומה ודירה? (או הקלידו *דלג* אם לא רלוונטי)",
-            keyboard=[["דלג"]]
+            f"עיר: {safe_city} ✓\n"
+            f"רחוב: {safe_street} ✓\n"
+            f"מספר: {safe_number} ✓\n\n"
+            "קומה ודירה? (או לחצו <b>דלג</b> אם לא רלוונטי)",
+            keyboard=[["דלג"]],
+            inline=True
         )
         return response, SenderState.DROPOFF_APARTMENT.value, {"dropoff_number": number}
 
@@ -330,8 +359,9 @@ class SenderStateHandler:
         # Check if same city or different city
         same_city = pickup_city.strip().lower() == city.strip().lower()
 
+        safe_full_dropoff = escape(full_dropoff)
         response = MessageResponse(
-            f"🎯 כתובת יעד נשמרה:\n{full_dropoff}\n\n"
+            f"🎯 כתובת יעד נשמרה:\n{safe_full_dropoff}\n\n"
             "לאן תרצו להעביר את המשלוח?",
             keyboard=[["🏙️ בתוך העיר", "🚗 מחוץ לעיר"]],
             inline=True
@@ -380,7 +410,7 @@ class SenderStateHandler:
             # Immediate - skip time and price questions, go directly to description
             response = MessageResponse(
                 "⚡ משלוח מיידי!\n\n"
-                "📝 *תיאור המשלוח:*\n"
+                "📝 <b>תיאור המשלוח:</b>\n"
                 "מה אתם שולחים? (תיאור קצר של הפריט)"
             )
             return response, SenderState.DELIVERY_DESCRIPTION.value, {
@@ -429,8 +459,8 @@ class SenderStateHandler:
             min_price = 45
 
         response = MessageResponse(
-            f"⏰ שעת משלוח: {msg} ✓\n\n"
-            f"💰 *הצעת מחיר:*\n"
+            f"⏰ שעת משלוח: {escape(msg)} ✓\n\n"
+            f"💰 <b>הצעת מחיר:</b>\n"
             f"מה המחיר שתרצו לשלם?\n"
             f"(מינימום להזמנה זו: {min_price} ₪)"
         )
@@ -464,7 +494,7 @@ class SenderStateHandler:
 
         response = MessageResponse(
             f"💰 מחיר: {price} ₪ ✓\n\n"
-            "📝 *תיאור המשלוח:*\n"
+            "📝 <b>תיאור המשלוח:</b>\n"
             "מה אתם שולחים? (תיאור קצר של הפריט)"
         )
         return response, SenderState.DELIVERY_DESCRIPTION.value, {"customer_price": price}
@@ -488,18 +518,22 @@ class SenderStateHandler:
         delivery_time = context.get("delivery_time", "מיידי")
         customer_price = context.get("customer_price", "לא הוגדר")
 
+        safe_pickup = escape(pickup)
+        safe_dropoff = escape(dropoff)
+        safe_description = escape(description)
+        safe_delivery_time = escape(str(delivery_time))
         summary = (
-            f"📋 *סיכום המשלוח:*\n\n"
-            f"📍 איסוף: {pickup}\n"
-            f"🎯 יעד: {dropoff}\n"
+            f"📋 <b>סיכום המשלוח:</b>\n\n"
+            f"📍 איסוף: {safe_pickup}\n"
+            f"🎯 יעד: {safe_dropoff}\n"
             f"🗺️ סוג: {location_text}\n"
-            f"⏰ זמן: {delivery_time}\n"
+            f"⏰ זמן: {safe_delivery_time}\n"
         )
 
         if urgency == "later" and customer_price != "לא הוגדר":
             summary += f"💰 מחיר מוצע: {customer_price} ₪\n"
 
-        summary += f"📦 תיאור: {description}\n\n"
+        summary += f"📦 תיאור: {safe_description}\n\n"
         summary += "לאשר את המשלוח?"
 
         response = MessageResponse(
@@ -521,14 +555,18 @@ class SenderStateHandler:
             delivery_time = context.get("delivery_time", "מיידי")
             customer_price = context.get("customer_price")
 
+            safe_pickup = escape(pickup)
+            safe_dropoff = escape(dropoff)
+            safe_delivery_time = escape(str(delivery_time))
+            safe_description = escape(description) if description else ""
             success_msg = (
                 "המשלוח נוצר בהצלחה! 🎉\n\n"
-                f"📍 מ: {pickup}\n"
-                f"🎯 אל: {dropoff}\n"
-                f"⏰ זמן: {delivery_time}\n"
+                f"📍 מ: {safe_pickup}\n"
+                f"🎯 אל: {safe_dropoff}\n"
+                f"⏰ זמן: {safe_delivery_time}\n"
             )
             if description:
-                success_msg += f"📦 תיאור: {description}\n"
+                success_msg += f"📦 תיאור: {safe_description}\n"
             if customer_price:
                 success_msg += f"💰 מחיר: {customer_price} ₪\n"
 
@@ -539,7 +577,7 @@ class SenderStateHandler:
 
             response = MessageResponse(
                 success_msg,
-                keyboard=[["➕ משלוח חדש", "📦 המשלוחים שלי"]],
+                keyboard=[["📦 המשלוחים שלי"], ["➕ משלוח חדש"]],
                 inline=True
             )
             return response, SenderState.MENU.value, {}
@@ -548,7 +586,7 @@ class SenderStateHandler:
             response = MessageResponse(
                 "המשלוח בוטל.\n\n"
                 "מה תרצו לעשות?",
-                keyboard=[["➕ משלוח חדש", "📦 המשלוחים שלי"]],
+                keyboard=[["📦 המשלוחים שלי"], ["➕ משלוח חדש"]],
                 inline=True
             )
             return response, SenderState.MENU.value, {}
@@ -569,7 +607,7 @@ class SenderStateHandler:
         """Handle unknown state"""
         response = MessageResponse(
             "משהו השתבש. חוזרים לתפריט הראשי.",
-            keyboard=[["➕ משלוח חדש", "📦 המשלוחים שלי"]],
+            keyboard=[["📦 המשלוחים שלי"], ["➕ משלוח חדש"]],
             inline=True
         )
         return response, SenderState.MENU.value, {}

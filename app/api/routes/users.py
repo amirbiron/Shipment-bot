@@ -3,7 +3,7 @@ User API Routes
 """
 from typing import List, Optional, Literal
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, field_serializer
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -24,6 +24,20 @@ class UserCreate(BaseModel):
     role: UserRole = UserRole.SENDER
     platform: Literal["whatsapp", "telegram"] = "whatsapp"
     telegram_chat_id: Optional[str] = None
+
+    @field_validator("role", mode="before")
+    @classmethod
+    def validate_role(cls, v: str | UserRole) -> UserRole:
+        """תמיכה בערכי Enum גם בפורמט 'SENDER' וגם 'sender'"""
+        if isinstance(v, UserRole):
+            return v
+        if isinstance(v, str):
+            value = v.strip().lower()
+            try:
+                return UserRole(value)
+            except ValueError as e:
+                raise ValueError("Invalid role value") from e
+        raise ValueError("Invalid role value")
 
     @field_validator("phone_number")
     @classmethod
@@ -84,6 +98,10 @@ class UserResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+    @field_serializer("role")
+    def serialize_role(self, v: UserRole) -> str:
+        return v.name
 
 
 @router.post("/", response_model=UserResponse)

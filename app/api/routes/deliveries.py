@@ -3,7 +3,7 @@ Delivery API Routes
 """
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, field_validator, field_serializer, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.database import get_db
@@ -99,6 +99,16 @@ class DeliveryResponse(BaseModel):
     fee: float
 
     model_config = {"from_attributes": True}
+
+    @field_serializer("status")
+    def serialize_status(self, v: str) -> str:
+        # בטסטים מצפים לסטטוס בפורמט UPPERCASE (לדוגמה: OPEN)
+        try:
+            # אם הגיע Enum (למשל DeliveryStatus), לקחת את ה-value
+            raw = getattr(v, "value", v)
+        except Exception:
+            raw = v
+        return str(raw).upper()
 
 
 class CaptureRequest(BaseModel):

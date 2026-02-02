@@ -265,6 +265,37 @@ async def telegram_webhook(
         background_tasks.add_task(send_welcome_message, chat_id)
         return {"ok": True, "new_user": True}
 
+    # טיפול ב-/start בכל שלב: איפוס ההקשר וחזרה לנקודת כניסה בטוחה
+    if update.message and text.strip().startswith("/start"):
+        if user.role == UserRole.COURIER:
+            await db.refresh(user)
+            if user.approval_status == ApprovalStatus.APPROVED:
+                await state_manager.force_state(user.id, "telegram", CourierState.MENU.value, context={})
+            else:
+                await state_manager.force_state(user.id, "telegram", CourierState.INITIAL.value, context={})
+
+            handler = CourierStateHandler(db)
+            response, new_state = await handler.handle_message(user, "תפריט", None)
+        else:
+            from app.state_machine.states import SenderState
+
+            await state_manager.force_state(user.id, "telegram", SenderState.MENU.value, context={})
+            handler = SenderStateHandler(db)
+            response, new_state = await handler.handle_message(
+                user_id=user.id,
+                platform="telegram",
+                message="תפריט"
+            )
+
+        background_tasks.add_task(
+            send_telegram_message,
+            chat_id,
+            response.text,
+            response.keyboard,
+            getattr(response, 'inline', False)
+        )
+        return {"ok": True, "new_state": new_state, "reset": True}
+
     # Handle "#" to return to main menu
     if text.strip() == "#":
         # Reset state to menu
