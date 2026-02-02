@@ -178,8 +178,9 @@ async def whatsapp_webhook(
         if text.strip() == "#":
             # Reset state to menu
             if user.role == UserRole.COURIER:
-                # בדיקה אם השליח ממתין לאישור - אפשר לו לחזור להיות שולח רגיל
-                if user.approval_status == ApprovalStatus.PENDING:
+                # בדיקה אם השליח לא מאושר (כולל None, PENDING, REJECTED, BLOCKED)
+                # אפשר לו לחזור להיות שולח רגיל
+                if user.approval_status != ApprovalStatus.APPROVED:
                     # מחזירים אותו להיות שולח רגיל
                     user.role = UserRole.SENDER
                     await db.commit()
@@ -190,7 +191,7 @@ async def whatsapp_webhook(
                     background_tasks.add_task(send_welcome_message, reply_to)
                     responses.append({
                         "from": sender_id,
-                        "response": "welcome (switched from pending courier)",
+                        "response": "welcome (switched from non-approved courier)",
                         "new_state": SenderState.MENU.value
                     })
                     continue
