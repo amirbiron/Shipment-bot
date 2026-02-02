@@ -239,6 +239,11 @@ async function initializeClient() {
                 console.log('Forwarding to:', API_WEBHOOK_URL);
                 const payload = {
                     messages: [{
+                        // מזהה יציב לשיחה (לא תמיד מספר טלפון, יכול להיות @lid/@g.us)
+                        sender_id: message.from,
+                        // יעד תשובה בפועל - מנסים לפתור LID למספר טלפון, אם אפשר
+                        reply_to: replyTo,
+                        // שדה legacy לתאימות (בצד ה-API נשתמש ב-sender_id אם קיים)
                         from_number: replyTo,
                         message_id: message.id,
                         text: message.body || '',

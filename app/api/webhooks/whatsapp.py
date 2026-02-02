@@ -25,6 +25,10 @@ router = APIRouter()
 class WhatsAppMessage(BaseModel):
     """Incoming WhatsApp message structure"""
     from_number: str
+    # מזהה יציב לשיחה/שולח (למשל message.from של WPPConnect). אם לא נשלח, ניפול ל-from_number.
+    sender_id: Optional[str] = None
+    # יעד תשובה בפועל (יכול להיות phone@c.us או @lid). אם לא נשלח, ניפול ל-from_number.
+    reply_to: Optional[str] = None
     message_id: str
     text: str = ""
     timestamp: int
@@ -40,17 +44,22 @@ class WhatsAppWebhookPayload(BaseModel):
 
 async def get_or_create_user(
     db: AsyncSession,
-    phone_number: str
+    sender_identifier: str
 ) -> tuple[User, bool]:
-    """Get existing user or create new one. Returns (user, is_new)"""
+    """
+    Get existing user or create new one. Returns (user, is_new)
+
+    בווטסאפ לא תמיד יש מספר טלפון יציב (למשל @lid), לכן אנחנו משתמשים במזהה שולח יציב
+    בתור ה-"phone_number" במודל לצורך זיהוי ושמירת session.
+    """
     result = await db.execute(
-        select(User).where(User.phone_number == phone_number)
+        select(User).where(User.phone_number == sender_identifier)
     )
     user = result.scalar_one_or_none()
 
     if not user:
         user = User(
-            phone_number=phone_number,
+            phone_number=sender_identifier,
             platform="whatsapp",
             role=UserRole.SENDER
         )
@@ -129,13 +138,16 @@ async def whatsapp_webhook(
 
     for message in payload.messages:
         text = message.text or ""
+        sender_id = (message.sender_id or message.from_number or "").strip()
+        reply_to = (message.reply_to or message.from_number or "").strip()
         # Accept image media (WPPConnect may return 'image' or have image in mimetype)
         photo_file_id = message.media_url if message.media_type and 'image' in message.media_type.lower() else None
 
         logger.debug(
             "WhatsApp message received",
             extra_data={
-                "from": PhoneNumberValidator.mask(message.from_number),
+                "from": PhoneNumberValidator.mask(sender_id),
+                "reply_to": PhoneNumberValidator.mask(reply_to),
                 "text_preview": text[:50] if text else "",
                 "media_type": message.media_type,
                 "has_media_url": bool(message.media_url)
@@ -147,16 +159,16 @@ async def whatsapp_webhook(
             continue
 
         # Get or create user
-        user, is_new_user = await get_or_create_user(db, message.from_number)
+        user, is_new_user = await get_or_create_user(db, sender_id)
 
         # Initialize state manager
         state_manager = StateManager(db)
 
         # New user - show welcome message with role selection [1.1]
         if is_new_user:
-            background_tasks.add_task(send_welcome_message, message.from_number)
+            background_tasks.add_task(send_welcome_message, reply_to)
             responses.append({
-                "from": message.from_number,
+                "from": sender_id,
                 "response": "welcome",
                 "new_user": True
             })
@@ -181,12 +193,12 @@ async def whatsapp_webhook(
 
             background_tasks.add_task(
                 send_whatsapp_message,
-                message.from_number,
+                reply_to,
                 response.text,
                 response.keyboard
             )
             responses.append({
-                "from": message.from_number,
+                "from": sender_id,
                 "response": response.text,
                 "new_state": new_state
             })
@@ -209,12 +221,12 @@ async def whatsapp_webhook(
 
             background_tasks.add_task(
                 send_whatsapp_message,
-                message.from_number,
+                reply_to,
                 response.text,
                 response.keyboard
             )
             responses.append({
-                "from": message.from_number,
+                "from": sender_id,
                 "response": response.text,
                 "new_state": new_state
             })
@@ -251,12 +263,12 @@ async def whatsapp_webhook(
 
             background_tasks.add_task(
                 send_whatsapp_message,
-                message.from_number,
+                reply_to,
                 response.text,
                 response.keyboard
             )
             responses.append({
-                "from": message.from_number,
+                "from": sender_id,
                 "response": response.text,
                 "new_state": new_state
             })
@@ -273,12 +285,12 @@ async def whatsapp_webhook(
 
             background_tasks.add_task(
                 send_whatsapp_message,
-                message.from_number,
+                reply_to,
                 response.text,
                 response.keyboard
             )
             responses.append({
-                "from": message.from_number,
+                "from": sender_id,
                 "response": response.text,
                 "new_state": new_state
             })
@@ -298,21 +310,21 @@ async def whatsapp_webhook(
 
             background_tasks.add_task(
                 send_whatsapp_message,
-                message.from_number,
+                reply_to,
                 response.text,
                 response.keyboard
             )
             responses.append({
-                "from": message.from_number,
+                "from": sender_id,
                 "response": response.text,
                 "new_state": new_state
             })
             continue
 
         # Default: show welcome message with role selection
-        background_tasks.add_task(send_welcome_message, message.from_number)
+        background_tasks.add_task(send_welcome_message, reply_to)
         responses.append({
-            "from": message.from_number,
+            "from": sender_id,
             "response": "welcome",
             "new_state": None
         })
