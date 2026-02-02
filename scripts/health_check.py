@@ -106,15 +106,15 @@ class HealthChecker:
             )
 
             # בדיקת כתובת תקינה
-            valid_address = AddressValidator.validate("רחוב הרצל 1, תל אביב")
-            self.record("Address validation (valid)", valid_address)
+            is_valid, error = AddressValidator.validate("רחוב הרצל 1, תל אביב")
+            self.record("Address validation (valid)", is_valid, error or "")
 
             # בדיקת כתובת עם Union (לא SQL injection)
-            union_address = AddressValidator.validate("123 Union Street, New York")
+            is_valid, error = AddressValidator.validate("123 Union Street, New York")
             self.record(
                 "Address with 'Union' (not injection)",
-                union_address,
-                "Should allow legitimate addresses"
+                is_valid,
+                error if error else "Should allow legitimate addresses"
             )
 
             # בדיקת SQL injection
