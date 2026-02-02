@@ -377,7 +377,9 @@ class AmountValidator:
             return False, f"Amount cannot exceed {max_value}"
 
         # Check for reasonable decimal places (2 for currency)
-        if round(amount, 2) != amount:
+        # שימוש בהשוואה עם tolerance כי floating point לא מדויק
+        # לדוגמה: 0.1 + 0.2 = 0.30000000000000004
+        if abs(round(amount, 2) - amount) > 1e-9:
             return False, "Amount cannot have more than 2 decimal places"
 
         return True, None
