@@ -43,16 +43,19 @@ class ValidationPatterns:
     SQL_INJECTION_PATTERNS = [
         # SQL comments
         re.compile(r"--\s*$|/\*|\*/", re.IGNORECASE),
-        # SQL with quotes and operators (e.g., ' OR 1=1, " OR "a"="a)
-        re.compile(r"['\"].*\s*(OR|AND)\s+.*['\"]?\s*=", re.IGNORECASE),
+        # Classic SQL injection: ' OR '1'='1 or ' OR 1=1 or " AND "="
+        # Pattern: quote + OR/AND + (quoted value OR number) + equals
+        re.compile(r"['\"]\s*(OR|AND)\s+['\"]?\w*['\"]?\s*=", re.IGNORECASE),
+        # Tautology patterns: OR 1=1, AND 1=1, OR 'a'='a'
+        re.compile(r"\b(OR|AND)\s+(\d+\s*=\s*\d+|'[^']*'\s*=\s*'[^']*'|\"[^\"]*\"\s*=\s*\"[^\"]*\")", re.IGNORECASE),
         # Chained SQL commands (e.g., ; DROP TABLE)
         re.compile(r";\s*(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE)\b", re.IGNORECASE),
         # UNION SELECT pattern (common injection)
         re.compile(r"\bUNION\s+(ALL\s+)?SELECT\b", re.IGNORECASE),
         # SQL keywords with parentheses (function-like usage)
         re.compile(r"\b(SELECT|INSERT|UPDATE|DELETE)\s*\(", re.IGNORECASE),
-        # Hex encoding attempts
-        re.compile(r"0x[0-9a-fA-F]+"),
+        # Hex encoding attempts (at least 4 hex chars to avoid false positives)
+        re.compile(r"0x[0-9a-fA-F]{4,}"),
         # SQL batching with semicolons and keywords
         re.compile(r";\s*DROP\b", re.IGNORECASE),
     ]
@@ -61,7 +64,9 @@ class ValidationPatterns:
     XSS_PATTERNS = [
         re.compile(r"<script[^>]*>.*?</script>", re.IGNORECASE | re.DOTALL),
         re.compile(r"javascript:", re.IGNORECASE),
-        re.compile(r"on\w+\s*=", re.IGNORECASE),
+        # Event handlers must start at word boundary (onclick=, onload=, etc.)
+        # Avoids false positives like "condition = fragile"
+        re.compile(r"\bon\w+=", re.IGNORECASE),
         re.compile(r"<iframe", re.IGNORECASE),
         re.compile(r"<object", re.IGNORECASE),
         re.compile(r"<embed", re.IGNORECASE),

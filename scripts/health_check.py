@@ -125,6 +125,24 @@ class HealthChecker:
                 f"Detected pattern: {pattern}" if pattern else ""
             )
 
+            # בדיקת טקסט לגיטימי עם OR ו-= (לא SQL injection)
+            is_safe, _ = TextSanitizer.check_for_injection(
+                "Leave at John's house OR back door = either is fine"
+            )
+            self.record(
+                "Legitimate text with OR/= (not injection)",
+                is_safe,
+                "Should allow natural language"
+            )
+
+            # בדיקת טקסט לגיטימי עם condition = (לא XSS)
+            is_safe, _ = TextSanitizer.check_for_injection("condition = fragile")
+            self.record(
+                "Legitimate text with 'condition =' (not XSS)",
+                is_safe,
+                "Should not match 'on' inside 'condition'"
+            )
+
             # בדיקת סניטציה (ללא HTML escaping בשמירה)
             original = "O'Brien"
             sanitized = TextSanitizer.sanitize(original)
