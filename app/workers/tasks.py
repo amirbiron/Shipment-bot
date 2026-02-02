@@ -7,31 +7,61 @@ via WhatsApp or Telegram.
 """
 import asyncio
 from datetime import datetime, timedelta
+from contextlib import contextmanager
 
 from app.workers.celery_app import celery_app
 from app.db.database import get_task_session
 from app.db.models.outbox_message import OutboxMessage, MessagePlatform, MessageStatus
 from app.db.models.user import User, UserRole
 from app.domain.services.outbox_service import OutboxService
+from app.core.logging import get_logger, set_correlation_id
+from app.core.circuit_breaker import get_telegram_circuit_breaker, get_whatsapp_circuit_breaker
 from sqlalchemy import select
 
+logger = get_logger(__name__)
 
-def run_async(coro):
-    """Helper to run async code in sync Celery task"""
+
+@contextmanager
+def get_event_loop():
+    """
+    Context manager for proper event loop handling in Celery tasks.
+    Creates a new event loop and ensures proper cleanup to prevent resource leaks.
+    """
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        return loop.run_until_complete(coro)
+        yield loop
     finally:
-        loop.close()
+        try:
+            # Cancel all pending tasks
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            # Wait for tasks to be cancelled
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        finally:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.close()
+
+
+def run_async(coro):
+    """Helper to run async code in sync Celery task with proper cleanup"""
+    # Set correlation ID for task tracking
+    set_correlation_id()
+
+    with get_event_loop() as loop:
+        return loop.run_until_complete(coro)
 
 
 async def _send_whatsapp_message(phone: str, content: dict) -> bool:
-    """Send message via WhatsApp Gateway"""
+    """Send message via WhatsApp Gateway with circuit breaker protection"""
     import httpx
     from app.core.config import settings
 
-    try:
+    circuit_breaker = get_whatsapp_circuit_breaker()
+
+    async def _send():
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{settings.WHATSAPP_GATEWAY_URL}/send",
@@ -41,21 +71,33 @@ async def _send_whatsapp_message(phone: str, content: dict) -> bool:
                 },
                 timeout=30.0
             )
-            return response.status_code == 200
+            if response.status_code != 200:
+                raise Exception(f"WhatsApp API returned {response.status_code}")
+            return True
+
+    try:
+        return await circuit_breaker.execute(_send)
     except Exception as e:
-        print(f"WhatsApp send error: {e}")
+        logger.error(
+            "WhatsApp send error",
+            extra_data={"phone": phone[-4:] + "****", "error": str(e)},
+            exc_info=True
+        )
         return False
 
 
 async def _send_telegram_message(chat_id: str, content: dict) -> bool:
-    """Send message via Telegram Bot API"""
+    """Send message via Telegram Bot API with circuit breaker protection"""
     import httpx
     from app.core.config import settings
 
     if not settings.TELEGRAM_BOT_TOKEN:
+        logger.warning("Telegram bot token not configured")
         return False
 
-    try:
+    circuit_breaker = get_telegram_circuit_breaker()
+
+    async def _send():
         url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -67,9 +109,18 @@ async def _send_telegram_message(chat_id: str, content: dict) -> bool:
                 },
                 timeout=30.0
             )
-            return response.status_code == 200
+            if response.status_code != 200:
+                raise Exception(f"Telegram API returned {response.status_code}")
+            return True
+
+    try:
+        return await circuit_breaker.execute(_send)
     except Exception as e:
-        print(f"Telegram send error: {e}")
+        logger.error(
+            "Telegram send error",
+            extra_data={"chat_id": chat_id, "error": str(e)},
+            exc_info=True
+        )
         return False
 
 

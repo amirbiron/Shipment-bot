@@ -13,6 +13,10 @@ from app.state_machine.handlers import SenderStateHandler, CourierStateHandler
 from app.state_machine.states import CourierState
 from app.state_machine.manager import StateManager
 from app.domain.services import AdminNotificationService
+from app.core.logging import get_logger
+from app.core.circuit_breaker import circuit_breaker, CircuitBreakerConfig
+
+logger = get_logger(__name__)
 
 router = APIRouter()
 
@@ -103,7 +107,7 @@ async def send_telegram_message(
     from app.core.config import settings
 
     if not settings.TELEGRAM_BOT_TOKEN:
-        print("Telegram bot token not configured")
+        logger.warning("Telegram bot token not configured")
         return
 
     try:
@@ -140,7 +144,11 @@ async def send_telegram_message(
         async with httpx.AsyncClient() as client:
             await client.post(url, json=payload, timeout=30.0)
     except Exception as e:
-        print(f"Telegram send failed: {e}")
+        logger.error(
+            "Telegram send failed",
+            extra_data={"chat_id": chat_id, "error": str(e)},
+            exc_info=True
+        )
 
 
 async def answer_callback_query(callback_query_id: str, text: str = None):
@@ -160,7 +168,11 @@ async def answer_callback_query(callback_query_id: str, text: str = None):
         async with httpx.AsyncClient() as client:
             await client.post(url, json=payload, timeout=30.0)
     except Exception as e:
-        print(f"Answer callback failed: {e}")
+        logger.error(
+            "Answer callback failed",
+            extra_data={"callback_query_id": callback_query_id, "error": str(e)},
+            exc_info=True
+        )
 
 
 async def send_welcome_message(chat_id: str):

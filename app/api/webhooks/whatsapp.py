@@ -13,6 +13,10 @@ from app.state_machine.handlers import SenderStateHandler, CourierStateHandler
 from app.state_machine.states import CourierState
 from app.state_machine.manager import StateManager
 from app.domain.services import AdminNotificationService
+from app.core.logging import get_logger
+from app.core.circuit_breaker import get_whatsapp_circuit_breaker
+
+logger = get_logger(__name__)
 
 router = APIRouter()
 
@@ -76,7 +80,11 @@ async def send_whatsapp_message(phone_number: str, text: str, keyboard: list = N
                 timeout=30.0
             )
     except Exception as e:
-        print(f"WhatsApp send failed: {e}")
+        logger.error(
+            "WhatsApp send failed",
+            extra_data={"phone": phone_number[-4:] + "****", "error": str(e)},
+            exc_info=True
+        )
 
 
 async def send_welcome_message(phone_number: str):
@@ -116,7 +124,15 @@ async def whatsapp_webhook(
         # Accept image media (WPPConnect may return 'image' or have image in mimetype)
         photo_file_id = message.media_url if message.media_type and 'image' in message.media_type.lower() else None
 
-        print(f"WhatsApp message - text: '{text[:50] if text else ''}', media_type: {message.media_type}, has_media_url: {bool(message.media_url)}")
+        logger.debug(
+            "WhatsApp message received",
+            extra_data={
+                "from": message.from_number[-4:] + "****",
+                "text_preview": text[:50] if text else "",
+                "media_type": message.media_type,
+                "has_media_url": bool(message.media_url)
+            }
+        )
 
         # Skip empty messages
         if not text and not photo_file_id:
