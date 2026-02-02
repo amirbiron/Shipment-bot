@@ -973,10 +973,20 @@ class CourierStateHandler:
         return response, CourierState.SUPPORT.value, {}
 
     async def _handle_unknown(self, user: User, message: str, context: dict, photo_file_id: str):
-        """Handle unknown state"""
+        """Handle unknown state - restart registration or show appropriate screen"""
         from app.db.models.user import ApprovalStatus
 
+        # אם השליח מאושר - מציגים תפריט
         if user.approval_status == ApprovalStatus.APPROVED:
             return await self._handle_menu(user, message, context, photo_file_id)
 
-        return await self._handle_pending_approval(user, message, context, photo_file_id)
+        # אם השליח סיים את הרישום (יש לו תאריך אישור תקנון) - הוא ממתין לאישור
+        if user.terms_accepted_at is not None:
+            return await self._handle_pending_approval(user, message, context, photo_file_id)
+
+        # אחרת - המשתמש לא סיים את הרישום, מתחילים מחדש
+        logger.info(
+            "Courier in unknown state without completing registration, restarting",
+            extra_data={"user_id": user.id}
+        )
+        return await self._handle_initial(user, message, context, photo_file_id)
