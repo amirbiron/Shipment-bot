@@ -1,9 +1,9 @@
-# Shipment Bot - Repository Guidelines
+# Shipment Bot - הנחיות לריפו
 
-## Project Overview
-Delivery dispatch bot system for WhatsApp and Telegram platforms, built with FastAPI, PostgreSQL, Celery, and Redis.
+## סקירת הפרויקט
+מערכת בוט לשליחויות לפלטפורמות WhatsApp ו-Telegram, בנויה עם FastAPI, PostgreSQL, Celery ו-Redis.
 
-## Architecture
+## ארכיטקטורה
 ```
 Bot Gateway (Webhooks) → Application Layer (State Machine) →
 Domain Layer (Services) → Data Layer (PostgreSQL) ↔
@@ -12,40 +12,47 @@ Task Queue (Celery + Redis)
 
 ---
 
-## Coding Standards
+## כללים כלליים
 
-### Logging
-**Never use `print()` statements.** Always use structured logging:
+- סכם תמיד את ה-PR גם בצ'אט וגם בתיאור ה-PR בגיטהאב - **בעברית**
+- הערות בקוד - **בעברית**
+
+---
+
+## סטנדרטים לקוד
+
+### לוגים
+**אסור להשתמש ב-`print()`** - תמיד להשתמש בלוגים מובנים:
 
 ```python
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Good
+# נכון
 logger.info("Operation completed", extra_data={"user_id": 123, "action": "capture"})
 logger.error("Failed to send message", extra_data={"error": str(e)}, exc_info=True)
 
-# Bad
+# לא נכון
 print(f"Operation completed for user {user_id}")
 ```
 
-### Phone Number Privacy
-**Always mask phone numbers in logs** using `PhoneNumberValidator.mask()`:
+### פרטיות מספרי טלפון
+**חובה למסך מספרי טלפון בלוגים** באמצעות `PhoneNumberValidator.mask()`:
 
 ```python
 from app.core.validation import PhoneNumberValidator
 
-# Good - hides last 4 digits
+# נכון - מסתיר את 4 הספרות האחרונות
 logger.info("Message sent", extra_data={"phone": PhoneNumberValidator.mask(phone)})
-# Output: +97250123****
+# פלט: +97250123****
 
-# Bad - exposes the number
+# לא נכון - חושף את המספר
 logger.info("Message sent", extra_data={"phone": phone})
 ```
 
-### Input Validation
-**All user inputs must be validated** using validators from `app/core/validation.py`:
+### ולידציית קלט
+**כל קלט מהמשתמש חייב עבור ולידציה** באמצעות validators מ-`app/core/validation.py`:
 
 ```python
 from app.core.validation import (
@@ -55,18 +62,18 @@ from app.core.validation import (
     TextSanitizer
 )
 
-# Phone validation
+# ולידציית טלפון
 if not PhoneNumberValidator.validate(phone):
     raise ValueError("Invalid phone number")
 normalized = PhoneNumberValidator.normalize(phone)
 
-# Text sanitization (prevents XSS/SQL injection)
+# סניטציה של טקסט (מונע XSS/SQL injection)
 safe_text = TextSanitizer.sanitize(user_input)
 is_safe, pattern = TextSanitizer.check_for_injection(user_input)
 ```
 
-### Pydantic Models
-**Add field validators to all Pydantic models:**
+### מודלים של Pydantic
+**חובה להוסיף field validators לכל מודל Pydantic:**
 
 ```python
 from pydantic import BaseModel, field_validator
@@ -83,8 +90,8 @@ class UserCreate(BaseModel):
         return PhoneNumberValidator.normalize(v)
 ```
 
-### Error Handling
-**Use custom exceptions from `app/core/exceptions.py`:**
+### טיפול בשגיאות
+**חובה להשתמש ב-exceptions מותאמים מ-`app/core/exceptions.py`:**
 
 ```python
 from app.core.exceptions import (
@@ -94,15 +101,15 @@ from app.core.exceptions import (
     InsufficientCreditError
 )
 
-# Good - structured error with code
+# נכון - שגיאה מובנית עם קוד
 raise DeliveryNotFoundError(delivery_id=123)
 
-# Bad - generic exception
+# לא נכון - exception גנרי
 raise Exception("Delivery not found")
 ```
 
-### External Services
-**Always use Circuit Breaker for external API calls:**
+### שירותים חיצוניים
+**חובה להשתמש ב-Circuit Breaker לכל קריאת API חיצונית:**
 
 ```python
 from app.core.circuit_breaker import get_telegram_circuit_breaker
@@ -111,17 +118,17 @@ circuit_breaker = get_telegram_circuit_breaker()
 
 async def send_message():
     async def _send():
-        # API call here
+        # קריאת API כאן
         pass
 
     return await circuit_breaker.execute(_send)
 ```
 
 ### Type Hints
-**All functions must have type hints:**
+**כל פונקציה חייבת לכלול type hints:**
 
 ```python
-# Good
+# נכון
 async def create_delivery(
     sender_id: int,
     pickup_address: str,
@@ -129,13 +136,13 @@ async def create_delivery(
 ) -> Delivery:
     ...
 
-# Bad
+# לא נכון
 async def create_delivery(sender_id, pickup_address, fee=10.0):
     ...
 ```
 
-### API Documentation
-**All endpoints must have OpenAPI documentation:**
+### תיעוד API
+**כל endpoint חייב לכלול תיעוד OpenAPI:**
 
 ```python
 @router.post(
@@ -160,21 +167,21 @@ async def create_delivery(...) -> DeliveryResponse:
 
 ---
 
-## Testing Requirements
+## דרישות בדיקות
 
-### Running Tests
+### הרצת בדיקות
 ```bash
 pip install -r requirements-dev.txt
 pytest
-pytest --cov=app  # with coverage
+pytest --cov=app  # עם כיסוי קוד
 ```
 
-### Test Structure
-- Unit tests: `tests/test_*.py`
-- Use fixtures from `tests/conftest.py`
-- Mock external services (Telegram, WhatsApp)
+### מבנה בדיקות
+- בדיקות יחידה: `tests/test_*.py`
+- להשתמש ב-fixtures מ-`tests/conftest.py`
+- לעשות mock לשירותים חיצוניים (Telegram, WhatsApp)
 
-### Writing Tests
+### כתיבת בדיקות
 ```python
 import pytest
 from app.core.validation import PhoneNumberValidator
@@ -191,56 +198,56 @@ class TestPhoneValidation:
 
 ---
 
-## File Structure
+## מבנה קבצים
 
 ```
 app/
 ├── api/
-│   ├── routes/          # API endpoints
+│   ├── routes/          # נקודות קצה API
 │   └── webhooks/        # Telegram/WhatsApp webhooks
 ├── core/
-│   ├── config.py        # Settings
-│   ├── logging.py       # Structured logging
-│   ├── validation.py    # Input validators
-│   ├── exceptions.py    # Custom exceptions
+│   ├── config.py        # הגדרות
+│   ├── logging.py       # לוגים מובנים
+│   ├── validation.py    # ולידטורים
+│   ├── exceptions.py    # exceptions מותאמים
 │   ├── circuit_breaker.py
-│   └── middleware.py    # Request middleware
+│   └── middleware.py    # middleware לבקשות
 ├── db/
-│   ├── models/          # SQLAlchemy models
-│   └── database.py      # DB connection
+│   ├── models/          # מודלים של SQLAlchemy
+│   └── database.py      # חיבור לDB
 ├── domain/
-│   └── services/        # Business logic
-├── state_machine/       # Conversation flow
+│   └── services/        # לוגיקה עסקית
+├── state_machine/       # זרימת שיחה
 └── workers/
-    └── tasks.py         # Celery tasks
+    └── tasks.py         # משימות Celery
 ```
 
 ---
 
-## Key Patterns
+## דפוסי עיצוב מרכזיים
 
 ### Transactional Outbox
-Messages are saved to outbox table in same transaction as business operation, then processed asynchronously by Celery workers.
+הודעות נשמרות בטבלת outbox באותה טרנזקציה עם הפעולה העסקית, ומעובדות באופן אסינכרוני על ידי Celery workers.
 
 ### State Machine
-Conversation flows managed via `SenderState` and `CourierState` enums with defined transitions.
+זרימות שיחה מנוהלות דרך enums של `SenderState` ו-`CourierState` עם מעברים מוגדרים.
 
 ### Correlation IDs
-Every request gets a correlation ID for tracing:
+כל בקשה מקבלת correlation ID למעקב:
 ```python
 from app.core.logging import set_correlation_id, get_correlation_id
 
-correlation_id = set_correlation_id()  # Auto-generates if not provided
+correlation_id = set_correlation_id()  # מייצר אוטומטית אם לא סופק
 ```
 
 ---
 
-## Don'ts
+## אסור!
 
-1. **Don't use `print()`** - Use `logger`
-2. **Don't expose phone numbers in logs** - Use `PhoneNumberValidator.mask()`
-3. **Don't accept unvalidated input** - Use validators
-4. **Don't call external APIs without Circuit Breaker**
-5. **Don't write functions without type hints**
-6. **Don't create endpoints without OpenAPI docs**
-7. **Don't commit without tests for new functionality**
+1. **אסור להשתמש ב-`print()`** - להשתמש ב-`logger`
+2. **אסור לחשוף מספרי טלפון בלוגים** - להשתמש ב-`PhoneNumberValidator.mask()`
+3. **אסור לקבל קלט ללא ולידציה** - להשתמש ב-validators
+4. **אסור לקרוא ל-API חיצוני בלי Circuit Breaker**
+5. **אסור לכתוב פונקציות בלי type hints**
+6. **אסור ליצור endpoints בלי תיעוד OpenAPI**
+7. **אסור לעשות commit בלי בדיקות לפיצ'רים חדשים**
