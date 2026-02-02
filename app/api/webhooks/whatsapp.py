@@ -178,6 +178,23 @@ async def whatsapp_webhook(
         if text.strip() == "#":
             # Reset state to menu
             if user.role == UserRole.COURIER:
+                # בדיקה אם השליח ממתין לאישור - אפשר לו לחזור להיות שולח רגיל
+                if user.approval_status == ApprovalStatus.PENDING:
+                    # מחזירים אותו להיות שולח רגיל
+                    user.role = UserRole.SENDER
+                    await db.commit()
+                    # מאפסים את ה-state machine ומנקים context
+                    from app.state_machine.states import SenderState
+                    await state_manager.force_state(user.id, "whatsapp", SenderState.MENU.value, context={})
+                    # מציגים הודעת ברוכים הבאים מחדש
+                    background_tasks.add_task(send_welcome_message, reply_to)
+                    responses.append({
+                        "from": sender_id,
+                        "response": "welcome (switched from pending courier)",
+                        "new_state": SenderState.MENU.value
+                    })
+                    continue
+
                 await state_manager.force_state(user.id, "whatsapp", CourierState.MENU.value, context={})
                 handler = CourierStateHandler(db, platform="whatsapp")
                 response, new_state = await handler.handle_message(user, "תפריט", None)

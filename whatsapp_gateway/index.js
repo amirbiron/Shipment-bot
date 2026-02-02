@@ -350,7 +350,7 @@ app.post('/send', async (req, res) => {
                     sections: [{
                         title: 'אפשרויות',
                         // משתמשים בטקסט המקורי כ-rowId כדי שהבחירה תחזור עם הטקסט הנכון
-                        rows: options.map((text, index) => ({
+                        rows: options.map((text) => ({
                             rowId: text,
                             title: text,
                             description: ''
