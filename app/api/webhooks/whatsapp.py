@@ -13,6 +13,11 @@ from app.state_machine.handlers import SenderStateHandler, CourierStateHandler
 from app.state_machine.states import CourierState
 from app.state_machine.manager import StateManager
 from app.domain.services import AdminNotificationService
+from app.core.logging import get_logger
+from app.core.circuit_breaker import get_whatsapp_circuit_breaker
+from app.core.validation import PhoneNumberValidator
+
+logger = get_logger(__name__)
 
 router = APIRouter()
 
@@ -20,6 +25,10 @@ router = APIRouter()
 class WhatsAppMessage(BaseModel):
     """Incoming WhatsApp message structure"""
     from_number: str
+    # מזהה יציב לשיחה/שולח (למשל message.from של WPPConnect). אם לא נשלח, ניפול ל-from_number.
+    sender_id: Optional[str] = None
+    # יעד תשובה בפועל (יכול להיות phone@c.us או @lid). אם לא נשלח, ניפול ל-from_number.
+    reply_to: Optional[str] = None
     message_id: str
     text: str = ""
     timestamp: int
@@ -35,17 +44,22 @@ class WhatsAppWebhookPayload(BaseModel):
 
 async def get_or_create_user(
     db: AsyncSession,
-    phone_number: str
+    sender_identifier: str
 ) -> tuple[User, bool]:
-    """Get existing user or create new one. Returns (user, is_new)"""
+    """
+    Get existing user or create new one. Returns (user, is_new)
+
+    בווטסאפ לא תמיד יש מספר טלפון יציב (למשל @lid), לכן אנחנו משתמשים במזהה שולח יציב
+    בתור ה-"phone_number" במודל לצורך זיהוי ושמירת session.
+    """
     result = await db.execute(
-        select(User).where(User.phone_number == phone_number)
+        select(User).where(User.phone_number == sender_identifier)
     )
     user = result.scalar_one_or_none()
 
     if not user:
         user = User(
-            phone_number=phone_number,
+            phone_number=sender_identifier,
             platform="whatsapp",
             role=UserRole.SENDER
         )
@@ -57,16 +71,18 @@ async def get_or_create_user(
     return user, False  # Existing user
 
 
-async def send_whatsapp_message(phone_number: str, text: str, keyboard: list = None):
+async def send_whatsapp_message(phone_number: str, text: str, keyboard: list = None) -> None:
     """
-    Send message via WhatsApp Gateway (Node.js microservice).
+    Send message via WhatsApp Gateway (Node.js microservice) with circuit breaker protection.
     """
     import httpx
     from app.core.config import settings
 
-    try:
+    circuit_breaker = get_whatsapp_circuit_breaker()
+
+    async def _send():
         async with httpx.AsyncClient() as client:
-            await client.post(
+            response = await client.post(
                 f"{settings.WHATSAPP_GATEWAY_URL}/send",
                 json={
                     "phone": phone_number,
@@ -75,8 +91,17 @@ async def send_whatsapp_message(phone_number: str, text: str, keyboard: list = N
                 },
                 timeout=30.0
             )
+            if response.status_code != 200:
+                raise Exception(f"WhatsApp API returned {response.status_code}")
+
+    try:
+        await circuit_breaker.execute(_send)
     except Exception as e:
-        print(f"WhatsApp send failed: {e}")
+        logger.error(
+            "WhatsApp send failed",
+            extra_data={"phone": PhoneNumberValidator.mask(phone_number), "error": str(e)},
+            exc_info=True
+        )
 
 
 async def send_welcome_message(phone_number: str):
@@ -113,26 +138,37 @@ async def whatsapp_webhook(
 
     for message in payload.messages:
         text = message.text or ""
+        sender_id = (message.sender_id or message.from_number or "").strip()
+        reply_to = (message.reply_to or message.from_number or "").strip()
         # Accept image media (WPPConnect may return 'image' or have image in mimetype)
         photo_file_id = message.media_url if message.media_type and 'image' in message.media_type.lower() else None
 
-        print(f"WhatsApp message - text: '{text[:50] if text else ''}', media_type: {message.media_type}, has_media_url: {bool(message.media_url)}")
+        logger.debug(
+            "WhatsApp message received",
+            extra_data={
+                "from": PhoneNumberValidator.mask(sender_id),
+                "reply_to": PhoneNumberValidator.mask(reply_to),
+                "text_preview": text[:50] if text else "",
+                "media_type": message.media_type,
+                "has_media_url": bool(message.media_url)
+            }
+        )
 
         # Skip empty messages
         if not text and not photo_file_id:
             continue
 
         # Get or create user
-        user, is_new_user = await get_or_create_user(db, message.from_number)
+        user, is_new_user = await get_or_create_user(db, sender_id)
 
         # Initialize state manager
         state_manager = StateManager(db)
 
         # New user - show welcome message with role selection [1.1]
         if is_new_user:
-            background_tasks.add_task(send_welcome_message, message.from_number)
+            background_tasks.add_task(send_welcome_message, reply_to)
             responses.append({
-                "from": message.from_number,
+                "from": sender_id,
                 "response": "welcome",
                 "new_user": True
             })
@@ -157,12 +193,12 @@ async def whatsapp_webhook(
 
             background_tasks.add_task(
                 send_whatsapp_message,
-                message.from_number,
+                reply_to,
                 response.text,
                 response.keyboard
             )
             responses.append({
-                "from": message.from_number,
+                "from": sender_id,
                 "response": response.text,
                 "new_state": new_state
             })
@@ -185,12 +221,12 @@ async def whatsapp_webhook(
 
             background_tasks.add_task(
                 send_whatsapp_message,
-                message.from_number,
+                reply_to,
                 response.text,
                 response.keyboard
             )
             responses.append({
-                "from": message.from_number,
+                "from": sender_id,
                 "response": response.text,
                 "new_state": new_state
             })
@@ -227,12 +263,12 @@ async def whatsapp_webhook(
 
             background_tasks.add_task(
                 send_whatsapp_message,
-                message.from_number,
+                reply_to,
                 response.text,
                 response.keyboard
             )
             responses.append({
-                "from": message.from_number,
+                "from": sender_id,
                 "response": response.text,
                 "new_state": new_state
             })
@@ -249,12 +285,12 @@ async def whatsapp_webhook(
 
             background_tasks.add_task(
                 send_whatsapp_message,
-                message.from_number,
+                reply_to,
                 response.text,
                 response.keyboard
             )
             responses.append({
-                "from": message.from_number,
+                "from": sender_id,
                 "response": response.text,
                 "new_state": new_state
             })
@@ -274,21 +310,21 @@ async def whatsapp_webhook(
 
             background_tasks.add_task(
                 send_whatsapp_message,
-                message.from_number,
+                reply_to,
                 response.text,
                 response.keyboard
             )
             responses.append({
-                "from": message.from_number,
+                "from": sender_id,
                 "response": response.text,
                 "new_state": new_state
             })
             continue
 
         # Default: show welcome message with role selection
-        background_tasks.add_task(send_welcome_message, message.from_number)
+        background_tasks.add_task(send_welcome_message, reply_to)
         responses.append({
-            "from": message.from_number,
+            "from": sender_id,
             "response": "welcome",
             "new_state": None
         })

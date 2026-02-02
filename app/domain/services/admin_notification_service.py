@@ -5,6 +5,10 @@ import httpx
 from typing import Optional
 
 from app.core.config import settings
+from app.core.logging import get_logger
+from app.core.circuit_breaker import get_telegram_circuit_breaker
+
+logger = get_logger(__name__)
 
 
 class AdminNotificationService:
@@ -23,7 +27,10 @@ class AdminNotificationService:
         [1.4] Admin notification
         """
         if not settings.TELEGRAM_ADMIN_CHAT_ID or not settings.TELEGRAM_BOT_TOKEN:
-            print("Warning: Admin notification not configured")
+            logger.warning(
+                "Admin notification not configured",
+                extra_data={"missing": "TELEGRAM_ADMIN_CHAT_ID or TELEGRAM_BOT_TOKEN"}
+            )
             return False
 
         message = f"""
@@ -129,18 +136,30 @@ class AdminNotificationService:
             "parse_mode": "HTML",
         }
 
-        try:
+        circuit_breaker = get_telegram_circuit_breaker()
+
+        async def _send():
             async with httpx.AsyncClient() as client:
                 response = await client.post(url, json=payload, timeout=30.0)
-                return response.status_code == 200
+                if response.status_code != 200:
+                    raise Exception(f"Telegram API returned {response.status_code}")
+                return True
+
+        try:
+            return await circuit_breaker.execute(_send)
         except Exception as e:
-            print(f"Error sending Telegram message: {e}")
+            logger.error(
+                "Error sending admin Telegram message",
+                extra_data={"chat_id": chat_id, "error": str(e)},
+                exc_info=True
+            )
             return False
 
     @staticmethod
     async def _forward_photo(chat_id: str, file_id: str) -> bool:
         """Send a photo via Telegram Bot API using file_id"""
         if not settings.TELEGRAM_BOT_TOKEN:
+            logger.warning("Telegram bot token not configured for photo forwarding")
             return False
 
         url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendPhoto"
@@ -150,10 +169,21 @@ class AdminNotificationService:
             "photo": file_id,
         }
 
-        try:
+        circuit_breaker = get_telegram_circuit_breaker()
+
+        async def _send():
             async with httpx.AsyncClient() as client:
                 response = await client.post(url, json=payload, timeout=30.0)
-                return response.status_code == 200
+                if response.status_code != 200:
+                    raise Exception(f"Telegram API returned {response.status_code}")
+                return True
+
+        try:
+            return await circuit_breaker.execute(_send)
         except Exception as e:
-            print(f"Error sending photo: {e}")
+            logger.error(
+                "Error sending photo",
+                extra_data={"chat_id": chat_id, "error": str(e)},
+                exc_info=True
+            )
             return False
