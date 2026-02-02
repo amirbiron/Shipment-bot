@@ -153,8 +153,13 @@ def set_correlation_id(correlation_id: str | None = None) -> str:
 
 
 def get_correlation_id() -> str:
-    """Get current correlation ID"""
-    return correlation_id_var.get() or generate_correlation_id()
+    """Get current correlation ID, generating and persisting one if not set"""
+    cid = correlation_id_var.get()
+    if not cid:
+        # יצירת ID חדש ושמירתו לשימוש עתידי באותו context
+        cid = generate_correlation_id()
+        correlation_id_var.set(cid)
+    return cid
 
 
 def get_logger(name: str) -> StructuredLogger:
