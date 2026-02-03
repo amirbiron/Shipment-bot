@@ -32,7 +32,12 @@ class LedgerEntryResponse(BaseModel):
         from_attributes = True
 
 
-@router.get("/{courier_id}", response_model=WalletResponse)
+@router.get(
+    "/{courier_id}",
+    response_model=WalletResponse,
+    summary="קבלת ארנק של שליח",
+    description="מחזיר את הארנק של השליח, או יוצר חדש אם לא קיים.",
+)
 async def get_wallet(
     courier_id: int,
     db: AsyncSession = Depends(get_db)
@@ -43,7 +48,11 @@ async def get_wallet(
     return wallet
 
 
-@router.get("/{courier_id}/balance")
+@router.get(
+    "/{courier_id}/balance",
+    summary="קבלת יתרה נוכחית",
+    description="מחזיר רק את היתרה (balance) של השליח.",
+)
 async def get_balance(
     courier_id: int,
     db: AsyncSession = Depends(get_db)
@@ -54,7 +63,12 @@ async def get_balance(
     return {"courier_id": courier_id, "balance": balance}
 
 
-@router.get("/{courier_id}/history", response_model=List[LedgerEntryResponse])
+@router.get(
+    "/{courier_id}/history",
+    response_model=List[LedgerEntryResponse],
+    summary="קבלת היסטוריית תנועות בארנק",
+    description="מחזיר רשימת תנועות (ledger) עבור שליח, בסדר יורד, עם הגבלת כמות.",
+)
 async def get_transaction_history(
     courier_id: int,
     limit: int = 20,
@@ -66,7 +80,11 @@ async def get_transaction_history(
     return history
 
 
-@router.get("/{courier_id}/can-capture")
+@router.get(
+    "/{courier_id}/can-capture",
+    summary="בדיקה אם שליח יכול לתפוס משלוח",
+    description="בודק האם לשליח יש מספיק אשראי/יתרה לתפיסת משלוח עם עמלה נתונה.",
+)
 async def check_can_capture(
     courier_id: int,
     fee: float = 10.0,

@@ -138,25 +138,24 @@ class CancelResponse(BaseModel):
 @router.post(
     "/",
     response_model=DeliveryResponse,
-    summary="Create a new delivery",
-    description="Creates a new delivery request with pickup and dropoff addresses.",
+    summary="יצירת משלוח חדש",
+    description="יצירת בקשת משלוח חדשה עם כתובות איסוף ומסירה.",
     responses={
-        200: {"description": "Delivery created successfully"},
-        422: {"description": "Validation error in request data"}
+        200: {"description": "המשלוח נוצר בהצלחה"},
+        422: {"description": "שגיאת ולידציה בנתוני הבקשה"},
     },
-    tags=["Deliveries"]
 )
 async def create_delivery(
     delivery_data: DeliveryCreate,
     db: AsyncSession = Depends(get_db)
 ) -> DeliveryResponse:
     """
-    Create a new delivery request.
+    יצירת בקשת משלוח חדשה.
 
-    - **sender_id**: ID of the sender user
-    - **pickup_address**: Full address for pickup
-    - **dropoff_address**: Full address for delivery
-    - **fee**: Delivery fee (default: 10.0)
+    - **sender_id**: מזהה השולח
+    - **pickup_address**: כתובת איסוף מלאה
+    - **dropoff_address**: כתובת מסירה מלאה
+    - **fee**: עמלת משלוח (ברירת מחדל: 10.0)
     """
     logger.info(
         "Creating new delivery",
@@ -170,9 +169,8 @@ async def create_delivery(
 @router.get(
     "/open",
     response_model=List[DeliveryResponse],
-    summary="Get all open deliveries",
-    description="Returns a list of all deliveries with OPEN status that haven't been captured yet.",
-    tags=["Deliveries"]
+    summary="קבלת רשימת משלוחים פתוחים",
+    description="מחזיר רשימה של כל המשלוחים עם סטטוס OPEN שטרם נתפסו.",
 )
 async def get_open_deliveries(
     db: AsyncSession = Depends(get_db)
@@ -186,22 +184,21 @@ async def get_open_deliveries(
 @router.get(
     "/{delivery_id}",
     response_model=DeliveryResponse,
-    summary="Get delivery by ID",
-    description="Returns detailed information about a specific delivery.",
+    summary="קבלת משלוח לפי מזהה",
+    description="מחזיר מידע מפורט על משלוח ספציפי.",
     responses={
-        200: {"description": "Delivery found"},
-        404: {"description": "Delivery not found"}
+        200: {"description": "המשלוח נמצא"},
+        404: {"description": "המשלוח לא נמצא"},
     },
-    tags=["Deliveries"]
 )
 async def get_delivery(
     delivery_id: int,
     db: AsyncSession = Depends(get_db)
 ) -> DeliveryResponse:
     """
-    Get a specific delivery by its ID.
+    קבלת משלוח לפי מזהה.
 
-    - **delivery_id**: The unique identifier of the delivery
+    - **delivery_id**: מזהה ייחודי של המשלוח
     """
     service = DeliveryService(db)
     delivery = await service.get_delivery(delivery_id)
@@ -213,15 +210,14 @@ async def get_delivery(
 @router.post(
     "/{delivery_id}/capture",
     response_model=CaptureResponse,
-    summary="Capture a delivery",
-    description="Assign a courier to capture and handle a delivery. This is an atomic operation.",
+    summary="תפיסת משלוח (שיבוץ שליח)",
+    description="שיבוץ שליח למשלוח. פעולה אטומית הכוללת בדיקת אשראי וניכוי עמלה.",
     responses={
-        200: {"description": "Delivery captured successfully"},
-        400: {"description": "Cannot capture delivery (already captured, insufficient credit, etc.)"},
-        404: {"description": "Delivery not found"},
-        500: {"description": "Server error during capture"}
+        200: {"description": "המשלוח נתפס בהצלחה"},
+        400: {"description": "לא ניתן לתפוס משלוח (כבר נתפס, אין מספיק אשראי וכו')"},
+        404: {"description": "המשלוח לא נמצא"},
+        500: {"description": "שגיאת שרת בזמן תפיסת משלוח"},
     },
-    tags=["Deliveries"]
 )
 async def capture_delivery(
     delivery_id: int,
@@ -229,15 +225,15 @@ async def capture_delivery(
     db: AsyncSession = Depends(get_db)
 ) -> CaptureResponse:
     """
-    Capture a delivery for a courier.
+    תפיסת משלוח עבור שליח.
 
-    This operation is atomic and includes:
-    - Checking courier credit availability
-    - Deducting delivery fee from courier wallet
-    - Assigning courier to delivery
+    פעולה אטומית הכוללת:
+    - בדיקת אשראי/יתרה זמינה לשליח
+    - ניכוי עמלת משלוח מארנק השליח
+    - שיבוץ השליח למשלוח
 
-    - **delivery_id**: The delivery to capture
-    - **courier_id**: The courier capturing the delivery
+    - **delivery_id**: המשלוח לתפיסה
+    - **courier_id**: מזהה השליח שתופס את המשלוח
     """
     logger.info(
         "Capture delivery request",
@@ -267,22 +263,21 @@ async def capture_delivery(
 @router.post(
     "/{delivery_id}/deliver",
     response_model=DeliverResponse,
-    summary="Mark delivery as delivered",
-    description="Mark a captured delivery as delivered by the courier.",
+    summary="סימון משלוח כנמסר",
+    description="סימון משלוח שנתפס כמשלוח שנמסר/הושלם על ידי השליח.",
     responses={
-        200: {"description": "Delivery marked as delivered"},
-        400: {"description": "Cannot mark as delivered (invalid status)"}
+        200: {"description": "המשלוח סומן כנמסר"},
+        400: {"description": "לא ניתן לסמן כנמסר (סטטוס לא תקין)"},
     },
-    tags=["Deliveries"]
 )
 async def mark_delivered(
     delivery_id: int,
     db: AsyncSession = Depends(get_db)
 ) -> DeliverResponse:
     """
-    Mark a delivery as completed.
+    סימון משלוח כהושלם.
 
-    - **delivery_id**: The delivery to mark as delivered
+    - **delivery_id**: מזהה המשלוח לסימון כנמסר
     """
     logger.info("Mark delivered request", extra_data={"delivery_id": delivery_id})
     service = DeliveryService(db)
@@ -298,24 +293,23 @@ async def mark_delivered(
 @router.delete(
     "/{delivery_id}",
     response_model=CancelResponse,
-    summary="Cancel a delivery",
-    description="Cancel an open delivery that hasn't been captured yet.",
+    summary="ביטול משלוח",
+    description="ביטול משלוח פתוח שטרם נתפס.",
     responses={
-        200: {"description": "Delivery cancelled successfully"},
-        400: {"description": "Cannot cancel delivery (already captured or delivered)"}
+        200: {"description": "המשלוח בוטל בהצלחה"},
+        400: {"description": "לא ניתן לבטל משלוח (כבר נתפס או נמסר)"},
     },
-    tags=["Deliveries"]
 )
 async def cancel_delivery(
     delivery_id: int,
     db: AsyncSession = Depends(get_db)
 ) -> CancelResponse:
     """
-    Cancel a delivery.
+    ביטול משלוח.
 
-    Only open deliveries that haven't been captured can be cancelled.
+    ניתן לבטל רק משלוחים פתוחים (OPEN) שטרם נתפסו.
 
-    - **delivery_id**: The delivery to cancel
+    - **delivery_id**: מזהה המשלוח לביטול
     """
     logger.info("Cancel delivery request", extra_data={"delivery_id": delivery_id})
     service = DeliveryService(db)

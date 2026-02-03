@@ -1,0 +1,52 @@
+@import url("https://unpkg.com/swagger-ui-dist@5/swagger-ui.css");
+
+/* RTL + Hebrew-friendly defaults for Swagger UI */
+html,
+body {
+  direction: rtl;
+  text-align: right;
+  font-family: system-ui, -apple-system, Segoe UI, Arial, "Noto Sans Hebrew",
+    sans-serif;
+}
+
+/* Keep the topbar layout sane in RTL */
+.swagger-ui .topbar .topbar-wrapper {
+  flex-direction: row-reverse;
+}
+
+/* Operation summary row: put method badge on the right */
+.swagger-ui .opblock .opblock-summary {
+  flex-direction: row-reverse;
+}
+
+/* Parameter and schema tables */
+.swagger-ui table thead tr td,
+.swagger-ui table thead tr th,
+.swagger-ui table tbody tr td,
+.swagger-ui table tbody tr th {
+  text-align: right;
+}
+
+/* Make code blocks still LTR for readability (URLs, JSON, curl, etc.) */
+.swagger-ui pre,
+.swagger-ui code,
+.swagger-ui .curl-command,
+.swagger-ui .microlight {
+  direction: ltr;
+  text-align: left;
+}
+
+/* Inputs should remain LTR (IDs, numbers, URLs) */
+.swagger-ui input,
+.swagger-ui textarea {
+  direction: ltr;
+  text-align: left;
+}
+
+/* Prevent some labels from awkward wrapping */
+.swagger-ui .opblock-summary-description,
+.swagger-ui .opblock-summary-path,
+.swagger-ui .opblock-summary-method {
+  unicode-bidi: plaintext;
+}
+

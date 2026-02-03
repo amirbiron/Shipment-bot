@@ -12,24 +12,24 @@ from app.api.webhooks.telegram import router as telegram_router
 
 router = APIRouter()
 
-router.include_router(deliveries_router, prefix="/deliveries", tags=["deliveries"])
-router.include_router(users_router, prefix="/users", tags=["users"])
-router.include_router(wallets_router, prefix="/wallets", tags=["wallets"])
-router.include_router(migrations_router, prefix="/migrations", tags=["migrations"])
+router.include_router(deliveries_router, prefix="/deliveries", tags=["Deliveries"])
+router.include_router(users_router, prefix="/users", tags=["Users"])
+router.include_router(wallets_router, prefix="/wallets", tags=["Wallets"])
+router.include_router(migrations_router, prefix="/migrations", tags=["Migrations"])
 # Canonical webhook endpoints (documented)
-router.include_router(whatsapp_router, prefix="/whatsapp", tags=["webhooks"])
-router.include_router(telegram_router, prefix="/telegram", tags=["webhooks"])
+router.include_router(whatsapp_router, prefix="/whatsapp", tags=["Webhooks"])
+router.include_router(telegram_router, prefix="/telegram", tags=["Webhooks"])
 
 # Backwards-compatible webhook endpoints
 router.include_router(
     whatsapp_router,
     prefix="/webhooks/whatsapp",
-    tags=["webhooks"],
+    tags=["Webhooks"],
     include_in_schema=False
 )
 router.include_router(
     telegram_router,
     prefix="/webhooks/telegram",
-    tags=["webhooks"],
+    tags=["Webhooks"],
     include_in_schema=False
 )

@@ -267,7 +267,14 @@ async def send_welcome_message(phone_number: str):
     await send_whatsapp_message(phone_number, welcome_text, keyboard)
 
 
-@router.post("/webhook")
+@router.post(
+    "/webhook",
+    summary="Webhook - WhatsApp (קבלת הודעות נכנסות)",
+    description=(
+        "נקודת כניסה לקבלת הודעות מ-WhatsApp Gateway. "
+        "מבצעת ניתוב לזרימת שולח/שליח לפי role ומנהלת state machine."
+    ),
+)
 async def whatsapp_webhook(
     payload: WhatsAppWebhookPayload,
     background_tasks: BackgroundTasks,
@@ -539,7 +546,11 @@ async def whatsapp_webhook(
     return {"processed": len(responses), "responses": responses}
 
 
-@router.get("/webhook")
+@router.get(
+    "/webhook",
+    summary="Webhook Verification - WhatsApp",
+    description="אימות webhook (challenge) עבור WhatsApp Business API.",
+)
 async def whatsapp_verify(
     hub_mode: str = None,
     hub_challenge: str = None,
