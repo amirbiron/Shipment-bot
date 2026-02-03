@@ -7,6 +7,7 @@ from typing import Optional
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.circuit_breaker import get_telegram_circuit_breaker, get_whatsapp_circuit_breaker
+from app.core.exceptions import TelegramError, WhatsAppError
 
 logger = get_logger(__name__)
 
@@ -184,7 +185,11 @@ class AdminNotificationService:
             async with httpx.AsyncClient() as client:
                 response = await client.post(url, json=payload, timeout=30.0)
                 if response.status_code != 200:
-                    raise Exception(f"Telegram API returned {response.status_code}")
+                    raise TelegramError.from_response(
+                        "sendMessage",
+                        response,
+                        message=f"sendMessage returned status {response.status_code}",
+                    )
                 return True
 
         try:
@@ -217,7 +222,11 @@ class AdminNotificationService:
             async with httpx.AsyncClient() as client:
                 response = await client.post(url, json=payload, timeout=30.0)
                 if response.status_code != 200:
-                    raise Exception(f"Telegram API returned {response.status_code}")
+                    raise TelegramError.from_response(
+                        "sendPhoto",
+                        response,
+                        message=f"sendPhoto returned status {response.status_code}",
+                    )
                 return True
 
         try:
@@ -255,7 +264,11 @@ class AdminNotificationService:
                     timeout=30.0
                 )
                 if response.status_code != 200:
-                    raise Exception(f"WhatsApp API returned {response.status_code}")
+                    raise WhatsAppError.from_response(
+                        "send",
+                        response,
+                        message=f"gateway /send returned status {response.status_code}",
+                    )
                 return True
 
         try:
@@ -293,7 +306,11 @@ class AdminNotificationService:
                     timeout=30.0
                 )
                 if response.status_code != 200:
-                    raise Exception(f"WhatsApp API returned {response.status_code}")
+                    raise WhatsAppError.from_response(
+                        "send-media",
+                        response,
+                        message=f"gateway /send-media returned status {response.status_code}",
+                    )
                 return True
 
         try:
