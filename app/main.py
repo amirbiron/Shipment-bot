@@ -125,7 +125,9 @@ async def swagger_ui_html() -> HTMLResponse:
         swagger_js_url="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js",
         swagger_ui_parameters={
             "displayRequestDuration": True,
-            "defaultModelsExpandDepth": -1,
+            # Keep Schemas/Models visible at the bottom (Swagger UI "Schemas" section).
+            # Setting this to -1 hides them completely.
+            "defaultModelsExpandDepth": 1,
         },
     )
 
