@@ -267,14 +267,15 @@ class SenderStateHandler:
             apartment = msg
 
         safe_full_address = escape(full_address)
+        # לאחר כתובת איסוף - שואלים על סוג המשלוח (בתוך/מחוץ לעיר)
         response = MessageResponse(
             f"📍 כתובת איסוף נשמרה:\n"
             f"{safe_full_address}\n\n"
-            "עכשיו נזין את כתובת היעד.\n"
-            "🎯 <b>כתובת יעד</b>\n"
-            "מה העיר?"
+            "לאן תרצו להעביר את המשלוח?",
+            keyboard=[["🏙️ בתוך העיר", "🚗 מחוץ לעיר"]],
+            inline=True
         )
-        return response, SenderState.DROPOFF_CITY.value, {
+        return response, SenderState.DELIVERY_LOCATION.value, {
             "pickup_apartment": apartment,
             "pickup_address": full_address
         }
@@ -340,7 +341,7 @@ class SenderStateHandler:
         return response, SenderState.DROPOFF_APARTMENT.value, {"dropoff_number": number}
 
     async def _handle_dropoff_apartment(self, message: str, context: dict, user_id: int):
-        """Collect dropoff apartment/floor (optional) and ask about delivery location"""
+        """Collect dropoff apartment/floor (optional) and ask about urgency"""
         msg = message.strip()
 
         city = context.get("dropoff_city", "")
@@ -359,14 +360,15 @@ class SenderStateHandler:
         # Check if same city or different city
         same_city = pickup_city.strip().lower() == city.strip().lower()
 
+        # לאחר כתובת יעד - עוברים לשאלת הדחיפות
         safe_full_dropoff = escape(full_dropoff)
         response = MessageResponse(
             f"🎯 כתובת יעד נשמרה:\n{safe_full_dropoff}\n\n"
-            "לאן תרצו להעביר את המשלוח?",
-            keyboard=[["🏙️ בתוך העיר", "🚗 מחוץ לעיר"]],
+            "האם המשלוח דחוף?",
+            keyboard=[["🚀 מיידי", "☕ בנחת"]],
             inline=True
         )
-        return response, SenderState.DELIVERY_LOCATION.value, {
+        return response, SenderState.DELIVERY_URGENCY.value, {
             "dropoff_apartment": apartment,
             "dropoff_address": full_dropoff,
             "same_city": same_city
@@ -405,13 +407,14 @@ class SenderStateHandler:
             )
             return response, SenderState.DELIVERY_LOCATION.value, {}
 
+        # לאחר בחירת סוג משלוח - עוברים לכתובת יעד
         response = MessageResponse(
             f"סוג משלוח: {location_text} ✓\n\n"
-            "האם המשלוח דחוף?",
-            keyboard=[["🚀 מיידי", "☕ בנחת"]],
-            inline=True
+            "עכשיו נזין את כתובת היעד.\n"
+            "🎯 <b>כתובת יעד</b>\n"
+            "מה העיר?"
         )
-        return response, SenderState.DELIVERY_URGENCY.value, {"delivery_location": location_type}
+        return response, SenderState.DROPOFF_CITY.value, {"delivery_location": location_type}
 
     async def _handle_delivery_urgency(self, message: str, context: dict, user_id: int):
         """Handle urgency selection (immediate/later)"""
