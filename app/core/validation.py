@@ -423,3 +423,46 @@ def sanitized_text_validator(v: str | None, max_length: int = 1000) -> str | Non
     if not is_safe:
         raise ValueError(f"Invalid input: {pattern}")
     return TextSanitizer.sanitize(v, max_length)
+
+
+def convert_html_to_whatsapp(text: str) -> str:
+    """
+    ממיר תגי HTML לפורמט וואטסאפ.
+
+    וואטסאפ משתמש בפורמט שונה מ-HTML:
+    - Bold: *text* (במקום <b>text</b>)
+    - Italic: _text_ (במקום <i>text</i>)
+    - Strikethrough: ~text~ (במקום <s>text</s>)
+    - Monospace: `text` (במקום <code>text</code>)
+
+    Args:
+        text: טקסט עם תגי HTML
+
+    Returns:
+        טקסט מומר לפורמט וואטסאפ
+    """
+    if not text:
+        return ""
+
+    # המרת תגי bold
+    result = re.sub(r"<b>(.*?)</b>", r"*\1*", text, flags=re.DOTALL)
+    result = re.sub(r"<strong>(.*?)</strong>", r"*\1*", result, flags=re.DOTALL)
+
+    # המרת תגי italic
+    result = re.sub(r"<i>(.*?)</i>", r"_\1_", result, flags=re.DOTALL)
+    result = re.sub(r"<em>(.*?)</em>", r"_\1_", result, flags=re.DOTALL)
+
+    # המרת תגי strikethrough
+    result = re.sub(r"<s>(.*?)</s>", r"~\1~", result, flags=re.DOTALL)
+    result = re.sub(r"<strike>(.*?)</strike>", r"~\1~", result, flags=re.DOTALL)
+    result = re.sub(r"<del>(.*?)</del>", r"~\1~", result, flags=re.DOTALL)
+
+    # המרת תגי code
+    result = re.sub(r"<code>(.*?)</code>", r"`\1`", result, flags=re.DOTALL)
+    result = re.sub(r"<pre>(.*?)</pre>", r"```\1```", result, flags=re.DOTALL)
+
+    # הסרת תגי HTML נוספים שלא נתמכים (כמו <a>, <br> וכו')
+    result = re.sub(r"<br\s*/?>", "\n", result, flags=re.IGNORECASE)
+    result = re.sub(r"<[^>]+>", "", result)
+
+    return result
