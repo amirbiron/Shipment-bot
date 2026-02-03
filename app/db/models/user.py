@@ -37,7 +37,16 @@ class User(Base):
     telegram_chat_id = Column(String(50), unique=True, nullable=True, index=True)
 
     # Courier-specific fields
-    approval_status = Column(SQLEnum(ApprovalStatus, name='approval_status', create_type=False), nullable=True, index=True)
+    approval_status = Column(
+        SQLEnum(
+            ApprovalStatus,
+            name='approval_status',
+            create_type=False,
+            values_callable=lambda x: [e.value for e in x]  # שולח 'pending' במקום 'PENDING'
+        ),
+        nullable=True,
+        index=True
+    )
     id_document_url = Column(Text, nullable=True)  # Path to ID/license photo
     service_area = Column(String(100), nullable=True)  # Geographic area
     terms_accepted_at = Column(DateTime, nullable=True)

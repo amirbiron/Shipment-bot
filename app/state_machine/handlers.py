@@ -795,7 +795,23 @@ class CourierStateHandler:
 
         await self.db.refresh(user)
 
-        # בדיקה קריטית: אם המשתמש לא סיים את הרישום - מחזירים אותו להתחלה
+        # בדיקת סטטוס חסימה/דחייה קודם - למניעת עקיפת החסימה דרך הרשמה מחדש
+        if user.approval_status == ApprovalStatus.BLOCKED:
+            response = MessageResponse(
+                "❌ חשבונך נחסם. לפרטים נוספים, פנה להנהלה.\n\n"
+                "💡 לחזרה לתפריט הראשי (כשולח חבילות) לחצו על #"
+            )
+            return response, CourierState.PENDING_APPROVAL.value, {}
+
+        if user.approval_status == ApprovalStatus.REJECTED:
+            response = MessageResponse(
+                "לצערנו, בקשתך להצטרף כשליח נדחתה. לפרטים נוספים, פנה להנהלה.\n\n"
+                "💡 לחזרה לתפריט הראשי (כשולח חבילות) לחצו על #"
+            )
+            return response, CourierState.PENDING_APPROVAL.value, {}
+
+        # בדיקה: אם המשתמש לא סיים את הרישום - מחזירים אותו להתחלה
+        # (רק אם הוא לא חסום/נדחה)
         if user.terms_accepted_at is None:
             logger.info(
                 "User in pending_approval but didn't complete registration, restarting",
@@ -805,20 +821,6 @@ class CourierStateHandler:
 
         if user.approval_status == ApprovalStatus.APPROVED:
             return await self._handle_menu(user, message, context, photo_file_id)
-
-        if user.approval_status == ApprovalStatus.REJECTED:
-            response = MessageResponse(
-                "לצערנו, בקשתך להצטרף כשליח נדחתה. לפרטים נוספים, פנה להנהלה.\n\n"
-                "💡 לחזרה לתפריט הראשי (כשולח חבילות) לחצו על #"
-            )
-            return response, CourierState.PENDING_APPROVAL.value, {}
-
-        if user.approval_status == ApprovalStatus.BLOCKED:
-            response = MessageResponse(
-                "❌ חשבונך נחסם. לפרטים נוספים, פנה להנהלה.\n\n"
-                "💡 לחזרה לתפריט הראשי (כשולח חבילות) לחצו על #"
-            )
-            return response, CourierState.PENDING_APPROVAL.value, {}
 
         response = MessageResponse(
             "⏳ בקשתך עדיין בבדיקה. תקבל הודעה ברגע שחשבונך יאושר.\n\n"

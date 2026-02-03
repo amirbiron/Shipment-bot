@@ -15,7 +15,7 @@ from app.state_machine.manager import StateManager
 from app.domain.services import AdminNotificationService
 from app.core.logging import get_logger
 from app.core.circuit_breaker import get_whatsapp_circuit_breaker
-from app.core.validation import PhoneNumberValidator
+from app.core.validation import PhoneNumberValidator, convert_html_to_whatsapp
 
 logger = get_logger(__name__)
 
@@ -74,9 +74,13 @@ async def get_or_create_user(
 async def send_whatsapp_message(phone_number: str, text: str, keyboard: list = None) -> None:
     """
     Send message via WhatsApp Gateway (Node.js microservice) with circuit breaker protection.
+    ממיר אוטומטית תגי HTML לפורמט וואטסאפ.
     """
     import httpx
     from app.core.config import settings
+
+    # המרת תגי HTML לפורמט וואטסאפ (לדוגמה: <b> -> *)
+    formatted_text = convert_html_to_whatsapp(text)
 
     circuit_breaker = get_whatsapp_circuit_breaker()
 
@@ -86,7 +90,7 @@ async def send_whatsapp_message(phone_number: str, text: str, keyboard: list = N
                 f"{settings.WHATSAPP_GATEWAY_URL}/send",
                 json={
                     "phone": phone_number,
-                    "message": text,
+                    "message": formatted_text,
                     "keyboard": keyboard
                 },
                 timeout=30.0
@@ -264,7 +268,8 @@ async def whatsapp_webhook(
                     user.full_name or user.name or "לא צוין",
                     user.service_area or "לא צוין",
                     user.phone_number,
-                    context.get("document_file_id")
+                    context.get("document_file_id"),
+                    "whatsapp"  # פלטפורמה
                 )
 
             # Check if courier submitted deposit screenshot
