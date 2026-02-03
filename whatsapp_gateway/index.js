@@ -13,7 +13,7 @@ const wppconnect = require('@wppconnect-team/wppconnect');
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));  // הגדלת לימיט לתמיכה בתמונות base64
 
 // Get API webhook URL from environment variable
 const API_WEBHOOK_URL = process.env.API_WEBHOOK_URL || 'http://localhost:8000/api/webhooks/whatsapp/webhook';

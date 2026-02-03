@@ -34,8 +34,8 @@ class AdminNotificationService:
             # הערה: document_file_id הוא platform-specific
             # תמונה מוואטסאפ תישלח רק לקבוצת וואטסאפ
             has_whatsapp_photo = document_file_id and platform == "whatsapp"
-            whatsapp_message = f"""
-👤 *שליח חדש מבקש להירשם!*
+            # בקבוצות לא תומכים ב-list messages, לכן שולחים הודעה רגילה
+            whatsapp_message = f"""👤 *שליח חדש מבקש להירשם!*
 
 📋 *פרטים:*
 • שם מלא: {full_name}
@@ -44,13 +44,17 @@ class AdminNotificationService:
 • פלטפורמה: {platform}
 
 📎 מסמך זהות: {'נשלח (ראה למטה)' if has_whatsapp_photo else 'נשלח (זמין בטלגרם)' if document_file_id else 'לא נשלח'}
-"""
+
+לאישור השליח, שלחו:
+✅ אשר שליח {user_id}
+
+לדחיית השליח, שלחו:
+❌ דחה שליח {user_id}"""
+            # שולחים בלי keyboard כי list messages לא עובדים בקבוצות
             whatsapp_success = await AdminNotificationService._send_whatsapp_admin_message(
                 settings.WHATSAPP_ADMIN_GROUP_ID,
                 whatsapp_message,
-                keyboard=[
-                    [f"✅ אשר שליח {user_id}", f"❌ דחה שליח {user_id}"]
-                ]
+                keyboard=None
             )
             success = success or whatsapp_success
 
