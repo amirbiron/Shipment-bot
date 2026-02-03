@@ -2,7 +2,7 @@
 Telegram Webhook Handler - Bot Gateway Layer
 """
 from fastapi import APIRouter, Depends, BackgroundTasks
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -42,27 +42,23 @@ class TelegramPhotoSize(BaseModel):
 
 
 class TelegramMessage(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     message_id: int
-    from_user: Optional[TelegramUser] = None
+    from_user: Optional[TelegramUser] = Field(default=None, alias="from")
     chat: TelegramChat
     text: Optional[str] = None
     photo: Optional[List[TelegramPhotoSize]] = None
     date: int
 
-    class Config:
-        populate_by_name = True
-        fields = {'from_user': 'from'}
-
 
 class TelegramCallbackQuery(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     id: str
-    from_user: Optional[TelegramUser] = None
+    from_user: Optional[TelegramUser] = Field(default=None, alias="from")
     message: Optional[TelegramMessage] = None
     data: Optional[str] = None
-
-    class Config:
-        populate_by_name = True
-        fields = {'from_user': 'from'}
 
 
 class TelegramUpdate(BaseModel):

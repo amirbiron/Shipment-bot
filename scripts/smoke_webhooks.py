@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -40,7 +40,7 @@ def _timeout_seconds() -> float:
 
 
 def _get_health_payload() -> dict:
-    return {"timestamp": datetime.utcnow().isoformat() + "Z"}
+    return {"timestamp": datetime.now(timezone.utc).isoformat()}
 
 
 def _telegram_payload() -> dict:
@@ -74,8 +74,10 @@ def _whatsapp_payload() -> dict:
 def _check_status(resp: httpx.Response, expected_family: int = 2) -> None:
     family = resp.status_code // 100
     if family != expected_family:
+        correlation_id = resp.headers.get("x-correlation-id") or resp.headers.get("X-Correlation-ID")
         raise RuntimeError(
             f"Unexpected status {resp.status_code} for {resp.request.method} {resp.request.url}. "
+            f"X-Correlation-ID: {correlation_id}. "
             f"Body: {(resp.text or '')[:500]}"
         )
 
