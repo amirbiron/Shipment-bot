@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from app.db.models.outbox_message import OutboxMessage, MessagePlatform, MessageStatus
 from app.db.models.delivery import Delivery
+from app.core.config import settings
 
 
 class OutboxService:
@@ -63,6 +64,17 @@ class OutboxService:
                 f"לתפיסת המשלוח הקלידו: /capture {delivery.token}"
             )
         }
+
+        # Optional WhatsApp group broadcast (single group chat)
+        group_id = (settings.WHATSAPP_COURIER_GROUP_ID or "").strip()
+        if group_id:
+            group_msg = await self.queue_message(
+                platform=MessagePlatform.WHATSAPP,
+                recipient_id=group_id,
+                message_type="delivery_broadcast_group",
+                message_content=content
+            )
+            messages.append(group_msg)
 
         # Queue for WhatsApp broadcast (placeholder recipient - actual recipients resolved by worker)
         whatsapp_msg = await self.queue_message(
