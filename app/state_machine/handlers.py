@@ -795,12 +795,28 @@ class CourierStateHandler:
 
         await self.db.refresh(user)
 
+        # בדיקה קריטית: אם המשתמש לא סיים את הרישום - מחזירים אותו להתחלה
+        if user.terms_accepted_at is None:
+            logger.info(
+                "User in pending_approval but didn't complete registration, restarting",
+                extra_data={"user_id": user.id}
+            )
+            return await self._handle_initial(user, message, context, photo_file_id)
+
         if user.approval_status == ApprovalStatus.APPROVED:
             return await self._handle_menu(user, message, context, photo_file_id)
 
         if user.approval_status == ApprovalStatus.REJECTED:
             response = MessageResponse(
-                "לצערנו, בקשתך להצטרף כשליח נדחתה. לפרטים נוספים, פנה להנהלה."
+                "לצערנו, בקשתך להצטרף כשליח נדחתה. לפרטים נוספים, פנה להנהלה.\n\n"
+                "💡 לחזרה לתפריט הראשי (כשולח חבילות) לחצו על #"
+            )
+            return response, CourierState.PENDING_APPROVAL.value, {}
+
+        if user.approval_status == ApprovalStatus.BLOCKED:
+            response = MessageResponse(
+                "❌ חשבונך נחסם. לפרטים נוספים, פנה להנהלה.\n\n"
+                "💡 לחזרה לתפריט הראשי (כשולח חבילות) לחצו על #"
             )
             return response, CourierState.PENDING_APPROVAL.value, {}
 
