@@ -72,8 +72,16 @@ async def test_debit_for_capture_returns_none_when_credit_limit_exceeded(
 async def test_debit_for_capture_creates_ledger_entry_without_commit(
     user_factory, wallet_factory, delivery_factory, db_session
 ):
-    sender = await user_factory(role=UserRole.SENDER, platform="whatsapp")
-    courier = await user_factory(role=UserRole.COURIER, platform="whatsapp")
+    sender = await user_factory(
+        phone_number="+972501000001",
+        role=UserRole.SENDER,
+        platform="whatsapp",
+    )
+    courier = await user_factory(
+        phone_number="+972501000002",
+        role=UserRole.COURIER,
+        platform="whatsapp",
+    )
     delivery = await delivery_factory(sender_id=sender.id, fee=10.0)
     await wallet_factory(courier_id=courier.id, balance=100.0, credit_limit=-500.0)
 
@@ -108,8 +116,16 @@ async def test_debit_for_capture_creates_ledger_entry_without_commit(
 async def test_credit_for_delivery_updates_balance_and_persists_ledger(
     user_factory, wallet_factory, delivery_factory, db_session
 ):
-    sender = await user_factory(role=UserRole.SENDER, platform="whatsapp")
-    courier = await user_factory(role=UserRole.COURIER, platform="whatsapp")
+    sender = await user_factory(
+        phone_number="+972501000003",
+        role=UserRole.SENDER,
+        platform="whatsapp",
+    )
+    courier = await user_factory(
+        phone_number="+972501000004",
+        role=UserRole.COURIER,
+        platform="whatsapp",
+    )
     delivery = await delivery_factory(sender_id=sender.id, fee=10.0)
     await wallet_factory(courier_id=courier.id, balance=50.0, credit_limit=-500.0)
 
@@ -140,8 +156,16 @@ async def test_credit_for_delivery_updates_balance_and_persists_ledger(
 async def test_get_ledger_history_returns_latest_first(
     user_factory, wallet_factory, delivery_factory, db_session
 ):
-    sender = await user_factory(role=UserRole.SENDER, platform="whatsapp")
-    courier = await user_factory(role=UserRole.COURIER, platform="whatsapp")
+    sender = await user_factory(
+        phone_number="+972501000005",
+        role=UserRole.SENDER,
+        platform="whatsapp",
+    )
+    courier = await user_factory(
+        phone_number="+972501000006",
+        role=UserRole.COURIER,
+        platform="whatsapp",
+    )
     await wallet_factory(courier_id=courier.id, balance=0.0, credit_limit=-500.0)
 
     service = WalletService(db_session)
