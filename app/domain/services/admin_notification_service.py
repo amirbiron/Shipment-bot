@@ -35,21 +35,17 @@ class AdminNotificationService:
             # תמונה מוואטסאפ תישלח רק לקבוצת וואטסאפ
             has_whatsapp_photo = document_file_id and platform == "whatsapp"
             # בקבוצות לא תומכים ב-list messages, לכן שולחים הודעה רגילה
-            whatsapp_message = f"""👤 *שליח חדש מבקש להירשם!*
+            whatsapp_message = f"""👤 *שליח חדש #{user_id}*
 
 📋 *פרטים:*
-• שם מלא: {full_name}
+• שם: {full_name}
 • אזור: {service_area}
-• מזהה: {phone_or_chat_id}
 • פלטפורמה: {platform}
 
-📎 מסמך זהות: {'נשלח (ראה למטה)' if has_whatsapp_photo else 'נשלח (זמין בטלגרם)' if document_file_id else 'לא נשלח'}
+📎 מסמך: {'נשלח למטה ⬇️' if has_whatsapp_photo else 'זמין בטלגרם' if document_file_id else 'לא נשלח'}
 
-לאישור השליח, שלחו:
-✅ אשר שליח {user_id}
-
-לדחיית השליח, שלחו:
-❌ דחה שליח {user_id}"""
+✅ לאישור: *אשר {user_id}*
+❌ לדחייה: *דחה {user_id}*"""
             # שולחים בלי keyboard כי list messages לא עובדים בקבוצות
             whatsapp_success = await AdminNotificationService._send_whatsapp_admin_message(
                 settings.WHATSAPP_ADMIN_GROUP_ID,
@@ -60,32 +56,35 @@ class AdminNotificationService:
 
             # שליחת התמונה לוואטסאפ רק אם היא מוואטסאפ
             if has_whatsapp_photo and whatsapp_success:
-                await AdminNotificationService._send_whatsapp_admin_photo(
+                logger.info(
+                    "Sending document photo to WhatsApp admin group",
+                    extra_data={"user_id": user_id, "has_media_url": bool(document_file_id)}
+                )
+                photo_sent = await AdminNotificationService._send_whatsapp_admin_photo(
                     settings.WHATSAPP_ADMIN_GROUP_ID,
                     document_file_id
                 )
+                if not photo_sent:
+                    logger.warning(
+                        "Failed to send document photo to WhatsApp admin group",
+                        extra_data={"user_id": user_id}
+                    )
 
         # שליחה לטלגרם (אם מוגדר)
         if settings.TELEGRAM_ADMIN_CHAT_ID and settings.TELEGRAM_BOT_TOKEN:
             # תמונה מטלגרם תישלח רק לקבוצת טלגרם
             has_telegram_photo = document_file_id and platform == "telegram"
-            telegram_message = f"""
-👤 <b>שליח חדש מבקש להירשם!</b>
+            telegram_message = f"""👤 <b>שליח חדש #{user_id}</b>
 
 📋 <b>פרטים:</b>
-• שם מלא: {full_name}
+• שם: {full_name}
 • אזור: {service_area}
-• מזהה: {phone_or_chat_id}
 • פלטפורמה: {platform}
 
-📎 מסמך זהות: {'נשלח (ראה למטה)' if has_telegram_photo else 'נשלח (זמין בוואטסאפ)' if document_file_id else 'לא נשלח'}
+📎 מסמך: {'נשלח למטה ⬇️' if has_telegram_photo else 'זמין בוואטסאפ' if document_file_id else 'לא נשלח'}
 
-לאישור השליח:
-<code>/approve {user_id}</code>
-
-לדחיית השליח:
-<code>/reject {user_id}</code>
-"""
+✅ לאישור: <code>/approve {user_id}</code>
+❌ לדחייה: <code>/reject {user_id}</code>"""
             telegram_success = await AdminNotificationService._send_telegram_message(
                 settings.TELEGRAM_ADMIN_CHAT_ID,
                 telegram_message
@@ -273,6 +272,11 @@ class AdminNotificationService:
     async def _send_whatsapp_admin_photo(group_id: str, media_url: str) -> bool:
         """שליחת תמונה לקבוצת מנהלים בוואטסאפ"""
         if not settings.WHATSAPP_GATEWAY_URL:
+            logger.warning("WhatsApp gateway URL not configured for photo sending")
+            return False
+
+        if not media_url:
+            logger.warning("No media_url provided for WhatsApp admin photo")
             return False
 
         circuit_breaker = get_whatsapp_circuit_breaker()
