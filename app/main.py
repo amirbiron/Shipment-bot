@@ -5,7 +5,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -135,35 +135,12 @@ async def swagger_ui_html() -> HTMLResponse:
 @app.get("/redoc", include_in_schema=False)
 async def redoc_html():
     """
-    ReDoc documentation endpoint (RTL + Hebrew-friendly styling).
+    ReDoc documentation endpoint (default FastAPI page, English).
 
     משתמש ב-unpkg במקום jsdelivr כדי למנוע בעיות טעינה שגורמות לדף ריק.
     """
-    # FastAPI's get_redoc_html doesn't support custom CSS/dir attributes,
-    # so we return our own HTML with RTL styling.
-    redoc_js_url = "https://unpkg.com/redoc@latest/bundles/redoc.standalone.js"
-    html = f"""<!DOCTYPE html>
-<html lang="he" dir="rtl">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{app.title} - תיעוד API (ReDoc)</title>
-    <style>
-      html, body {{
-        margin: 0;
-        padding: 0;
-        direction: rtl;
-        font-family: system-ui, -apple-system, Segoe UI, Arial, "Noto Sans Hebrew", sans-serif;
-      }}
-      /* A light touch: keep the menu readable in RTL layouts */
-      redoc {{
-        direction: rtl;
-      }}
-    </style>
-  </head>
-  <body>
-    <redoc spec-url="{app.openapi_url}"></redoc>
-    <script src="{redoc_js_url}"></script>
-  </body>
-</html>"""
-    return HTMLResponse(html)
+    return get_redoc_html(
+        openapi_url=app.openapi_url,
+        title=f"{app.title} - ReDoc",
+        redoc_js_url="https://unpkg.com/redoc@latest/bundles/redoc.standalone.js",
+    )
