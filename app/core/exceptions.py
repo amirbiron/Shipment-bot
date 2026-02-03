@@ -299,6 +299,35 @@ class TelegramError(ExternalServiceException):
             details=details
         )
 
+    @classmethod
+    def from_response(
+        cls,
+        operation: str,
+        response: Any,
+        *,
+        message: str | None = None,
+        max_response_chars: int = 500
+    ) -> "TelegramError":
+        """
+        יצירת TelegramError מתוך HTTP response בצורה עקבית.
+
+        Args:
+            operation: שם הפעולה (לדוגמה: sendMessage, sendPhoto)
+            response: אובייקט response (למשל httpx.Response)
+            message: הודעת שגיאה מותאמת (אם לא סופק - נבנית אוטומטית)
+            max_response_chars: אורך מקסימלי לשמירת response_text (מניעת לוגים גדולים)
+        """
+        status_code = getattr(response, "status_code", None)
+        response_text = getattr(response, "text", "") or ""
+        return cls(
+            message=message or f"{operation} returned status {status_code}",
+            details={
+                "operation": operation,
+                "status_code": status_code,
+                "response_text": response_text[:max_response_chars],
+            },
+        )
+
 
 class WhatsAppError(ExternalServiceException):
     """Raised when WhatsApp API fails"""
@@ -309,6 +338,35 @@ class WhatsAppError(ExternalServiceException):
             message=f"WhatsApp API error: {message}",
             error_code=ErrorCode.WHATSAPP_ERROR,
             details=details
+        )
+
+    @classmethod
+    def from_response(
+        cls,
+        operation: str,
+        response: Any,
+        *,
+        message: str | None = None,
+        max_response_chars: int = 500
+    ) -> "WhatsAppError":
+        """
+        יצירת WhatsAppError מתוך HTTP response בצורה עקבית.
+
+        Args:
+            operation: שם הפעולה (לדוגמה: send, send-media)
+            response: אובייקט response (למשל httpx.Response)
+            message: הודעת שגיאה מותאמת (אם לא סופק - נבנית אוטומטית)
+            max_response_chars: אורך מקסימלי לשמירת response_text (מניעת לוגים גדולים)
+        """
+        status_code = getattr(response, "status_code", None)
+        response_text = getattr(response, "text", "") or ""
+        return cls(
+            message=message or f"{operation} returned status {status_code}",
+            details={
+                "operation": operation,
+                "status_code": status_code,
+                "response_text": response_text[:max_response_chars],
+            },
         )
 
 

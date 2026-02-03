@@ -81,13 +81,10 @@ async def _send_whatsapp_message(phone: str, content: dict) -> bool:
                 timeout=30.0
             )
             if response.status_code != 200:
-                raise WhatsAppError(
+                raise WhatsAppError.from_response(
+                    "send",
+                    response,
                     message=f"gateway /send returned status {response.status_code}",
-                    details={
-                        "operation": "send",
-                        "status_code": response.status_code,
-                        "response_text": (response.text or "")[:500],
-                    },
                 )
             return True
 
@@ -126,13 +123,10 @@ async def _send_telegram_message(chat_id: str, content: dict) -> bool:
                 timeout=30.0
             )
             if response.status_code != 200:
-                raise TelegramError(
+                raise TelegramError.from_response(
+                    "sendMessage",
+                    response,
                     message=f"sendMessage returned status {response.status_code}",
-                    details={
-                        "operation": "sendMessage",
-                        "status_code": response.status_code,
-                        "response_text": (response.text or "")[:500],
-                    },
                 )
             return True
 

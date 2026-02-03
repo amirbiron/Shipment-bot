@@ -185,13 +185,10 @@ class AdminNotificationService:
             async with httpx.AsyncClient() as client:
                 response = await client.post(url, json=payload, timeout=30.0)
                 if response.status_code != 200:
-                    raise TelegramError(
+                    raise TelegramError.from_response(
+                        "sendMessage",
+                        response,
                         message=f"sendMessage returned status {response.status_code}",
-                        details={
-                            "operation": "sendMessage",
-                            "status_code": response.status_code,
-                            "response_text": (response.text or "")[:500],
-                        },
                     )
                 return True
 
@@ -225,13 +222,10 @@ class AdminNotificationService:
             async with httpx.AsyncClient() as client:
                 response = await client.post(url, json=payload, timeout=30.0)
                 if response.status_code != 200:
-                    raise TelegramError(
+                    raise TelegramError.from_response(
+                        "sendPhoto",
+                        response,
                         message=f"sendPhoto returned status {response.status_code}",
-                        details={
-                            "operation": "sendPhoto",
-                            "status_code": response.status_code,
-                            "response_text": (response.text or "")[:500],
-                        },
                     )
                 return True
 
@@ -270,13 +264,10 @@ class AdminNotificationService:
                     timeout=30.0
                 )
                 if response.status_code != 200:
-                    raise WhatsAppError(
+                    raise WhatsAppError.from_response(
+                        "send",
+                        response,
                         message=f"gateway /send returned status {response.status_code}",
-                        details={
-                            "operation": "send",
-                            "status_code": response.status_code,
-                            "response_text": (response.text or "")[:500],
-                        },
                     )
                 return True
 
@@ -315,13 +306,10 @@ class AdminNotificationService:
                     timeout=30.0
                 )
                 if response.status_code != 200:
-                    raise WhatsAppError(
+                    raise WhatsAppError.from_response(
+                        "send-media",
+                        response,
                         message=f"gateway /send-media returned status {response.status_code}",
-                        details={
-                            "operation": "send-media",
-                            "status_code": response.status_code,
-                            "response_text": (response.text or "")[:500],
-                        },
                     )
                 return True
 

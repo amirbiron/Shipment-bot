@@ -99,13 +99,10 @@ async def send_whatsapp_message(phone_number: str, text: str, keyboard: list = N
                 timeout=30.0
             )
             if response.status_code != 200:
-                raise WhatsAppError(
+                raise WhatsAppError.from_response(
+                    "send",
+                    response,
                     message=f"gateway /send returned status {response.status_code}",
-                    details={
-                        "operation": "send",
-                        "status_code": response.status_code,
-                        "response_text": (response.text or "")[:500],
-                    },
                 )
 
     try:

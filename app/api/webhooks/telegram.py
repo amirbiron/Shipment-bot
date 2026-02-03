@@ -147,13 +147,10 @@ async def send_telegram_message(
         async with httpx.AsyncClient() as client:
             response = await client.post(url, json=payload, timeout=30.0)
             if response.status_code != 200:
-                raise TelegramError(
+                raise TelegramError.from_response(
+                    "sendMessage",
+                    response,
                     message=f"sendMessage returned status {response.status_code}",
-                    details={
-                        "operation": "sendMessage",
-                        "status_code": response.status_code,
-                        "response_text": (response.text or "")[:500],
-                    },
                 )
 
     try:
@@ -185,13 +182,10 @@ async def answer_callback_query(callback_query_id: str, text: str = None) -> Non
         async with httpx.AsyncClient() as client:
             response = await client.post(url, json=payload, timeout=30.0)
             if response.status_code != 200:
-                raise TelegramError(
+                raise TelegramError.from_response(
+                    "answerCallbackQuery",
+                    response,
                     message=f"answerCallbackQuery returned status {response.status_code}",
-                    details={
-                        "operation": "answerCallbackQuery",
-                        "status_code": response.status_code,
-                        "response_text": (response.text or "")[:500],
-                    },
                 )
 
     try:
