@@ -3,6 +3,7 @@ Shipment Bot - Main FastAPI Application
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.docs import get_redoc_html
 
 from app.core.config import settings
 from app.core.logging import setup_logging, get_logger
@@ -30,7 +31,7 @@ app = FastAPI(
     version="1.0.0",
     description="Delivery dispatch bot system for WhatsApp and Telegram",
     docs_url="/docs",
-    redoc_url="/redoc",
+    redoc_url=None,  # משתמשים ב-endpoint מותאם במקום
     openapi_url="/openapi.json"
 )
 
@@ -82,3 +83,18 @@ async def shutdown() -> None:
 async def health_check() -> dict[str, str]:
     """Health check endpoint"""
     return {"status": "healthy"}
+
+
+@app.get("/redoc", include_in_schema=False)
+async def redoc_html():
+    """
+    ReDoc documentation endpoint עם CDN מותאם.
+
+    משתמש ב-unpkg במקום jsdelivr כדי למנוע בעיות טעינה
+    שגורמות לדף ריק.
+    """
+    return get_redoc_html(
+        openapi_url=app.openapi_url,
+        title=f"{app.title} - ReDoc",
+        redoc_js_url="https://unpkg.com/redoc@latest/bundles/redoc.standalone.js",
+    )
