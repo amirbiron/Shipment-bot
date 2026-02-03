@@ -1,6 +1,7 @@
 """
 Telegram Webhook Handler - Bot Gateway Layer
 """
+import hashlib
 from fastapi import APIRouter, Depends, BackgroundTasks
 from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, List
@@ -20,6 +21,19 @@ from app.core.exceptions import TelegramError
 logger = get_logger(__name__)
 
 router = APIRouter()
+
+def _telegram_phone_placeholder(telegram_chat_id: str) -> str:
+    """
+    יצירת placeholder קצר ל-phone_number עבור משתמשי Telegram.
+
+    חלק מהסביבות (למשל DB בפרודקשן) מגדירות phone_number כ-NOT NULL,
+    למרות שבטלגרם אין מספר טלפון אמין בשלב ה-webhook.
+    """
+    candidate = f"tg:{telegram_chat_id}"
+    if len(candidate) <= 20:
+        return candidate
+    digest = hashlib.sha1(telegram_chat_id.encode("utf-8")).hexdigest()[:17]
+    return f"tg:{digest}"
 
 
 class TelegramUser(BaseModel):
@@ -80,6 +94,8 @@ async def get_or_create_user(
 
     if not user:
         user = User(
+            # הערה: שומר placeholder כדי למנוע כשלי DB כש-phone_number מוגדר NOT NULL
+            phone_number=_telegram_phone_placeholder(telegram_chat_id),
             telegram_chat_id=telegram_chat_id,
             name=name,
             platform="telegram",

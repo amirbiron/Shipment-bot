@@ -28,7 +28,9 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
-    phone_number = Column(String(20), unique=True, index=True, nullable=True)
+    # הערה: בחלק מהסביבות phone_number מוגדר כ-NOT NULL בפרודקשן,
+    # לכן נשמור על עקביות גם במודל. עבור Telegram אנחנו שומרים placeholder (tg:...).
+    phone_number = Column(String(20), unique=True, index=True, nullable=False)
     name = Column(String(100), nullable=True)
     full_name = Column(String(150), nullable=True)  # Legal name for couriers
     role = Column(SQLEnum(UserRole), default=UserRole.SENDER, nullable=False)
