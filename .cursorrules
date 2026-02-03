@@ -1,0 +1,355 @@
+# כללי Cursor – Shipment Bot
+
+> תחשוב ותענה תמיד **בעברית**. השתמש בשפה פשוטה וידידותית.
+
+---
+
+## 1. סקירת הפרויקט
+
+מערכת בוט לשליחויות לפלטפורמות WhatsApp ו-Telegram.
+
+**Stack טכנולוגי:**
+- FastAPI 0.109+ עם SQLAlchemy 2.0 (async)
+- PostgreSQL 15 + asyncpg
+- Celery 5.3+ עם Redis
+- Telegram Bot API + WhatsApp Gateway (Node.js)
+
+**ארכיטקטורה:**
+```
+Bot Gateway (Webhooks) → Application Layer (State Machine) →
+Domain Layer (Services) → Data Layer (PostgreSQL) ↔
+Task Queue (Celery + Redis)
+```
+
+---
+
+## 2. כללי כתיבה בסיסיים
+
+### שפה ותקשורת
+- **הערות בקוד** – בעברית
+- **תיאורי PR ו-commits** – בעברית
+- **תיעוד API** – באנגלית (OpenAPI standard)
+
+### סגנון קוד
+- הצג את הפתרון הפשוט והאמין ביותר קודם
+- אל תוסיף פיצ'רים או אופטימיזציות שלא נדרשו
+- מחק קוד שלא בשימוש – לא להשאיר commented code
+
+---
+
+## 3. סטנדרטים לקוד Python
+
+### Type Hints (חובה)
+```python
+# נכון
+async def create_delivery(
+    sender_id: int,
+    pickup_address: str,
+    fee: float = 10.0
+) -> Delivery:
+    ...
+
+# לא נכון
+async def create_delivery(sender_id, pickup_address, fee=10.0):
+    ...
+```
+
+### לוגים (חובה להשתמש ב-logger)
+```python
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
+# נכון
+logger.info("Delivery created", extra_data={"delivery_id": 123})
+logger.error("Failed to send", extra_data={"error": str(e)}, exc_info=True)
+
+# לא נכון – אסור!
+print(f"Delivery created: {delivery_id}")
+```
+
+### מיסוך מספרי טלפון (חובה בלוגים)
+```python
+from app.core.validation import PhoneNumberValidator
+
+# נכון – מסתיר את 4 הספרות האחרונות
+logger.info("Message sent", extra_data={
+    "phone": PhoneNumberValidator.mask(phone)  # → +97250123****
+})
+
+# לא נכון – חושף מידע אישי
+logger.info(f"Message sent to {phone}")
+```
+
+### ולידציית קלט (חובה)
+```python
+from app.core.validation import (
+    PhoneNumberValidator,
+    AddressValidator,
+    TextSanitizer
+)
+
+# ולידציית טלפון
+if not PhoneNumberValidator.validate(phone):
+    raise ValueError("Invalid phone number")
+normalized = PhoneNumberValidator.normalize(phone)
+
+# סניטציה של טקסט (מונע XSS/SQL injection)
+safe_text = TextSanitizer.sanitize(user_input)
+is_safe, pattern = TextSanitizer.check_for_injection(user_input)
+```
+
+### Pydantic Models (חובה field validators)
+```python
+from pydantic import BaseModel, field_validator
+from app.core.validation import PhoneNumberValidator
+
+class UserCreate(BaseModel):
+    phone_number: str
+    name: str | None = None
+
+    @field_validator("phone_number")
+    @classmethod
+    def validate_phone(cls, v: str) -> str:
+        if not PhoneNumberValidator.validate(v):
+            raise ValueError("Invalid phone number format")
+        return PhoneNumberValidator.normalize(v)
+```
+
+### טיפול בשגיאות (חובה exceptions מותאמים)
+```python
+from app.core.exceptions import (
+    ValidationException,
+    DeliveryNotFoundError,
+    InsufficientCreditError
+)
+
+# נכון – שגיאה מובנית
+raise DeliveryNotFoundError(delivery_id=123)
+
+# לא נכון – exception גנרי
+raise Exception("Delivery not found")
+```
+
+### Circuit Breaker (חובה לכל API חיצוני)
+```python
+from app.core.circuit_breaker import get_telegram_circuit_breaker
+
+circuit_breaker = get_telegram_circuit_breaker()
+
+async def send_telegram_message():
+    async def _send():
+        # קריאת API כאן
+        pass
+
+    return await circuit_breaker.execute(_send)
+```
+
+---
+
+## 4. תיעוד API (FastAPI)
+
+**כל endpoint חייב לכלול תיעוד OpenAPI:**
+
+```python
+@router.post(
+    "/",
+    response_model=DeliveryResponse,
+    summary="Create a new delivery",
+    description="Creates a new delivery request with pickup and dropoff addresses.",
+    responses={
+        200: {"description": "Delivery created successfully"},
+        422: {"description": "Validation error"}
+    },
+    tags=["Deliveries"]
+)
+async def create_delivery(...) -> DeliveryResponse:
+    """
+    Create a new delivery request.
+
+    - **sender_id**: ID of the sender user
+    - **pickup_address**: Full address for pickup
+    """
+```
+
+---
+
+## 5. State Machine
+
+הפרויקט משתמש ב-State Machine לניהול זרימת שיחה.
+
+### States
+- `SenderState`: INITIAL, REGISTER, MENU, DELIVERY_*, etc.
+- `CourierState`: REGISTER, MENU, CAPTURE, DELIVERY, WALLET, etc.
+
+### כללים
+- כל מעבר state מוגדר ב-`state_machine/states.py`
+- לא להוסיף מעברים ישירים – להשתמש ב-StateManager
+- לשמור על atomicity בפעולות DB
+
+---
+
+## 6. Transactional Outbox Pattern
+
+הודעות נשמרות בטבלת `outbox_messages` באותה טרנזקציה עם הפעולה העסקית:
+
+```python
+async with session.begin():
+    # פעולה עסקית
+    delivery = await create_delivery(...)
+
+    # הוספת הודעה ל-outbox
+    await outbox_service.queue_message(
+        recipient_id=user_id,
+        message_type="delivery_created",
+        content=content
+    )
+    # הכל ב-commit אחד
+```
+
+---
+
+## 7. בדיקות
+
+### הרצה
+```bash
+pip install -r requirements-dev.txt
+pytest                    # כל הבדיקות
+pytest --cov=app          # עם כיסוי קוד
+pytest -k "test_phone"    # בדיקות ספציפיות
+```
+
+### מבנה
+- בדיקות יחידה: `tests/test_*.py`
+- fixtures: `tests/conftest.py`
+- mock לשירותים חיצוניים (Telegram, WhatsApp)
+
+### דוגמה
+```python
+import pytest
+from app.core.validation import PhoneNumberValidator
+
+class TestPhoneValidation:
+    @pytest.mark.unit
+    def test_valid_israeli_phone(self):
+        assert PhoneNumberValidator.validate("0501234567") is True
+
+    @pytest.mark.unit
+    def test_normalize_phone(self):
+        assert PhoneNumberValidator.normalize("050-123-4567") == "+972501234567"
+```
+
+---
+
+## 8. Git ו-CI
+
+### Commits
+השתמש ב-Conventional Commits:
+```
+fix: תיקון בעיית שליחת הודעות
+feat: הוספת תמיכה בהודעות קבוצתיות
+chore: עדכון תלויות
+refactor: שיפור ביצועי capture
+```
+
+### Pull Requests
+- תיאור ה-PR בעברית
+- לכלול: מה נעשה, למה, ואיך לבדוק
+- קישור ל-issue אם רלוונטי
+- לוודא שהבדיקות עוברות
+
+### בדיקות חובה לפני merge
+- `pytest` – כל הבדיקות עוברות
+- `mypy app/` – אין שגיאות טיפוסים
+- `flake8 app/` – אין שגיאות linting
+- `black --check app/` – פורמט תקין
+
+---
+
+## 9. אבטחה ופרטיות
+
+### אסור!
+- **לחשוף מספרי טלפון בלוגים** – השתמש ב-`mask()`
+- **להשתמש ב-print()** – השתמש ב-logger
+- **לקבל קלט ללא ולידציה** – השתמש ב-validators
+- **לשמור secrets בקוד** – השתמש ב-environment variables
+- **לקרוא ל-API חיצוני בלי Circuit Breaker**
+
+### secrets
+```python
+from app.core.config import settings
+
+# נכון
+token = settings.TELEGRAM_BOT_TOKEN
+
+# לא נכון – אסור!
+token = "1234567890:ABC..."
+```
+
+---
+
+## 10. מבנה קבצים
+
+```
+app/
+├── api/
+│   ├── routes/          # API endpoints
+│   └── webhooks/        # Telegram/WhatsApp webhooks
+├── core/
+│   ├── config.py        # הגדרות
+│   ├── logging.py       # לוגים מובנים
+│   ├── validation.py    # ולידטורים
+│   ├── exceptions.py    # exceptions מותאמים
+│   ├── circuit_breaker.py
+│   └── middleware.py    # middleware
+├── db/
+│   ├── models/          # SQLAlchemy models
+│   ├── repositories/    # שכבת גישה לנתונים
+│   └── database.py      # חיבור async ל-DB
+├── domain/
+│   └── services/        # לוגיקה עסקית
+├── state_machine/       # State Machine
+│   ├── states.py        # State enums
+│   ├── manager.py       # StateManager
+│   └── handlers.py      # State handlers
+└── workers/
+    ├── celery_app.py    # Celery configuration
+    └── tasks.py         # Background tasks
+```
+
+---
+
+## 11. Docker
+
+```bash
+# הרצת הסביבה המלאה
+docker-compose up -d
+
+# צפייה בלוגים
+docker-compose logs -f api
+
+# כניסה לקונטיינר
+docker-compose exec api bash
+```
+
+**Services:**
+- `api` – FastAPI (port 8000)
+- `celery-worker` – Background jobs
+- `celery-beat` – Task scheduler
+- `db` – PostgreSQL (port 5432)
+- `redis` – Cache & broker (port 6379)
+- `whatsapp-gateway` – Node.js service (port 3000)
+
+---
+
+## 12. טיפים מהירים
+
+| משימה | פקודה/כלי |
+|-------|-----------|
+| הרצת שרת פיתוח | `uvicorn app.main:app --reload` |
+| הרצת בדיקות | `pytest` |
+| בדיקת טיפוסים | `mypy app/` |
+| פורמט קוד | `black app/` |
+| בדיקת linting | `flake8 app/` |
+| מיגרציות DB | `alembic upgrade head` |
+| יצירת מיגרציה | `alembic revision --autogenerate -m "description"` |
