@@ -123,14 +123,15 @@ async def handle_admin_group_command(
     """
     text = text.strip()
 
-    # זיהוי פקודת אישור: "אשר שליח 123" או "✅ אשר שליח 123"
-    approve_match = re.search(r'אשר\s+שליח\s+(\d+)', text)
+    # זיהוי פקודת אישור - חייב להתחיל בתחילת ההודעה (אחרי אימוג'י אופציונלי)
+    # מונע התאמה של "לא לאשר שליח 123" או ציטוטים
+    approve_match = re.match(r'^[✅\s]*אשר\s+שליח\s+(\d+)\s*$', text)
     if approve_match:
         user_id = int(approve_match.group(1))
         return await _approve_courier(db, user_id)
 
-    # זיהוי פקודת דחייה: "דחה שליח 123" או "❌ דחה שליח 123"
-    reject_match = re.search(r'דחה\s+שליח\s+(\d+)', text)
+    # זיהוי פקודת דחייה - חייב להתחיל בתחילת ההודעה (אחרי אימוג'י אופציונלי)
+    reject_match = re.match(r'^[❌\s]*דחה\s+שליח\s+(\d+)\s*$', text)
     if reject_match:
         user_id = int(reject_match.group(1))
         return await _reject_courier(db, user_id)
