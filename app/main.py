@@ -1,9 +1,13 @@
 """
 Shipment Bot - Main FastAPI Application
 """
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.openapi.docs import get_redoc_html
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.core.logging import setup_logging, get_logger
@@ -26,14 +30,34 @@ def _parse_allowed_origins(raw: str) -> list[str]:
     return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
 
+_OPENAPI_TAGS = [
+    {
+        "name": "Deliveries",
+        "description": "ניהול משלוחים: יצירה, צפייה, תפיסה (שיבוץ שליח), מסירה וביטול.",
+    },
+    {"name": "Users", "description": "ניהול משתמשים (שולחים ושליחים)."},
+    {"name": "Wallets", "description": "ארנק שליחים: יתרה, היסטוריית תנועות ובדיקת אשראי."},
+    {"name": "Webhooks", "description": "Webhook-ים לקבלת הודעות מ-WhatsApp ו-Telegram."},
+    {"name": "Migrations", "description": "Endpoints פנימיים להרצת מיגרציות/התאמות DB."},
+]
+
+
 app = FastAPI(
     title=settings.APP_NAME,
     version="1.0.0",
-    description="Delivery dispatch bot system for WhatsApp and Telegram",
-    docs_url="/docs",
+    description=(
+        "מערכת בוט לניהול משלוחים עבור WhatsApp ו-Telegram. "
+        "התיעוד מבוסס OpenAPI ומוצג ב-Swagger UI וב-ReDoc."
+    ),
+    docs_url=None,  # משתמשים ב-endpoint מותאם במקום
     redoc_url=None,  # משתמשים ב-endpoint מותאם במקום
-    openapi_url="/openapi.json"
+    openapi_tags=_OPENAPI_TAGS,
+    openapi_url="/openapi.json",
 )
+
+# Static assets for docs (RTL CSS, etc.)
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
+app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 
 # Setup middleware (correlation ID, request logging)
 setup_middleware(app)
@@ -79,22 +103,65 @@ async def shutdown() -> None:
     logger.info("Database connections disposed")
 
 
-@app.get("/health")
+@app.get(
+    "/health",
+    summary="בדיקת בריאות (Health Check)",
+    description="Endpoint פשוט לבדיקת זמינות השרת (משמש גם ל-Monitoring ול-Load Balancers).",
+)
 async def health_check() -> dict[str, str]:
     """Health check endpoint"""
     return {"status": "healthy"}
 
 
+@app.get("/docs", include_in_schema=False)
+async def swagger_ui_html() -> HTMLResponse:
+    """Swagger UI documentation (RTL + Hebrew-friendly styling)."""
+    return get_swagger_ui_html(
+        openapi_url=app.openapi_url,
+        title=f"{app.title} - תיעוד API (Swagger UI)",
+        # Our CSS file imports the upstream Swagger UI CSS and adds RTL overrides.
+        swagger_css_url="/static/swagger-rtl.css",
+        # Use unpkg to reduce CDN-specific loading issues.
+        swagger_js_url="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js",
+        swagger_ui_parameters={
+            "displayRequestDuration": True,
+            "defaultModelsExpandDepth": -1,
+        },
+    )
+
+
 @app.get("/redoc", include_in_schema=False)
 async def redoc_html():
     """
-    ReDoc documentation endpoint עם CDN מותאם.
+    ReDoc documentation endpoint (RTL + Hebrew-friendly styling).
 
-    משתמש ב-unpkg במקום jsdelivr כדי למנוע בעיות טעינה
-    שגורמות לדף ריק.
+    משתמש ב-unpkg במקום jsdelivr כדי למנוע בעיות טעינה שגורמות לדף ריק.
     """
-    return get_redoc_html(
-        openapi_url=app.openapi_url,
-        title=f"{app.title} - ReDoc",
-        redoc_js_url="https://unpkg.com/redoc@latest/bundles/redoc.standalone.js",
-    )
+    # FastAPI's get_redoc_html doesn't support custom CSS/dir attributes,
+    # so we return our own HTML with RTL styling.
+    redoc_js_url = "https://unpkg.com/redoc@latest/bundles/redoc.standalone.js"
+    html = f"""<!DOCTYPE html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{app.title} - תיעוד API (ReDoc)</title>
+    <style>
+      html, body {{
+        margin: 0;
+        padding: 0;
+        direction: rtl;
+        font-family: system-ui, -apple-system, Segoe UI, Arial, "Noto Sans Hebrew", sans-serif;
+      }}
+      /* A light touch: keep the menu readable in RTL layouts */
+      redoc {{
+        direction: rtl;
+      }}
+    </style>
+  </head>
+  <body>
+    <redoc spec-url="{app.openapi_url}"></redoc>
+    <script src="{redoc_js_url}"></script>
+  </body>
+</html>"""
+    return HTMLResponse(html)

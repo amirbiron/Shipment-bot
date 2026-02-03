@@ -104,7 +104,17 @@ class UserResponse(BaseModel):
         return v.name
 
 
-@router.post("/", response_model=UserResponse)
+@router.post(
+    "/",
+    response_model=UserResponse,
+    summary="יצירת משתמש חדש",
+    description="יצירת משתמש חדש במערכת (בדרך כלל נקרא אוטומטית ע\"י webhook-ים).",
+    responses={
+        200: {"description": "המשתמש נוצר בהצלחה"},
+        400: {"description": "המשתמש כבר קיים"},
+        422: {"description": "שגיאת ולידציה בנתוני הבקשה"},
+    },
+)
 async def create_user(
     user_data: UserCreate,
     db: AsyncSession = Depends(get_db)
@@ -125,7 +135,13 @@ async def create_user(
     return user
 
 
-@router.get("/{user_id}", response_model=UserResponse)
+@router.get(
+    "/{user_id}",
+    response_model=UserResponse,
+    summary="קבלת משתמש לפי מזהה",
+    description="מחזיר משתמש לפי מזהה (ID).",
+    responses={200: {"description": "המשתמש נמצא"}, 404: {"description": "המשתמש לא נמצא"}},
+)
 async def get_user(
     user_id: int,
     db: AsyncSession = Depends(get_db)
@@ -138,7 +154,13 @@ async def get_user(
     return user
 
 
-@router.get("/phone/{phone_number}", response_model=UserResponse)
+@router.get(
+    "/phone/{phone_number}",
+    response_model=UserResponse,
+    summary="קבלת משתמש לפי מספר טלפון",
+    description="מחזיר משתמש לפי מספר טלפון (כפי שנשמר במערכת).",
+    responses={200: {"description": "המשתמש נמצא"}, 404: {"description": "המשתמש לא נמצא"}},
+)
 async def get_user_by_phone(
     phone_number: str,
     db: AsyncSession = Depends(get_db)
@@ -153,7 +175,12 @@ async def get_user_by_phone(
     return user
 
 
-@router.get("/couriers/", response_model=List[UserResponse])
+@router.get(
+    "/couriers/",
+    response_model=List[UserResponse],
+    summary="קבלת כל השליחים הפעילים",
+    description="מחזיר רשימה של כל המשתמשים עם role=COURIER ו-is_active=true.",
+)
 async def get_couriers(db: AsyncSession = Depends(get_db)):
     """Get all active couriers"""
     result = await db.execute(
@@ -165,7 +192,16 @@ async def get_couriers(db: AsyncSession = Depends(get_db)):
     return list(result.scalars().all())
 
 
-@router.patch("/{user_id}", response_model=UserResponse)
+@router.patch(
+    "/{user_id}",
+    response_model=UserResponse,
+    summary="עדכון משתמש",
+    description=(
+        "עדכון פרטי משתמש. תומך גם ב-query parameters (לתאימות לאחור) וגם ב-request body (מומלץ). "
+        "אם שניהם נשלחים, ה-request body גובר."
+    ),
+    responses={200: {"description": "המשתמש עודכן"}, 404: {"description": "המשתמש לא נמצא"}},
+)
 async def update_user(
     user_id: int,
     # תמיכה ב-query parameters לתאימות לאחור

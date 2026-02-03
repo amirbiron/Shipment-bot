@@ -247,7 +247,14 @@ async def send_welcome_message(chat_id: str):
     await send_telegram_message(chat_id, welcome_text, keyboard, inline=True)
 
 
-@router.post("/webhook")
+@router.post(
+    "/webhook",
+    summary="Webhook - Telegram (קבלת עדכונים נכנסים)",
+    description=(
+        "נקודת כניסה לקבלת עדכונים מ-Telegram Bot API. "
+        "תומכת גם בהודעות טקסט/תמונות וגם ב-callback queries (כפתורים)."
+    ),
+)
 async def telegram_webhook(
     update: TelegramUpdate,
     background_tasks: BackgroundTasks,

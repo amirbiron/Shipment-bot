@@ -10,7 +10,12 @@ from app.db.database import get_db
 router = APIRouter()
 
 
-@router.api_route("/run-migration-001", methods=["GET", "POST"])
+@router.api_route(
+    "/run-migration-001",
+    methods=["GET", "POST"],
+    summary="הרצת מיגרציה 001 (שדות הרשמת שליחים)",
+    description="מוסיף שדות הרשמת שליחים לטבלת users. בטוח להריץ מספר פעמים (משתמש ב-IF NOT EXISTS).",
+)
 async def run_courier_fields_migration(
     db: AsyncSession = Depends(get_db)
 ):
