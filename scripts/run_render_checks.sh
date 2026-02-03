@@ -21,31 +21,46 @@ RUN_UNIT_TESTS="${RUN_UNIT_TESTS:-1}"
 RUN_SMOKE_TESTS="${RUN_SMOKE_TESTS:-1}"
 
 echo "== Shipment Bot checks =="
-echo "Python: $(python3 --version)"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
+  PYTHON_BIN="python"
+fi
+echo "Python: $(${PYTHON_BIN} --version)"
 echo "Base URL: ${BASE_URL}"
 
 if [[ "${RUN_UNIT_TESTS}" == "1" ]]; then
-  if ! python3 -c "import pytest" >/dev/null 2>&1; then
+  if ! "${PYTHON_BIN}" -c "import pytest" >/dev/null 2>&1; then
     if [[ "${PIP_INSTALL_TEST_DEPS:-1}" != "1" ]]; then
       echo "pytest לא מותקן, ו-PIP_INSTALL_TEST_DEPS=0. לא ניתן להריץ unit tests."
       exit 2
     fi
     echo "pytest לא מותקן - מתקין תלות מינימלית לבדיקות..."
-    python3 -m pip install --user -q \
-      pytest \
-      pytest-asyncio \
-      pytest-cov \
-      pytest-mock \
-      aiosqlite
+    # ב-Render Shell בדרך כלל יש virtualenv פעיל, ושם pip --user נכשל.
+    IN_VENV="$("${PYTHON_BIN}" -c 'import sys; print(int(sys.prefix != sys.base_prefix))')"
+    if [[ "${IN_VENV}" == "1" ]]; then
+      "${PYTHON_BIN}" -m pip install -q \
+        pytest \
+        pytest-asyncio \
+        pytest-cov \
+        pytest-mock \
+        aiosqlite
+    else
+      "${PYTHON_BIN}" -m pip install --user -q \
+        pytest \
+        pytest-asyncio \
+        pytest-cov \
+        pytest-mock \
+        aiosqlite
+    fi
   fi
 
   echo "מריץ unit tests..."
-  python3 -m pytest -q
+  "${PYTHON_BIN}" -m pytest -q
 fi
 
 if [[ "${RUN_SMOKE_TESTS}" == "1" ]]; then
   echo "מריץ smoke tests מול השרת..."
-  BASE_URL="${BASE_URL}" python3 scripts/smoke_webhooks.py
+  BASE_URL="${BASE_URL}" "${PYTHON_BIN}" scripts/smoke_webhooks.py
 fi
 
 echo "הכל עבר בהצלחה."
