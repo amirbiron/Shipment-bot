@@ -29,11 +29,34 @@ def _telegram_phone_placeholder(telegram_chat_id: str) -> str:
     חלק מהסביבות (למשל DB בפרודקשן) מגדירות phone_number כ-NOT NULL,
     למרות שבטלגרם אין מספר טלפון אמין בשלב ה-webhook.
     """
+    if telegram_chat_id is None or str(telegram_chat_id).strip() in ("", "None"):
+        raise ValueError("telegram_chat_id is required for telegram phone placeholder")
+
+    telegram_chat_id = str(telegram_chat_id).strip()
     candidate = f"tg:{telegram_chat_id}"
     if len(candidate) <= 20:
         return candidate
     digest = hashlib.sha1(telegram_chat_id.encode("utf-8")).hexdigest()[:17]
     return f"tg:{digest}"
+
+
+def _resolve_telegram_chat_id(update: "TelegramUpdate") -> str | None:
+    """
+    ניסיון לחלץ chat_id יציב גם עבור callback_query ללא message.
+
+    ב-private chat, user_id == chat_id ולכן אפשר ליפול ל-from_user.id.
+    """
+    if update.message:
+        return str(update.message.chat.id)
+
+    if update.callback_query:
+        cb = update.callback_query
+        if cb.message:
+            return str(cb.message.chat.id)
+        if cb.from_user:
+            return str(cb.from_user.id)
+
+    return None
 
 
 class TelegramUser(BaseModel):
@@ -238,7 +261,7 @@ async def telegram_webhook(
     # Handle callback queries (inline button clicks)
     if update.callback_query:
         callback = update.callback_query
-        chat_id = str(callback.message.chat.id) if callback.message else None
+        chat_id = _resolve_telegram_chat_id(update)
         text = callback.data or ""
         photo_file_id = None
 
@@ -273,6 +296,16 @@ async def telegram_webhook(
 
     # Skip if no content
     if not text and not photo_file_id:
+        return {"ok": True}
+
+    if not chat_id:
+        logger.warning(
+            "Telegram update missing chat_id; skipping processing",
+            extra_data={
+                "has_message": bool(update.message),
+                "has_callback_query": bool(update.callback_query),
+            },
+        )
         return {"ok": True}
 
     # Get or create user
