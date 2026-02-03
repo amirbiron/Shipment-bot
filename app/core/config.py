@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     DEFAULT_CREDIT_LIMIT: float = -500.0  # Minimum balance allowed (500₪ credit)
     DELIVERY_FEE: float = 10.0  # Fee per delivery
 
+    # Outbox retry/backoff
+    # Base delay is multiplied by 2**retry_count (capped by OUTBOX_MAX_BACKOFF_SECONDS)
+    OUTBOX_RETRY_BASE_SECONDS: int = 30
+    OUTBOX_MAX_BACKOFF_SECONDS: int = 3600  # 1 hour cap to prevent multi-day delays
+
     # File Upload
     UPLOAD_DIR: str = "./uploads"
     MAX_FILE_SIZE: int = 10 * 1024 * 1024  # 10MB

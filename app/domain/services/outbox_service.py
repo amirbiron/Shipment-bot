@@ -4,12 +4,55 @@ Outbox Service - Transactional Outbox Pattern for Async Messaging
 This service implements the transactional outbox pattern to ensure
 reliable message delivery without blocking the main transaction.
 """
+from __future__ import annotations
+
+from datetime import datetime, timedelta
 from typing import List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
+from app.core.config import settings
 from app.db.models.outbox_message import OutboxMessage, MessagePlatform, MessageStatus
 from app.db.models.delivery import Delivery
+
+
+def _calculate_backoff_seconds(
+    retry_count: int,
+    *,
+    base_seconds: int,
+    max_backoff_seconds: int,
+) -> int:
+    """
+    Calculate exponential backoff seconds with a hard upper bound.
+
+    Uses the same semantics as the previous implementation:
+        backoff = base_seconds * (2 ** retry_count)
+
+    The result is capped at max_backoff_seconds and avoids computing huge
+    powers when retry_count is unexpectedly large.
+    """
+    if retry_count < 0:
+        retry_count = 0
+
+    if base_seconds <= 0 or max_backoff_seconds <= 0:
+        return 0
+
+    # If we already reached/exceeded max, return it.
+    if base_seconds >= max_backoff_seconds:
+        return max_backoff_seconds
+
+    # We need to know whether 2**retry_count >= ceil(max/base) without computing 2**retry_count.
+    required_multiplier = (max_backoff_seconds + base_seconds - 1) // base_seconds  # ceil div
+    is_power_of_two = (required_multiplier & (required_multiplier - 1)) == 0
+    threshold = required_multiplier.bit_length() - 1
+    if not is_power_of_two:
+        threshold += 1
+
+    if retry_count >= threshold:
+        return max_backoff_seconds
+
+    backoff = base_seconds * (1 << retry_count)
+    return min(backoff, max_backoff_seconds)
 
 
 class OutboxService:
@@ -135,7 +178,6 @@ class OutboxService:
 
     async def mark_as_sent(self, message_id: int) -> None:
         """Mark message as successfully sent"""
-        from datetime import datetime
         result = await self.db.execute(
             select(OutboxMessage).where(OutboxMessage.id == message_id)
         )
@@ -147,7 +189,6 @@ class OutboxService:
 
     async def mark_as_failed(self, message_id: int, error: str) -> None:
         """Mark message as failed with error"""
-        from datetime import datetime, timedelta
         result = await self.db.execute(
             select(OutboxMessage).where(OutboxMessage.id == message_id)
         )
@@ -161,8 +202,13 @@ class OutboxService:
             else:
                 message.status = MessageStatus.PENDING
                 # Exponential backoff for retry
+                backoff_seconds = _calculate_backoff_seconds(
+                    message.retry_count,
+                    base_seconds=settings.OUTBOX_RETRY_BASE_SECONDS,
+                    max_backoff_seconds=settings.OUTBOX_MAX_BACKOFF_SECONDS,
+                )
                 message.next_retry_at = datetime.utcnow() + timedelta(
-                    seconds=30 * (2 ** message.retry_count)
+                    seconds=backoff_seconds
                 )
 
             await self.db.commit()
