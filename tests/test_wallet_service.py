@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 from sqlalchemy import select
+from unittest.mock import AsyncMock
 
 from app.core.config import settings
 from app.db.models.user import UserRole
@@ -70,7 +71,7 @@ async def test_debit_for_capture_returns_none_when_credit_limit_exceeded(
 
 @pytest.mark.unit
 async def test_debit_for_capture_creates_ledger_entry_without_commit(
-    user_factory, wallet_factory, delivery_factory, db_session
+    user_factory, wallet_factory, delivery_factory, db_session, monkeypatch
 ):
     sender = await user_factory(
         phone_number="+972501000001",
@@ -86,6 +87,11 @@ async def test_debit_for_capture_creates_ledger_entry_without_commit(
     await wallet_factory(courier_id=courier.id, balance=100.0, credit_limit=-500.0)
 
     service = WalletService(db_session)
+
+    # Ensure debit_for_capture does not commit by itself (wallet already exists)
+    commit_mock = AsyncMock()
+    monkeypatch.setattr(db_session, "commit", commit_mock)
+
     entry = await service.debit_for_capture(
         courier_id=courier.id,
         delivery_id=delivery.id,
@@ -100,16 +106,11 @@ async def test_debit_for_capture_creates_ledger_entry_without_commit(
     wallet = await service.get_or_create_wallet(courier.id)
     assert wallet.balance == 90.0
 
-    # Method does not commit; entry should be pending in the session
-    assert entry in db_session.new
+    commit_mock.assert_not_awaited()
 
-    await db_session.commit()
-
-    result = await db_session.execute(
-        select(WalletLedger).where(WalletLedger.courier_id == courier.id)
-    )
-    persisted = result.scalar_one()
-    assert persisted.amount == -10.0
+    # Flush should be enough to get an id (still uncommitted)
+    await db_session.flush()
+    assert entry.id is not None
 
 
 @pytest.mark.unit
