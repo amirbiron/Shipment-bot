@@ -112,8 +112,7 @@ async def send_whatsapp_message(phone_number: str, text: str, keyboard: list = N
 
 async def handle_admin_group_command(
     db: AsyncSession,
-    text: str,
-    group_id: str
+    text: str
 ) -> Optional[str]:
     """
     טיפול בפקודות מנהל מקבוצת הוואטסאפ.
@@ -154,6 +153,10 @@ async def _approve_courier(db: AsyncSession, user_id: int) -> str:
 
     if user.approval_status == ApprovalStatus.APPROVED:
         return f"ℹ️ שליח {user_id} ({user.full_name or user.name}) כבר מאושר"
+
+    # בדיקה אם השליח חסום - לא מאפשרים אישור של משתמש חסום
+    if user.approval_status == ApprovalStatus.BLOCKED:
+        return f"⛔ שליח {user_id} ({user.full_name or user.name}) חסום במערכת. לא ניתן לאשר משתמש חסום."
 
     # אישור השליח
     user.approval_status = ApprovalStatus.APPROVED
@@ -278,7 +281,7 @@ async def whatsapp_webhook(
                 )
 
                 # ניסיון לזהות פקודת מנהל
-                response_text = await handle_admin_group_command(db, text, sender_id)
+                response_text = await handle_admin_group_command(db, text)
 
                 if response_text:
                     # שליחת תגובה לקבוצה
