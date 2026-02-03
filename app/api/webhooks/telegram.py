@@ -15,6 +15,7 @@ from app.state_machine.manager import StateManager
 from app.domain.services import AdminNotificationService
 from app.core.logging import get_logger
 from app.core.circuit_breaker import get_telegram_circuit_breaker
+from app.core.exceptions import TelegramError
 
 logger = get_logger(__name__)
 
@@ -146,7 +147,14 @@ async def send_telegram_message(
         async with httpx.AsyncClient() as client:
             response = await client.post(url, json=payload, timeout=30.0)
             if response.status_code != 200:
-                raise Exception(f"Telegram API returned {response.status_code}")
+                raise TelegramError(
+                    message=f"sendMessage returned status {response.status_code}",
+                    details={
+                        "operation": "sendMessage",
+                        "status_code": response.status_code,
+                        "response_text": (response.text or "")[:500],
+                    },
+                )
 
     try:
         await circuit_breaker.execute(_send)
@@ -177,7 +185,14 @@ async def answer_callback_query(callback_query_id: str, text: str = None) -> Non
         async with httpx.AsyncClient() as client:
             response = await client.post(url, json=payload, timeout=30.0)
             if response.status_code != 200:
-                raise Exception(f"Telegram API returned {response.status_code}")
+                raise TelegramError(
+                    message=f"answerCallbackQuery returned status {response.status_code}",
+                    details={
+                        "operation": "answerCallbackQuery",
+                        "status_code": response.status_code,
+                        "response_text": (response.text or "")[:500],
+                    },
+                )
 
     try:
         await circuit_breaker.execute(_send)

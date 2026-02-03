@@ -18,6 +18,7 @@ from app.core.logging import get_logger
 from app.core.circuit_breaker import get_whatsapp_circuit_breaker
 from app.core.validation import PhoneNumberValidator, convert_html_to_whatsapp
 from app.core.config import settings
+from app.core.exceptions import WhatsAppError
 
 logger = get_logger(__name__)
 
@@ -98,7 +99,14 @@ async def send_whatsapp_message(phone_number: str, text: str, keyboard: list = N
                 timeout=30.0
             )
             if response.status_code != 200:
-                raise Exception(f"WhatsApp API returned {response.status_code}")
+                raise WhatsAppError(
+                    message=f"gateway /send returned status {response.status_code}",
+                    details={
+                        "operation": "send",
+                        "status_code": response.status_code,
+                        "response_text": (response.text or "")[:500],
+                    },
+                )
 
     try:
         await circuit_breaker.execute(_send)
