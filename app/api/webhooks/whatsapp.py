@@ -268,7 +268,8 @@ async def whatsapp_webhook(
                     user.full_name or user.name or "לא צוין",
                     user.service_area or "לא צוין",
                     user.phone_number,
-                    context.get("document_file_id")
+                    context.get("document_file_id"),
+                    "whatsapp"  # פלטפורמה
                 )
 
             # Check if courier submitted deposit screenshot

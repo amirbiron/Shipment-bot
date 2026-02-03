@@ -6,7 +6,7 @@ from typing import Optional
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.core.circuit_breaker import get_telegram_circuit_breaker
+from app.core.circuit_breaker import get_telegram_circuit_breaker, get_whatsapp_circuit_breaker
 
 logger = get_logger(__name__)
 
@@ -19,27 +19,55 @@ class AdminNotificationService:
         user_id: int,
         full_name: str,
         service_area: str,
-        telegram_chat_id: str,
-        document_file_id: Optional[str] = None
+        phone_or_chat_id: str,
+        document_file_id: Optional[str] = None,
+        platform: str = "telegram"
     ) -> bool:
         """
         Notify admin about new courier registration request.
-        [1.4] Admin notification
+        [1.4] Admin notification - שולח לטלגרם ו/או וואטסאפ לפי מה שמוגדר
         """
-        if not settings.TELEGRAM_ADMIN_CHAT_ID or not settings.TELEGRAM_BOT_TOKEN:
-            logger.warning(
-                "Admin notification not configured",
-                extra_data={"missing": "TELEGRAM_ADMIN_CHAT_ID or TELEGRAM_BOT_TOKEN"}
-            )
-            return False
+        success = False
 
-        message = f"""
+        # שליחה לקבוצת וואטסאפ (אם מוגדר)
+        if settings.WHATSAPP_ADMIN_GROUP_ID:
+            whatsapp_message = f"""
+👤 *שליח חדש מבקש להירשם!*
+
+📋 *פרטים:*
+• שם מלא: {full_name}
+• אזור: {service_area}
+• מזהה: {phone_or_chat_id}
+• פלטפורמה: {platform}
+
+📎 מסמך זהות: {'נשלח' if document_file_id else 'לא נשלח'}
+"""
+            whatsapp_success = await AdminNotificationService._send_whatsapp_admin_message(
+                settings.WHATSAPP_ADMIN_GROUP_ID,
+                whatsapp_message,
+                keyboard=[
+                    [f"✅ אשר שליח {user_id}", f"❌ דחה שליח {user_id}"]
+                ]
+            )
+            success = success or whatsapp_success
+
+            # שליחת התמונה לוואטסאפ (אם יש)
+            if document_file_id and whatsapp_success:
+                await AdminNotificationService._send_whatsapp_admin_photo(
+                    settings.WHATSAPP_ADMIN_GROUP_ID,
+                    document_file_id
+                )
+
+        # שליחה לטלגרם (אם מוגדר)
+        if settings.TELEGRAM_ADMIN_CHAT_ID and settings.TELEGRAM_BOT_TOKEN:
+            telegram_message = f"""
 👤 <b>שליח חדש מבקש להירשם!</b>
 
 📋 <b>פרטים:</b>
 • שם מלא: {full_name}
 • אזור: {service_area}
-• Telegram ID: {telegram_chat_id}
+• מזהה: {phone_or_chat_id}
+• פלטפורמה: {platform}
 
 📎 מסמך זהות: {'נשלח' if document_file_id else 'לא נשלח'}
 
@@ -49,17 +77,23 @@ class AdminNotificationService:
 לדחיית השליח:
 <code>/reject {user_id}</code>
 """
-
-        success = await AdminNotificationService._send_telegram_message(
-            settings.TELEGRAM_ADMIN_CHAT_ID,
-            message
-        )
-
-        # Forward document if exists
-        if document_file_id and success:
-            await AdminNotificationService._forward_photo(
+            telegram_success = await AdminNotificationService._send_telegram_message(
                 settings.TELEGRAM_ADMIN_CHAT_ID,
-                document_file_id
+                telegram_message
+            )
+            success = success or telegram_success
+
+            # Forward document if exists
+            if document_file_id and telegram_success:
+                await AdminNotificationService._forward_photo(
+                    settings.TELEGRAM_ADMIN_CHAT_ID,
+                    document_file_id
+                )
+
+        if not success:
+            logger.warning(
+                "Admin notification not configured or failed",
+                extra_data={"user_id": user_id}
             )
 
         return success
@@ -184,6 +218,77 @@ class AdminNotificationService:
             logger.error(
                 "Error sending photo",
                 extra_data={"chat_id": chat_id, "error": str(e)},
+                exc_info=True
+            )
+            return False
+
+    @staticmethod
+    async def _send_whatsapp_admin_message(
+        group_id: str,
+        text: str,
+        keyboard: list = None
+    ) -> bool:
+        """שליחת הודעה לקבוצת מנהלים בוואטסאפ"""
+        if not settings.WHATSAPP_GATEWAY_URL:
+            logger.warning("WhatsApp gateway URL not configured")
+            return False
+
+        circuit_breaker = get_whatsapp_circuit_breaker()
+
+        async def _send():
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{settings.WHATSAPP_GATEWAY_URL}/send",
+                    json={
+                        "phone": group_id,
+                        "message": text,
+                        "keyboard": keyboard
+                    },
+                    timeout=30.0
+                )
+                if response.status_code != 200:
+                    raise Exception(f"WhatsApp API returned {response.status_code}")
+                return True
+
+        try:
+            return await circuit_breaker.execute(_send)
+        except Exception as e:
+            logger.error(
+                "Error sending WhatsApp admin message",
+                extra_data={"group_id": group_id, "error": str(e)},
+                exc_info=True
+            )
+            return False
+
+    @staticmethod
+    async def _send_whatsapp_admin_photo(group_id: str, media_url: str) -> bool:
+        """שליחת תמונה לקבוצת מנהלים בוואטסאפ"""
+        if not settings.WHATSAPP_GATEWAY_URL:
+            return False
+
+        circuit_breaker = get_whatsapp_circuit_breaker()
+
+        async def _send():
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{settings.WHATSAPP_GATEWAY_URL}/send-media",
+                    json={
+                        "phone": group_id,
+                        "media_url": media_url,
+                        "media_type": "image"
+                    },
+                    timeout=30.0
+                )
+                if response.status_code != 200:
+                    raise Exception(f"WhatsApp API returned {response.status_code}")
+                return True
+
+        try:
+            return await circuit_breaker.execute(_send)
+        except Exception as e:
+            logger.error(
+                "Error sending WhatsApp admin photo",
+                extra_data={"group_id": group_id, "error": str(e)},
                 exc_info=True
             )
             return False

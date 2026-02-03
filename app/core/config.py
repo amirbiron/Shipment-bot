@@ -36,6 +36,7 @@ class Settings(BaseSettings):
 
     # WhatsApp Gateway
     WHATSAPP_GATEWAY_URL: str = "http://localhost:3000"
+    WHATSAPP_ADMIN_GROUP_ID: Optional[str] = None  # קבוצת מנהלים לאישור שליחים
 
     # Telegram
     TELEGRAM_BOT_TOKEN: Optional[str] = None
