@@ -19,6 +19,12 @@ setup_logging(
 
 logger = get_logger(__name__)
 
+
+def _parse_allowed_origins(raw: str) -> list[str]:
+    """Parse comma-separated CORS origins string into a clean list."""
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
 app = FastAPI(
     title=settings.APP_NAME,
     version="1.0.0",
@@ -32,13 +38,24 @@ app = FastAPI(
 setup_middleware(app)
 setup_exception_handlers(app)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+allowed_origins = _parse_allowed_origins(settings.ALLOWED_ORIGINS)
+
+# Safe dev default to support local frontend development without opening CORS in production.
+if not allowed_origins and settings.DEBUG:
+    allowed_origins = [
+        "http://localhost",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
+
+if allowed_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Correlation-ID"],
+    )
 
 app.include_router(api_router, prefix="/api")
 

@@ -12,6 +12,11 @@ class Settings(BaseSettings):
     APP_NAME: str = "Shipment Bot"
     DEBUG: bool = False
 
+    # CORS
+    # Comma-separated list of allowed origins (e.g. "https://app.example.com,https://admin.example.com")
+    # In production, leave empty to disable CORS entirely (recommended for server-to-server APIs).
+    ALLOWED_ORIGINS: str = ""
+
     # Database
     DATABASE_URL: str = "postgresql+asyncpg://user:password@localhost:5432/shipment_bot"
 
