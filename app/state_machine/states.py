@@ -104,20 +104,22 @@ SENDER_TRANSITIONS = {
         SenderState.VIEW_DELIVERIES
     ],
 
-    # Pickup address wizard: City -> Street -> Number -> Apartment -> Dropoff
+    # Pickup address wizard: City -> Street -> Number -> Apartment -> Location (בתוך/מחוץ לעיר)
     SenderState.PICKUP_CITY: [SenderState.PICKUP_STREET],
     SenderState.PICKUP_STREET: [SenderState.PICKUP_NUMBER],
     SenderState.PICKUP_NUMBER: [SenderState.PICKUP_APARTMENT],
-    SenderState.PICKUP_APARTMENT: [SenderState.DROPOFF_CITY],
+    SenderState.PICKUP_APARTMENT: [SenderState.DELIVERY_LOCATION],
 
-    # Dropoff address wizard: City -> Street -> Number -> Apartment -> Location
+    # בחירת סוג משלוח (בתוך/מחוץ לעיר) -> כתובת יעד
+    SenderState.DELIVERY_LOCATION: [SenderState.DROPOFF_CITY],
+
+    # Dropoff address wizard: City -> Street -> Number -> Apartment -> Urgency
     SenderState.DROPOFF_CITY: [SenderState.DROPOFF_STREET],
     SenderState.DROPOFF_STREET: [SenderState.DROPOFF_NUMBER],
     SenderState.DROPOFF_NUMBER: [SenderState.DROPOFF_APARTMENT],
-    SenderState.DROPOFF_APARTMENT: [SenderState.DELIVERY_LOCATION, SenderState.MENU],
+    SenderState.DROPOFF_APARTMENT: [SenderState.DELIVERY_URGENCY, SenderState.MENU],
 
     # Delivery details flow
-    SenderState.DELIVERY_LOCATION: [SenderState.DELIVERY_URGENCY],
     SenderState.DELIVERY_URGENCY: [SenderState.DELIVERY_TIME, SenderState.DELIVERY_DESCRIPTION],
     SenderState.DELIVERY_TIME: [SenderState.DELIVERY_PRICE],
     SenderState.DELIVERY_PRICE: [SenderState.DELIVERY_DESCRIPTION],
