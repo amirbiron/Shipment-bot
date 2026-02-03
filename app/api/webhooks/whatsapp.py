@@ -197,6 +197,10 @@ async def _reject_courier(db: AsyncSession, user_id: int) -> str:
     if user.approval_status == ApprovalStatus.REJECTED:
         return f"ℹ️ שליח {user_id} ({user.full_name or user.name}) כבר נדחה"
 
+    # בדיקה אם השליח חסום - BLOCKED הוא סטטוס "דביק" שלא ניתן לשנות
+    if user.approval_status == ApprovalStatus.BLOCKED:
+        return f"⛔ שליח {user_id} ({user.full_name or user.name}) חסום במערכת. לא ניתן לשנות סטטוס של משתמש חסום."
+
     # דחיית השליח
     user.approval_status = ApprovalStatus.REJECTED
     await db.commit()
