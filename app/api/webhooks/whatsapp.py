@@ -169,7 +169,8 @@ async def _approve_courier(db: AsyncSession, user_id: int) -> str:
     )
 
     # שליחת הודעה לשליח שהוא אושר
-    if user.phone_number:
+    if user.phone_number and not user.phone_number.endswith("@g.us"):
+        # משתמש וואטסאפ
         approval_message = """🎉 *חשבונך אושר!*
 
 ברוכים הבאים למערכת השליחים!
@@ -177,6 +178,16 @@ async def _approve_courier(db: AsyncSession, user_id: int) -> str:
 
 כתוב *תפריט* כדי להתחיל."""
         await send_whatsapp_message(user.phone_number, approval_message)
+    elif user.telegram_chat_id:
+        # משתמש טלגרם
+        from app.api.webhooks.telegram import send_telegram_message
+        approval_message = """🎉 <b>חשבונך אושר!</b>
+
+ברוכים הבאים למערכת השליחים!
+מעכשיו תוכל לתפוס משלוחים ולהתחיל לעבוד.
+
+כתוב <b>תפריט</b> כדי להתחיל."""
+        await send_telegram_message(user.telegram_chat_id, approval_message)
 
     return f"✅ שליח {user_id} ({user.full_name or user.name}) אושר בהצלחה!"
 
@@ -211,11 +222,19 @@ async def _reject_courier(db: AsyncSession, user_id: int) -> str:
     )
 
     # שליחת הודעה לשליח שנדחה
-    if user.phone_number:
+    if user.phone_number and not user.phone_number.endswith("@g.us"):
+        # משתמש וואטסאפ
         rejection_message = """😔 *לצערנו, בקשתך להצטרף כשליח נדחתה.*
 
 אם אתה חושב שזו טעות, אנא צור קשר עם התמיכה."""
         await send_whatsapp_message(user.phone_number, rejection_message)
+    elif user.telegram_chat_id:
+        # משתמש טלגרם
+        from app.api.webhooks.telegram import send_telegram_message
+        rejection_message = """😔 <b>לצערנו, בקשתך להצטרף כשליח נדחתה.</b>
+
+אם אתה חושב שזו טעות, אנא צור קשר עם התמיכה."""
+        await send_telegram_message(user.telegram_chat_id, rejection_message)
 
     return f"❌ שליח {user_id} ({user.full_name or user.name}) נדחה."
 
