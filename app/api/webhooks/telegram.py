@@ -348,11 +348,17 @@ async def telegram_webhook(
 
     # Route based on user role
     if user.role == UserRole.COURIER:
+        # שמירת המצב הקודם לפני הטיפול בהודעה
+        previous_state = await state_manager.get_current_state(user.id, "telegram")
+
         handler = CourierStateHandler(db)
         response, new_state = await handler.handle_message(user, text, photo_file_id)
 
-        # Check if courier just completed registration - notify admin [1.4]
-        if new_state == CourierState.PENDING_APPROVAL.value and user.approval_status == ApprovalStatus.PENDING:
+        # שליחת התראה למנהלים רק במעבר הראשון למצב PENDING_APPROVAL
+        # (כלומר רק כשהמצב הקודם היה שונה - למניעת שליחה כפולה)
+        if (new_state == CourierState.PENDING_APPROVAL.value and
+            previous_state != CourierState.PENDING_APPROVAL.value and
+            user.approval_status == ApprovalStatus.PENDING):
             context = await state_manager.get_context(user.id, "telegram")
             background_tasks.add_task(
                 AdminNotificationService.notify_new_courier_registration,
