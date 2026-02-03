@@ -31,6 +31,9 @@ class AdminNotificationService:
 
         # שליחה לקבוצת וואטסאפ (אם מוגדר)
         if settings.WHATSAPP_ADMIN_GROUP_ID:
+            # הערה: document_file_id הוא platform-specific
+            # תמונה מוואטסאפ תישלח רק לקבוצת וואטסאפ
+            has_whatsapp_photo = document_file_id and platform == "whatsapp"
             whatsapp_message = f"""
 👤 *שליח חדש מבקש להירשם!*
 
@@ -40,7 +43,7 @@ class AdminNotificationService:
 • מזהה: {phone_or_chat_id}
 • פלטפורמה: {platform}
 
-📎 מסמך זהות: {'נשלח' if document_file_id else 'לא נשלח'}
+📎 מסמך זהות: {'נשלח (ראה למטה)' if has_whatsapp_photo else 'נשלח (זמין בטלגרם)' if document_file_id else 'לא נשלח'}
 """
             whatsapp_success = await AdminNotificationService._send_whatsapp_admin_message(
                 settings.WHATSAPP_ADMIN_GROUP_ID,
@@ -51,8 +54,8 @@ class AdminNotificationService:
             )
             success = success or whatsapp_success
 
-            # שליחת התמונה לוואטסאפ (אם יש)
-            if document_file_id and whatsapp_success:
+            # שליחת התמונה לוואטסאפ רק אם היא מוואטסאפ
+            if has_whatsapp_photo and whatsapp_success:
                 await AdminNotificationService._send_whatsapp_admin_photo(
                     settings.WHATSAPP_ADMIN_GROUP_ID,
                     document_file_id
@@ -60,6 +63,8 @@ class AdminNotificationService:
 
         # שליחה לטלגרם (אם מוגדר)
         if settings.TELEGRAM_ADMIN_CHAT_ID and settings.TELEGRAM_BOT_TOKEN:
+            # תמונה מטלגרם תישלח רק לקבוצת טלגרם
+            has_telegram_photo = document_file_id and platform == "telegram"
             telegram_message = f"""
 👤 <b>שליח חדש מבקש להירשם!</b>
 
@@ -69,7 +74,7 @@ class AdminNotificationService:
 • מזהה: {phone_or_chat_id}
 • פלטפורמה: {platform}
 
-📎 מסמך זהות: {'נשלח' if document_file_id else 'לא נשלח'}
+📎 מסמך זהות: {'נשלח (ראה למטה)' if has_telegram_photo else 'נשלח (זמין בוואטסאפ)' if document_file_id else 'לא נשלח'}
 
 לאישור השליח:
 <code>/approve {user_id}</code>
@@ -83,8 +88,8 @@ class AdminNotificationService:
             )
             success = success or telegram_success
 
-            # Forward document if exists
-            if document_file_id and telegram_success:
+            # שליחת התמונה לטלגרם רק אם היא מטלגרם
+            if has_telegram_photo and telegram_success:
                 await AdminNotificationService._forward_photo(
                     settings.TELEGRAM_ADMIN_CHAT_ID,
                     document_file_id

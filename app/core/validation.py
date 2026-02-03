@@ -435,6 +435,8 @@ def convert_html_to_whatsapp(text: str) -> str:
     - Strikethrough: ~text~ (במקום <s>text</s>)
     - Monospace: `text` (במקום <code>text</code>)
 
+    בנוסף, ממיר HTML entities חזרה לתווים רגילים (כי וואטסאפ לא מפרש HTML).
+
     Args:
         text: טקסט עם תגי HTML
 
@@ -464,5 +466,8 @@ def convert_html_to_whatsapp(text: str) -> str:
     # הסרת תגי HTML נוספים שלא נתמכים (כמו <a>, <br> וכו')
     result = re.sub(r"<br\s*/?>", "\n", result, flags=re.IGNORECASE)
     result = re.sub(r"<[^>]+>", "", result)
+
+    # המרת HTML entities חזרה לתווים רגילים (וואטסאפ לא מפרש HTML)
+    result = html.unescape(result)
 
     return result
