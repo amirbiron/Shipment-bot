@@ -13,11 +13,18 @@ even when external services (Telegram/WhatsApp gateway) are unavailable.
 from __future__ import annotations
 
 import os
+import sys
 from datetime import datetime
+from pathlib import Path
 
 import httpx
 
-from app.core.logging import get_logger, setup_logging
+# לאפשר הרצה מכל תיקיה (למשל `python scripts/smoke_webhooks.py` ב-Render Shell)
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from app.core.logging import get_logger, setup_logging  # noqa: E402
 
 
 logger = get_logger(__name__)
