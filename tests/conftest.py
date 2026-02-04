@@ -148,7 +148,8 @@ def mock_external_services(mock_telegram_api, mock_whatsapp_gateway):
 # ============================================================================
 
 # מונה גלובלי ל-ID עבור בדיקות - SQLite לא תומך ב-autoincrement עבור BigInteger
-_test_id_counter = 0
+# מתחילים מ-10000 כדי למנוע התנגשויות עם IDs מפורשים שבדיקות עשויות להעביר
+_test_id_counter = 10000
 
 
 def _get_next_test_id() -> int:
@@ -162,7 +163,7 @@ def _get_next_test_id() -> int:
 def reset_test_id_counter():
     """מאפס את מונה ה-ID בין בדיקות"""
     global _test_id_counter
-    _test_id_counter = 0
+    _test_id_counter = 10000
     yield
 
 
