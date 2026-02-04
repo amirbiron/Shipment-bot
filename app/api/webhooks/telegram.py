@@ -359,8 +359,23 @@ async def telegram_webhook(
 
     # Handle "#" to return to main menu
     if text.strip() == "#":
+        # רענון מהDB לפני בדיקת סטטוס - למניעת stale data אם האדמין אישר בינתיים
+        await db.refresh(user)
         # Reset state to menu
         if user.role == UserRole.COURIER:
+            # בדיקה אם השליח לא מאושר (כולל None, PENDING, REJECTED, BLOCKED)
+            # אפשר לו לחזור להיות שולח רגיל
+            if user.approval_status != ApprovalStatus.APPROVED:
+                # מחזירים אותו להיות שולח רגיל
+                user.role = UserRole.SENDER
+                await db.commit()
+                # מאפסים את ה-state machine ומנקים context
+                from app.state_machine.states import SenderState
+                await state_manager.force_state(user.id, "telegram", SenderState.MENU.value, context={})
+                # מציגים הודעת ברוכים הבאים מחדש
+                background_tasks.add_task(send_welcome_message, chat_id)
+                return {"ok": True, "new_state": SenderState.MENU.value, "switched_from_non_approved_courier": True}
+
             await state_manager.force_state(user.id, "telegram", CourierState.MENU.value, context={})
             handler = CourierStateHandler(db)
             response, new_state = await handler.handle_message(user, "תפריט", None)

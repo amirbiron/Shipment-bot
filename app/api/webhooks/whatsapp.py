@@ -365,12 +365,32 @@ async def whatsapp_webhook(
 
         # Handle "#" to return to main menu
         if text.strip() == "#":
+            # רענון מהDB לפני בדיקת סטטוס - למניעת stale data אם האדמין אישר בינתיים
+            await db.refresh(user)
+            # לוג לדיבאג - מראה את מצב המשתמש בלחיצה על #
+            logger.info(
+                "User pressed # to return to menu",
+                extra_data={
+                    "user_id": user.id,
+                    "phone": PhoneNumberValidator.mask(sender_id),
+                    "role": user.role.value if user.role else None,
+                    "approval_status": user.approval_status.value if user.approval_status else None
+                }
+            )
             # Reset state to menu
             if user.role == UserRole.COURIER:
                 # בדיקה אם השליח לא מאושר (כולל None, PENDING, REJECTED, BLOCKED)
                 # אפשר לו לחזור להיות שולח רגיל
                 if user.approval_status != ApprovalStatus.APPROVED:
                     # מחזירים אותו להיות שולח רגיל
+                    logger.info(
+                        "Non-approved courier pressed #, switching to sender",
+                        extra_data={
+                            "user_id": user.id,
+                            "phone": PhoneNumberValidator.mask(sender_id),
+                            "reply_to": PhoneNumberValidator.mask(reply_to)
+                        }
+                    )
                     user.role = UserRole.SENDER
                     await db.commit()
                     # מאפסים את ה-state machine ומנקים context
