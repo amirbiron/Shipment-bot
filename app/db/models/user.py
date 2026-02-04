@@ -3,7 +3,7 @@ User Model - Senders and Couriers
 """
 import enum
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, Enum as SQLEnum, Boolean, Text
+from sqlalchemy import Column, Integer, BigInteger, String, DateTime, Enum as SQLEnum, Boolean, Text
 
 from app.db.database import Base
 
@@ -27,7 +27,8 @@ class User(Base):
 
     __tablename__ = "users"
 
-    id = Column(Integer, primary_key=True, index=True)
+    # BigInteger נדרש כי מזהי Telegram יכולים לחרוג מטווח int32
+    id = Column(BigInteger, primary_key=True, index=True)
     # הערה: בחלק מהסביבות phone_number מוגדר כ-NOT NULL בפרודקשן,
     # לכן נשמור על עקביות גם במודל. עבור Telegram אנחנו שומרים placeholder (tg:...).
     phone_number = Column(String(20), unique=True, index=True, nullable=False)

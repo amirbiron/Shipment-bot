@@ -13,6 +13,7 @@ from httpx import Response
 
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.pool import StaticPool
+from sqlalchemy import event
 
 from app.db.database import Base, get_db
 from app.db.models.user import User, UserRole, ApprovalStatus
@@ -27,6 +28,18 @@ TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
 # הערה: לא מגדירים event_loop fixture מותאם אישית כי pytest-asyncio 0.23+
 # מטפל בזה אוטומטית עם asyncio_mode=auto ו-asyncio_default_fixture_loop_scope=function
+
+
+# SQLite לא תומך ב-autoincrement עבור BigInteger, לכן נוסיף event listener
+# שמייצר ID אוטומטית לפני הכנסה
+def _set_user_id_before_insert(mapper, connection, target):
+    """מייצר ID ייחודי עבור User אם לא הוגדר - נדרש עבור SQLite"""
+    if target.id is None:
+        target.id = _get_next_test_id()
+
+
+# רושמים את ה-listener על מודל User
+event.listen(User, 'before_insert', _set_user_id_before_insert)
 
 
 @pytest.fixture(scope="function")
@@ -134,6 +147,25 @@ def mock_external_services(mock_telegram_api, mock_whatsapp_gateway):
 # Test Data Factories
 # ============================================================================
 
+# מונה גלובלי ל-ID עבור בדיקות - SQLite לא תומך ב-autoincrement עבור BigInteger
+_test_id_counter = 0
+
+
+def _get_next_test_id() -> int:
+    """מייצר ID ייחודי לבדיקות"""
+    global _test_id_counter
+    _test_id_counter += 1
+    return _test_id_counter
+
+
+@pytest.fixture(autouse=True)
+def reset_test_id_counter():
+    """מאפס את מונה ה-ID בין בדיקות"""
+    global _test_id_counter
+    _test_id_counter = 0
+    yield
+
+
 @pytest.fixture
 def user_factory(db_session: AsyncSession):
     """Factory for creating test users"""
@@ -144,9 +176,11 @@ def user_factory(db_session: AsyncSession):
         platform: str = "whatsapp",
         telegram_chat_id: str | None = None,
         is_active: bool = True,
-        approval_status: ApprovalStatus = ApprovalStatus.APPROVED
+        approval_status: ApprovalStatus = ApprovalStatus.APPROVED,
+        id: int | None = None  # SQLite לא תומך ב-autoincrement עבור BigInteger
     ) -> User:
         user = User(
+            id=id if id is not None else _get_next_test_id(),
             phone_number=phone_number,
             name=name,
             role=role,
