@@ -2,7 +2,7 @@
 Conversation Session Model - State Machine Tracking
 """
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, JSON
+from sqlalchemy import Column, Integer, BigInteger, String, DateTime, ForeignKey, JSON
 
 from app.db.database import Base
 
@@ -13,7 +13,7 @@ class ConversationSession(Base):
     __tablename__ = "conversation_sessions"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
     platform = Column(String(20), nullable=False)  # whatsapp or telegram
 
     # State machine
