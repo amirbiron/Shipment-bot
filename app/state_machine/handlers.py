@@ -407,7 +407,23 @@ class SenderStateHandler:
             )
             return response, SenderState.DELIVERY_LOCATION.value, {}
 
-        # לאחר בחירת סוג משלוח - עוברים לכתובת יעד
+        # אם משלוח בתוך העיר - משתמשים בעיר האיסוף גם ליעד ומדלגים לשאלת הרחוב
+        if location_type == "within_city":
+            pickup_city = context.get("pickup_city", "")
+            safe_city = escape(pickup_city)
+            response = MessageResponse(
+                f"סוג משלוח: {location_text} ✓\n\n"
+                "עכשיו נזין את כתובת היעד.\n"
+                "🎯 <b>כתובת יעד</b>\n"
+                f"עיר: {safe_city} ✓\n\n"
+                "מה שם הרחוב?"
+            )
+            return response, SenderState.DROPOFF_STREET.value, {
+                "delivery_location": location_type,
+                "dropoff_city": pickup_city  # עיר היעד = עיר האיסוף
+            }
+
+        # משלוח מחוץ לעיר - שואלים על עיר היעד
         response = MessageResponse(
             f"סוג משלוח: {location_text} ✓\n\n"
             "עכשיו נזין את כתובת היעד.\n"
