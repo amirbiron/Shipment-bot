@@ -359,6 +359,8 @@ async def telegram_webhook(
 
     # Handle "#" to return to main menu
     if text.strip() == "#":
+        # רענון מהDB לפני בדיקת סטטוס - למניעת stale data אם האדמין אישר בינתיים
+        await db.refresh(user)
         # Reset state to menu
         if user.role == UserRole.COURIER:
             # בדיקה אם השליח לא מאושר (כולל None, PENDING, REJECTED, BLOCKED)

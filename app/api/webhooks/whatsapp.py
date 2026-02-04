@@ -365,6 +365,8 @@ async def whatsapp_webhook(
 
         # Handle "#" to return to main menu
         if text.strip() == "#":
+            # רענון מהDB לפני בדיקת סטטוס - למניעת stale data אם האדמין אישר בינתיים
+            await db.refresh(user)
             # לוג לדיבאג - מראה את מצב המשתמש בלחיצה על #
             logger.info(
                 "User pressed # to return to menu",
