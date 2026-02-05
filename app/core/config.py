@@ -62,6 +62,14 @@ class Settings(BaseSettings):
     # קודי HTTP שנחשבים לשגיאות זמניות ומצדיקים retry (מופרדים בפסיקים)
     WHATSAPP_TRANSIENT_STATUS_CODES: str = "502,503,504,429"
 
+    @field_validator("WHATSAPP_MAX_RETRIES", mode="after")
+    @classmethod
+    def validate_max_retries(cls, v: int) -> int:
+        """וידוא שמספר הניסיונות הוא לפחות 1 למניעת אובדן הודעות שקט"""
+        if v < 1:
+            raise ValueError("WHATSAPP_MAX_RETRIES must be at least 1")
+        return v
+
     # File Upload
     UPLOAD_DIR: str = "./uploads"
     MAX_FILE_SIZE: int = 10 * 1024 * 1024  # 10MB
