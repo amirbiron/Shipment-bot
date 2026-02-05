@@ -40,7 +40,7 @@ async def run_courier_fields_migration(
                 ADD COLUMN IF NOT EXISTS approval_status approval_status,
                 ADD COLUMN IF NOT EXISTS id_document_url TEXT,
                 ADD COLUMN IF NOT EXISTS service_area VARCHAR(100),
-                ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMP WITH TIME ZONE;
+                ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMP;
         """))
 
         # Create index
