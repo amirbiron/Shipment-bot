@@ -235,8 +235,6 @@ async def answer_callback_query(callback_query_id: str, text: str = None) -> Non
 
 async def send_welcome_message(chat_id: str):
     """הודעת ברוכים הבאים ותפריט ראשי [שלב 1]"""
-    from app.core.config import settings
-
     welcome_text = (
         "ברוכים הבאים ל<b>משלוח בצ'יק</b> 🚚\n"
         "המערכת החכמה לשיתוף משלוחים.\n\n"
@@ -418,7 +416,7 @@ async def telegram_webhook(
     )
 
     if not _is_courier_in_registration:
-        if "הצטרפות למנוי" in text or ("שליח" in text and user.role == UserRole.SENDER):
+        if user.role == UserRole.SENDER and ("הצטרפות למנוי" in text or "שליח" in text):
             # ניתוב לתהליך הרישום כנהג/שליח
             user.role = UserRole.COURIER
             await db.commit()

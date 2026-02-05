@@ -514,7 +514,7 @@ async def whatsapp_webhook(
         )
 
         if not _is_courier_in_registration:
-            if "הצטרפות למנוי" in text or ("שליח" in text and user.role == UserRole.SENDER):
+            if user.role == UserRole.SENDER and ("הצטרפות למנוי" in text or "שליח" in text):
                 # ניתוב לתהליך הרישום כנהג/שליח
                 user.role = UserRole.COURIER
                 await db.commit()
