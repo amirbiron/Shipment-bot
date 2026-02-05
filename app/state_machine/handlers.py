@@ -688,14 +688,6 @@ class CourierStateHandler:
 
         return response, new_state
 
-    # קטגוריות רכב לבחירת הנהג [שלב 2 - שלב ד']
-    VEHICLE_CATEGORIES = {
-        "רכב 4 מקומות": "car_4",
-        "7 מקומות": "car_7",
-        "טנדר": "pickup_truck",
-        "אופנוע": "motorcycle",
-    }
-
     def _get_handler(self, state: str):
         """Get handler function for state"""
         handlers = {

@@ -403,88 +403,108 @@ async def telegram_webhook(
         return {"ok": True, "new_state": new_state}
 
     # טיפול בכפתורי תפריט ראשי [שלב 1]
-    if "הצטרפות למנוי" in text or ("שליח" in text and user.role == UserRole.SENDER):
-        # ניתוב לתהליך הרישום כנהג/שליח
-        user.role = UserRole.COURIER
-        await db.commit()
+    # הערה: הכפתורים הבאים פעילים רק למשתמשים שאינם שליחים באמצע תהליך רישום.
+    # שליח באמצע KYC ימשיך ישירות ל-CourierStateHandler למטה.
+    _is_courier_in_registration = (
+        user.role == UserRole.COURIER
+        and await state_manager.get_current_state(user.id, "telegram") in {
+            CourierState.REGISTER_COLLECT_NAME.value,
+            CourierState.REGISTER_COLLECT_DOCUMENT.value,
+            CourierState.REGISTER_COLLECT_SELFIE.value,
+            CourierState.REGISTER_COLLECT_VEHICLE_CATEGORY.value,
+            CourierState.REGISTER_COLLECT_VEHICLE_PHOTO.value,
+            CourierState.REGISTER_TERMS.value,
+        }
+    )
 
-        await state_manager.force_state(
-            user.id, "telegram",
-            CourierState.INITIAL.value,
-            context={}
-        )
+    if not _is_courier_in_registration:
+        if "הצטרפות למנוי" in text or ("שליח" in text and user.role == UserRole.SENDER):
+            # ניתוב לתהליך הרישום כנהג/שליח
+            user.role = UserRole.COURIER
+            await db.commit()
 
-        handler = CourierStateHandler(db)
-        response, new_state = await handler.handle_message(user, text, photo_file_id)
-
-        background_tasks.add_task(
-            send_telegram_message,
-            chat_id,
-            response.text,
-            response.keyboard,
-            getattr(response, 'inline', False)
-        )
-        return {"ok": True, "new_state": new_state}
-
-    if "העלאת משלוח מהיר" in text or "משלוח מהיר" in text:
-        # קישור חיצוני לקבוצת WhatsApp - משתמשים רגילים לא יכולים להעלות משלוח בתוך הבוט
-        from app.core.config import settings as app_settings
-        if app_settings.WHATSAPP_GROUP_LINK:
-            msg_text = (
-                "📦 <b>העלאת משלוח מהיר</b>\n\n"
-                "להעלאת משלוח מהיר, הצטרפו לקבוצת WhatsApp שלנו:\n"
-                f"{app_settings.WHATSAPP_GROUP_LINK}"
+            await state_manager.force_state(
+                user.id, "telegram",
+                CourierState.INITIAL.value,
+                context={}
             )
-        else:
-            msg_text = (
-                "📦 <b>העלאת משלוח מהיר</b>\n\n"
-                "להעלאת משלוח מהיר, פנו להנהלה לקבלת קישור לקבוצת WhatsApp."
-            )
-        from app.state_machine.handlers import MessageResponse as _MR
-        resp = _MR(msg_text)
-        background_tasks.add_task(
-            send_telegram_message, chat_id, resp.text, resp.keyboard, False
-        )
-        return {"ok": True}
 
-    if "הצטרפות כתחנה" in text or "תחנה" in text:
-        # הודעה שיווקית עבור תחנות
-        station_text = (
-            "🏪 <b>הצטרפות כתחנה</b>\n\n"
-            "המערכת של ShipShare מסדרת לך את התחנה!\n\n"
-            "✅ ניהול נהגים אוטומטי\n"
-            "✅ גבייה מסודרת\n"
-            "✅ תיעוד משלוחים מלא\n"
-            "✅ סדר בבלגן\n\n"
-            "לפרטים נוספים, פנו להנהלה."
-        )
-        from app.state_machine.handlers import MessageResponse as _MR
-        resp = _MR(station_text, keyboard=[["📞 פנייה לניהול"], ["🔙 חזרה לתפריט"]], inline=True)
-        background_tasks.add_task(
-            send_telegram_message, chat_id, resp.text, resp.keyboard, resp.inline
-        )
-        return {"ok": True}
+            handler = CourierStateHandler(db)
+            response, new_state = await handler.handle_message(user, text, photo_file_id)
 
-    if "פנייה לניהול" in text:
-        # קישור WhatsApp ישיר למנהל הראשי
-        from app.core.config import settings as app_settings
-        if app_settings.ADMIN_WHATSAPP_NUMBER:
-            admin_link = f"https://wa.me/{app_settings.ADMIN_WHATSAPP_NUMBER}"
-            admin_text = (
-                "📞 <b>פנייה לניהול</b>\n\n"
-                f"ליצירת קשר עם המנהל:\n{admin_link}"
+            background_tasks.add_task(
+                send_telegram_message,
+                chat_id,
+                response.text,
+                response.keyboard,
+                getattr(response, 'inline', False)
             )
-        else:
-            admin_text = (
-                "📞 <b>פנייה לניהול</b>\n\n"
-                "ליצירת קשר עם המנהל, שלחו הודעה כאן ונחזור אליכם בהקדם."
+            return {"ok": True, "new_state": new_state}
+
+        if "העלאת משלוח מהיר" in text or "משלוח מהיר" in text:
+            # קישור חיצוני לקבוצת WhatsApp - משתמשים רגילים לא יכולים להעלות משלוח בתוך הבוט
+            from app.core.config import settings as app_settings
+            if app_settings.WHATSAPP_GROUP_LINK:
+                msg_text = (
+                    "📦 <b>העלאת משלוח מהיר</b>\n\n"
+                    "להעלאת משלוח מהיר, הצטרפו לקבוצת WhatsApp שלנו:\n"
+                    f"{app_settings.WHATSAPP_GROUP_LINK}"
+                )
+            else:
+                msg_text = (
+                    "📦 <b>העלאת משלוח מהיר</b>\n\n"
+                    "להעלאת משלוח מהיר, פנו להנהלה לקבלת קישור לקבוצת WhatsApp."
+                )
+            from app.state_machine.handlers import MessageResponse as _MR
+            resp = _MR(msg_text)
+            background_tasks.add_task(
+                send_telegram_message, chat_id, resp.text, resp.keyboard, False
             )
-        from app.state_machine.handlers import MessageResponse as _MR
-        resp = _MR(admin_text)
-        background_tasks.add_task(
-            send_telegram_message, chat_id, resp.text, resp.keyboard, False
-        )
-        return {"ok": True}
+            return {"ok": True}
+
+        if "הצטרפות כתחנה" in text or "תחנה" in text:
+            # הודעה שיווקית עבור תחנות
+            station_text = (
+                "🏪 <b>הצטרפות כתחנה</b>\n\n"
+                "המערכת של ShipShare מסדרת לך את התחנה!\n\n"
+                "✅ ניהול נהגים אוטומטי\n"
+                "✅ גבייה מסודרת\n"
+                "✅ תיעוד משלוחים מלא\n"
+                "✅ סדר בבלגן\n\n"
+                "לפרטים נוספים, פנו להנהלה."
+            )
+            from app.state_machine.handlers import MessageResponse as _MR
+            resp = _MR(station_text, keyboard=[["📞 פנייה לניהול"]], inline=True)
+            background_tasks.add_task(
+                send_telegram_message, chat_id, resp.text, resp.keyboard, resp.inline
+            )
+            return {"ok": True}
+
+        if "פנייה לניהול" in text:
+            # קישור WhatsApp ישיר למנהל הראשי
+            from app.core.config import settings as app_settings
+            if app_settings.ADMIN_WHATSAPP_NUMBER:
+                admin_link = f"https://wa.me/{app_settings.ADMIN_WHATSAPP_NUMBER}"
+                admin_text = (
+                    "📞 <b>פנייה לניהול</b>\n\n"
+                    f"ליצירת קשר עם המנהל:\n{admin_link}"
+                )
+            else:
+                admin_text = (
+                    "📞 <b>פנייה לניהול</b>\n\n"
+                    "ליצירת קשר עם המנהל, שלחו הודעה כאן ונחזור אליכם בהקדם."
+                )
+            from app.state_machine.handlers import MessageResponse as _MR
+            resp = _MR(admin_text)
+            background_tasks.add_task(
+                send_telegram_message, chat_id, resp.text, resp.keyboard, False
+            )
+            return {"ok": True}
+
+        if "חזרה לתפריט" in text:
+            # כפתור "חזרה לתפריט" - מנתב כמו לחיצה על #
+            background_tasks.add_task(send_welcome_message, chat_id)
+            return {"ok": True}
 
     # Route based on user role
     if user.role == UserRole.COURIER:
