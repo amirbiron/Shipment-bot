@@ -97,39 +97,9 @@ async def startup() -> None:
     # (create_all לא מוסיף עמודות לטבלאות שכבר קיימות)
     # הערה: המיגרציות רצות רק על PostgreSQL. ב-SQLite (בדיקות) create_all מספיק.
     if engine.dialect.name == "postgresql":
-        from sqlalchemy import text
+        from app.db.migrations import run_all_migrations
         async with engine.begin() as conn:
-            # מיגרציה 001 - שדות הרשמת שליחים
-            await conn.execute(text("""
-                DO $$ BEGIN
-                    CREATE TYPE approval_status AS ENUM ('pending', 'approved', 'rejected', 'blocked');
-                EXCEPTION
-                    WHEN duplicate_object THEN null;
-                END $$;
-            """))
-            await conn.execute(text("""
-                ALTER TABLE users
-                    ADD COLUMN IF NOT EXISTS full_name VARCHAR(150),
-                    ADD COLUMN IF NOT EXISTS approval_status approval_status,
-                    ADD COLUMN IF NOT EXISTS id_document_url TEXT,
-                    ADD COLUMN IF NOT EXISTS service_area VARCHAR(100),
-                    ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMP;
-            """))
-            await conn.execute(text("""
-                CREATE INDEX IF NOT EXISTS idx_users_approval_status ON users(approval_status);
-            """))
-            # עדכון ברירת מחדל של credit_limit בטבלת courier_wallets
-            await conn.execute(text("""
-                ALTER TABLE courier_wallets ALTER COLUMN credit_limit SET DEFAULT -500.00;
-            """))
-
-            # מיגרציה 002 - שדות KYC לשליחים
-            await conn.execute(text("""
-                ALTER TABLE users
-                    ADD COLUMN IF NOT EXISTS selfie_file_id TEXT,
-                    ADD COLUMN IF NOT EXISTS vehicle_category VARCHAR(50),
-                    ADD COLUMN IF NOT EXISTS vehicle_photo_file_id TEXT;
-            """))
+            await run_all_migrations(conn)
         logger.info("Auto-migrations completed")
 
 

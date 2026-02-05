@@ -3,9 +3,9 @@ Database migration endpoints - הרצה חד-פעמית להוספת שדות
 """
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import text
 
 from app.db.database import get_db
+from app.db.migrations import run_migration_001, run_migration_002
 
 router = APIRouter()
 
@@ -24,35 +24,9 @@ async def run_courier_fields_migration(
     Safe to run multiple times (uses IF NOT EXISTS).
     """
     try:
-        # Create enum type
-        await db.execute(text("""
-            DO $$ BEGIN
-                CREATE TYPE approval_status AS ENUM ('pending', 'approved', 'rejected', 'blocked');
-            EXCEPTION
-                WHEN duplicate_object THEN null;
-            END $$;
-        """))
-
-        # Add columns
-        await db.execute(text("""
-            ALTER TABLE users
-                ADD COLUMN IF NOT EXISTS full_name VARCHAR(150),
-                ADD COLUMN IF NOT EXISTS approval_status approval_status,
-                ADD COLUMN IF NOT EXISTS id_document_url TEXT,
-                ADD COLUMN IF NOT EXISTS service_area VARCHAR(100),
-                ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMP;
-        """))
-
-        # Create index
-        await db.execute(text("""
-            CREATE INDEX IF NOT EXISTS idx_users_approval_status ON users(approval_status);
-        """))
-
-        # Update credit limit default
-        await db.execute(text("""
-            ALTER TABLE courier_wallets ALTER COLUMN credit_limit SET DEFAULT -500.00;
-        """))
-
+        # AsyncSession.connection() מחזיר את ה-connection הפעיל של הסשן
+        conn = await db.connection()
+        await run_migration_001(conn)
         await db.commit()
 
         return {
@@ -82,13 +56,8 @@ async def run_kyc_fields_migration(
     בטוח להריץ מספר פעמים (משתמש ב-IF NOT EXISTS).
     """
     try:
-        await db.execute(text("""
-            ALTER TABLE users
-                ADD COLUMN IF NOT EXISTS selfie_file_id TEXT,
-                ADD COLUMN IF NOT EXISTS vehicle_category VARCHAR(50),
-                ADD COLUMN IF NOT EXISTS vehicle_photo_file_id TEXT;
-        """))
-
+        conn = await db.connection()
+        await run_migration_002(conn)
         await db.commit()
 
         return {
