@@ -50,7 +50,10 @@ class User(Base):
         nullable=True,
         index=True
     )
-    id_document_url = Column(Text, nullable=True)  # Path to ID/license photo
+    id_document_url = Column(Text, nullable=True)  # צילום תעודת זהות / רישיון נהיגה
+    selfie_file_id = Column(Text, nullable=True)  # צילום סלפי לאימות חי
+    vehicle_category = Column(String(50), nullable=True)  # קטגוריית רכב (4 מקומות / 7 מקומות / טנדר / אופנוע)
+    vehicle_photo_file_id = Column(Text, nullable=True)  # צילום הרכב
     service_area = Column(String(100), nullable=True)  # Geographic area
     terms_accepted_at = Column(DateTime, nullable=True)
 
