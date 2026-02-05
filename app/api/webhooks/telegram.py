@@ -234,15 +234,17 @@ async def answer_callback_query(callback_query_id: str, text: str = None) -> Non
 
 
 async def send_welcome_message(chat_id: str):
-    """Send initial welcome message with role selection [1.1]"""
-    welcome_text = """שלום וברוכים הבאים! 👋
-
-אני הבוט של <b>משלוח בצ'יק</b>.
-
-מה תרצה לעשות?"""
+    """הודעת ברוכים הבאים ותפריט ראשי [שלב 1]"""
+    welcome_text = (
+        "ברוכים הבאים ל<b>משלוח בצ'יק</b> 🚚\n"
+        "המערכת החכמה לשיתוף משלוחים.\n\n"
+        "איך נוכל לעזור היום?"
+    )
     keyboard = [
-        ["📦 אני רוצה לשלוח חבילה"],
-        ["🚚 אני שליח"]
+        ["🚚 הצטרפות למנוי וקבלת משלוחים"],
+        ["📦 העלאת משלוח מהיר"],
+        ["🏪 הצטרפות כתחנה"],
+        ["📞 פנייה לניהול"],
     ]
     await send_telegram_message(chat_id, welcome_text, keyboard, inline=True)
 
@@ -398,29 +400,110 @@ async def telegram_webhook(
         )
         return {"ok": True, "new_state": new_state}
 
-    # Check if user wants to be a courier [1.1]
-    if "שליח" in text and user.role == UserRole.SENDER:
-        # Switch to courier role and start registration
-        user.role = UserRole.COURIER
-        await db.commit()
+    # טיפול בכפתורי תפריט ראשי [שלב 1]
+    # הערה: הכפתורים הבאים פעילים רק למשתמשים שאינם שליחים באמצע תהליך רישום.
+    # שליח באמצע KYC ימשיך ישירות ל-CourierStateHandler למטה.
+    _is_courier_in_registration = (
+        user.role == UserRole.COURIER
+        and await state_manager.get_current_state(user.id, "telegram") in {
+            CourierState.REGISTER_COLLECT_NAME.value,
+            CourierState.REGISTER_COLLECT_DOCUMENT.value,
+            CourierState.REGISTER_COLLECT_SELFIE.value,
+            CourierState.REGISTER_COLLECT_VEHICLE_CATEGORY.value,
+            CourierState.REGISTER_COLLECT_VEHICLE_PHOTO.value,
+            CourierState.REGISTER_TERMS.value,
+        }
+    )
 
-        await state_manager.force_state(
-            user.id, "telegram",
-            CourierState.INITIAL.value,
-            context={}
-        )
+    if not _is_courier_in_registration:
+        if user.role == UserRole.SENDER and ("הצטרפות למנוי" in text or "שליח" in text):
+            # ניתוב לתהליך הרישום כנהג/שליח
+            user.role = UserRole.COURIER
+            await db.commit()
 
-        handler = CourierStateHandler(db)
-        response, new_state = await handler.handle_message(user, text, photo_file_id)
+            await state_manager.force_state(
+                user.id, "telegram",
+                CourierState.INITIAL.value,
+                context={}
+            )
 
-        background_tasks.add_task(
-            send_telegram_message,
-            chat_id,
-            response.text,
-            response.keyboard,
-            getattr(response, 'inline', False)
-        )
-        return {"ok": True, "new_state": new_state}
+            handler = CourierStateHandler(db)
+            response, new_state = await handler.handle_message(user, text, photo_file_id)
+
+            background_tasks.add_task(
+                send_telegram_message,
+                chat_id,
+                response.text,
+                response.keyboard,
+                getattr(response, 'inline', False)
+            )
+            return {"ok": True, "new_state": new_state}
+
+        if "העלאת משלוח מהיר" in text or "משלוח מהיר" in text:
+            # קישור חיצוני לקבוצת WhatsApp - משתמשים רגילים לא יכולים להעלות משלוח בתוך הבוט
+            from app.core.config import settings as app_settings
+            if app_settings.WHATSAPP_GROUP_LINK:
+                msg_text = (
+                    "📦 <b>העלאת משלוח מהיר</b>\n\n"
+                    "להעלאת משלוח מהיר, הצטרפו לקבוצת WhatsApp שלנו:\n"
+                    f"{app_settings.WHATSAPP_GROUP_LINK}"
+                )
+            else:
+                msg_text = (
+                    "📦 <b>העלאת משלוח מהיר</b>\n\n"
+                    "להעלאת משלוח מהיר, פנו להנהלה לקבלת קישור לקבוצת WhatsApp."
+                )
+            from app.state_machine.handlers import MessageResponse as _MR
+            resp = _MR(msg_text)
+            background_tasks.add_task(
+                send_telegram_message, chat_id, resp.text, resp.keyboard, False
+            )
+            return {"ok": True}
+
+        if "הצטרפות כתחנה" in text or "תחנה" in text:
+            # הודעה שיווקית עבור תחנות
+            station_text = (
+                "🏪 <b>הצטרפות כתחנה</b>\n\n"
+                "המערכת של ShipShare מסדרת לך את התחנה!\n\n"
+                "✅ ניהול נהגים אוטומטי\n"
+                "✅ גבייה מסודרת\n"
+                "✅ תיעוד משלוחים מלא\n"
+                "✅ סדר בבלגן\n\n"
+                "לפרטים נוספים, פנו להנהלה."
+            )
+            from app.state_machine.handlers import MessageResponse as _MR
+            resp = _MR(station_text, keyboard=[["📞 פנייה לניהול"]], inline=True)
+            background_tasks.add_task(
+                send_telegram_message, chat_id, resp.text, resp.keyboard, resp.inline
+            )
+            return {"ok": True}
+
+        if "פנייה לניהול" in text:
+            # קישור WhatsApp ישיר למנהל הראשי
+            from app.core.config import settings as app_settings
+            if app_settings.ADMIN_WHATSAPP_NUMBER:
+                admin_link = f"https://wa.me/{app_settings.ADMIN_WHATSAPP_NUMBER}"
+                admin_text = (
+                    "📞 <b>פנייה לניהול</b>\n\n"
+                    f"ליצירת קשר עם המנהל:\n{admin_link}"
+                )
+            else:
+                admin_text = (
+                    "📞 <b>פנייה לניהול</b>\n\n"
+                    "ליצירת קשר עם המנהל, שלחו הודעה כאן ונחזור אליכם בהקדם."
+                )
+            from app.state_machine.handlers import MessageResponse as _MR
+            resp = _MR(admin_text)
+            background_tasks.add_task(
+                send_telegram_message, chat_id, resp.text, resp.keyboard, False
+            )
+            return {"ok": True}
+
+        if "חזרה לתפריט" in text and user.role != UserRole.COURIER:
+            # כפתור "חזרה לתפריט" - מנתב כמו לחיצה על #
+            # שליחים רגילים חוזרים לתפריט הראשי. שליחים מאושרים ייפלו ל-CourierStateHandler למטה.
+            background_tasks.add_task(send_welcome_message, chat_id)
+            return {"ok": True}
 
     # Route based on user role
     if user.role == UserRole.COURIER:
@@ -430,7 +513,7 @@ async def telegram_webhook(
         handler = CourierStateHandler(db)
         response, new_state = await handler.handle_message(user, text, photo_file_id)
 
-        # שליחת התראה למנהלים רק במעבר הראשון למצב PENDING_APPROVAL
+        # שליחת "כרטיס נהג" למנהלים רק במעבר הראשון למצב PENDING_APPROVAL
         # (כלומר רק כשהמצב הקודם היה שונה - למניעת שליחה כפולה)
         if (new_state == CourierState.PENDING_APPROVAL.value and
             previous_state != CourierState.PENDING_APPROVAL.value and
@@ -442,7 +525,11 @@ async def telegram_webhook(
                 user.full_name or user.name or "לא צוין",
                 user.service_area or "לא צוין",
                 user.telegram_chat_id,
-                context.get("document_file_id")
+                context.get("document_file_id"),
+                "telegram",
+                user.vehicle_category,
+                user.selfie_file_id,
+                user.vehicle_photo_file_id,
             )
 
         # Check if courier submitted deposit screenshot

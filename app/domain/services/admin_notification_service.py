@@ -15,6 +15,14 @@ logger = get_logger(__name__)
 class AdminNotificationService:
     """Service for sending notifications to admins"""
 
+    # מיפוי קטגוריות רכב לתצוגה בעברית
+    VEHICLE_CATEGORY_DISPLAY = {
+        "car_4": "רכב 4 מקומות",
+        "car_7": "7 מקומות",
+        "pickup_truck": "טנדר",
+        "motorcycle": "אופנוע",
+    }
+
     @staticmethod
     async def notify_new_courier_registration(
         user_id: int,
@@ -22,32 +30,49 @@ class AdminNotificationService:
         service_area: str,
         phone_or_chat_id: str,
         document_file_id: Optional[str] = None,
-        platform: str = "telegram"
+        platform: str = "telegram",
+        vehicle_category: Optional[str] = None,
+        selfie_file_id: Optional[str] = None,
+        vehicle_photo_file_id: Optional[str] = None,
     ) -> bool:
         """
-        Notify admin about new courier registration request.
-        [1.4] Admin notification - שולח לטלגרם ו/או וואטסאפ לפי מה שמוגדר
+        שליחת "כרטיס נהג" למנהלים לאישור [שלב 2].
+        כולל את כל הנתונים שנאספו בתהליך ה-KYC.
         """
         success = False
 
+        # תרגום קטגוריית רכב לתצוגה
+        vehicle_display = AdminNotificationService.VEHICLE_CATEGORY_DISPLAY.get(
+            vehicle_category, vehicle_category or "לא צוין"
+        )
+
         # שליחה לקבוצת וואטסאפ (אם מוגדר)
         if settings.WHATSAPP_ADMIN_GROUP_ID:
-            # הערה: document_file_id הוא platform-specific
-            # תמונה מוואטסאפ תישלח רק לקבוצת וואטסאפ
-            has_whatsapp_photo = document_file_id and platform == "whatsapp"
-            # בקבוצות לא תומכים ב-list messages, לכן שולחים הודעה רגילה
-            whatsapp_message = f"""👤 *שליח חדש #{user_id}*
+            is_whatsapp = platform == "whatsapp"
+            has_whatsapp_doc = document_file_id and is_whatsapp
+            has_whatsapp_selfie = selfie_file_id and is_whatsapp
+            has_whatsapp_vehicle = vehicle_photo_file_id and is_whatsapp
+
+            # תצוגת סטטוס מסמכים - מציגים ⬇️ אם התמונה תישלח למטה
+            doc_status = 'נשלח למטה ⬇️' if has_whatsapp_doc else 'זמין בטלגרם' if document_file_id else 'לא נשלח'
+            selfie_status = 'נשלח למטה ⬇️' if has_whatsapp_selfie else 'זמין בטלגרם' if selfie_file_id else '✗'
+            vehicle_status = 'נשלח למטה ⬇️' if has_whatsapp_vehicle else 'זמין בטלגרם' if vehicle_photo_file_id else '✗'
+
+            whatsapp_message = f"""👤 *כרטיס נהג חדש #{user_id}*
 
 📋 *פרטים:*
 • שם: {full_name}
 • אזור: {service_area}
+• רכב: {vehicle_display}
 • פלטפורמה: {platform}
 
-📎 מסמך: {'נשלח למטה ⬇️' if has_whatsapp_photo else 'זמין בטלגרם' if document_file_id else 'לא נשלח'}
+📎 מסמכים:
+  - ת.ז./רישיון: {doc_status}
+  - סלפי: {selfie_status}
+  - תמונת רכב: {vehicle_status}
 
 ✅ לאישור: *אשר {user_id}*
 ❌ לדחייה: *דחה {user_id}*"""
-            # שולחים בלי keyboard כי list messages לא עובדים בקבוצות
             whatsapp_success = await AdminNotificationService._send_whatsapp_admin_message(
                 settings.WHATSAPP_ADMIN_GROUP_ID,
                 whatsapp_message,
@@ -55,34 +80,49 @@ class AdminNotificationService:
             )
             success = success or whatsapp_success
 
-            # שליחת התמונה לוואטסאפ רק אם היא מוואטסאפ
-            if has_whatsapp_photo and whatsapp_success:
-                logger.info(
-                    "Sending document photo to WhatsApp admin group",
-                    extra_data={"user_id": user_id, "has_media_url": bool(document_file_id)}
-                )
-                photo_sent = await AdminNotificationService._send_whatsapp_admin_photo(
-                    settings.WHATSAPP_ADMIN_GROUP_ID,
-                    document_file_id
-                )
-                if not photo_sent:
-                    logger.warning(
-                        "Failed to send document photo to WhatsApp admin group",
-                        extra_data={"user_id": user_id}
+            # שליחת כל התמונות לוואטסאפ (רק אם הן מוואטסאפ)
+            if is_whatsapp and whatsapp_success:
+                for label, file_id in [
+                    ("document", document_file_id),
+                    ("selfie", selfie_file_id),
+                    ("vehicle", vehicle_photo_file_id),
+                ]:
+                    if not file_id:
+                        continue
+                    photo_sent = await AdminNotificationService._send_whatsapp_admin_photo(
+                        settings.WHATSAPP_ADMIN_GROUP_ID,
+                        file_id
                     )
+                    if not photo_sent:
+                        logger.warning(
+                            f"Failed to send {label} photo to WhatsApp admin group",
+                            extra_data={"user_id": user_id}
+                        )
 
         # שליחה לטלגרם (אם מוגדר)
         if settings.TELEGRAM_ADMIN_CHAT_ID and settings.TELEGRAM_BOT_TOKEN:
-            # תמונה מטלגרם תישלח רק לקבוצת טלגרם
-            has_telegram_photo = document_file_id and platform == "telegram"
-            telegram_message = f"""👤 <b>שליח חדש #{user_id}</b>
+            is_telegram = platform == "telegram"
+            has_tg_doc = document_file_id and is_telegram
+            has_tg_selfie = selfie_file_id and is_telegram
+            has_tg_vehicle = vehicle_photo_file_id and is_telegram
+
+            # תצוגת סטטוס מסמכים - מציגים ⬇️ אם התמונה תישלח למטה
+            tg_doc_status = 'נשלח למטה ⬇️' if has_tg_doc else 'זמין בוואטסאפ' if document_file_id else 'לא נשלח'
+            tg_selfie_status = 'נשלח למטה ⬇️' if has_tg_selfie else 'זמין בוואטסאפ' if selfie_file_id else '✗'
+            tg_vehicle_status = 'נשלח למטה ⬇️' if has_tg_vehicle else 'זמין בוואטסאפ' if vehicle_photo_file_id else '✗'
+
+            telegram_message = f"""👤 <b>כרטיס נהג חדש #{user_id}</b>
 
 📋 <b>פרטים:</b>
 • שם: {full_name}
 • אזור: {service_area}
+• רכב: {vehicle_display}
 • פלטפורמה: {platform}
 
-📎 מסמך: {'נשלח למטה ⬇️' if has_telegram_photo else 'זמין בוואטסאפ' if document_file_id else 'לא נשלח'}
+📎 <b>מסמכים:</b>
+  - ת.ז./רישיון: {tg_doc_status}
+  - סלפי: {tg_selfie_status}
+  - תמונת רכב: {tg_vehicle_status}
 
 ✅ לאישור: <code>/approve {user_id}</code>
 ❌ לדחייה: <code>/reject {user_id}</code>"""
@@ -92,12 +132,14 @@ class AdminNotificationService:
             )
             success = success or telegram_success
 
-            # שליחת התמונה לטלגרם רק אם היא מטלגרם
-            if has_telegram_photo and telegram_success:
-                await AdminNotificationService._forward_photo(
-                    settings.TELEGRAM_ADMIN_CHAT_ID,
-                    document_file_id
-                )
+            # שליחת כל התמונות לטלגרם (רק אם הן מטלגרם)
+            if is_telegram and telegram_success:
+                for file_id in [document_file_id, selfie_file_id, vehicle_photo_file_id]:
+                    if file_id:
+                        await AdminNotificationService._forward_photo(
+                            settings.TELEGRAM_ADMIN_CHAT_ID,
+                            file_id
+                        )
 
         if not success:
             logger.warning(

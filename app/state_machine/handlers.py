@@ -695,7 +695,9 @@ class CourierStateHandler:
             CourierState.NEW.value: self._handle_initial,
             CourierState.REGISTER_COLLECT_NAME.value: self._handle_collect_name,
             CourierState.REGISTER_COLLECT_DOCUMENT.value: self._handle_collect_document,
-            CourierState.REGISTER_COLLECT_AREA.value: self._handle_collect_area,
+            CourierState.REGISTER_COLLECT_SELFIE.value: self._handle_collect_selfie,
+            CourierState.REGISTER_COLLECT_VEHICLE_CATEGORY.value: self._handle_collect_vehicle_category,
+            CourierState.REGISTER_COLLECT_VEHICLE_PHOTO.value: self._handle_collect_vehicle_photo,
             CourierState.REGISTER_TERMS.value: self._handle_terms,
             CourierState.PENDING_APPROVAL.value: self._handle_pending_approval,
             CourierState.MENU.value: self._handle_menu,
@@ -746,39 +748,112 @@ class CourierStateHandler:
         return response, CourierState.REGISTER_COLLECT_DOCUMENT.value, {}
 
     async def _handle_collect_document(self, user: User, message: str, context: dict, photo_file_id: str):
-        """Collect ID document - Step b"""
+        """איסוף תעודת זהות / רישיון נהיגה - שלב ב'"""
         if not photo_file_id:
             response = MessageResponse(
                 "לא התקבלה תמונה. אנא שלח תמונה של תעודת זהות או רישיון נהיגה."
             )
             return response, CourierState.REGISTER_COLLECT_DOCUMENT.value, {}
 
+        # שומרים את מזהה התמונה ומעבירים לשלב הסלפי
         response = MessageResponse(
-            "המסמך התקבל בהצלחה!\n\n"
-            "<b>שלב ג' - התמחות גיאוגרפית:</b>\n"
-            "באיזו עיר או אזור אתה מתמקד בעיקר?\n\n"
-            "לדוגמה: בני ברק, ירושלים, אזור המרכז, גוש דן"
+            "המסמך התקבל בהצלחה! ✓\n\n"
+            "<b>שלב ג' - אימות חי:</b>\n"
+            "אנא צלם ושלח סלפי שלך כעת (בזמן אמת).\n\n"
+            "📸 שלח תמונת סלפי ברורה."
         )
-        return response, CourierState.REGISTER_COLLECT_AREA.value, {"document_file_id": photo_file_id}
+        return response, CourierState.REGISTER_COLLECT_SELFIE.value, {"document_file_id": photo_file_id}
 
-    async def _handle_collect_area(self, user: User, message: str, context: dict, photo_file_id: str):
-        """Collect service area - Step c"""
-        area = message.strip()
-        if len(area) < 2:
-            response = MessageResponse("אנא הזן אזור תקין (לפחות 2 תווים).")
-            return response, CourierState.REGISTER_COLLECT_AREA.value, {}
+    async def _handle_collect_selfie(self, user: User, message: str, context: dict, photo_file_id: str):
+        """איסוף סלפי לאימות חי - שלב ג'"""
+        if not photo_file_id:
+            response = MessageResponse(
+                "לא התקבלה תמונה. אנא שלח צילום סלפי שלך בזמן אמת."
+            )
+            return response, CourierState.REGISTER_COLLECT_SELFIE.value, {}
 
-        user.service_area = area
+        # שומרים את מזהה הסלפי ומעבירים לבחירת קטגוריית רכב
+        user.selfie_file_id = photo_file_id
         await self.db.commit()
 
         response = MessageResponse(
-            self.TERMS_TEXT,
+            "הסלפי התקבל בהצלחה! ✓\n\n"
+            "<b>שלב ד' - קטגוריית רכב:</b>\n"
+            "באיזה סוג רכב אתה עובד?",
+            keyboard=[
+                ["🚗 רכב 4 מקומות", "🚐 7 מקומות"],
+                ["🛻 טנדר", "🏍️ אופנוע"],
+            ],
+            inline=True
+        )
+        return response, CourierState.REGISTER_COLLECT_VEHICLE_CATEGORY.value, {"selfie_file_id": photo_file_id}
+
+    async def _handle_collect_vehicle_category(self, user: User, message: str, context: dict, photo_file_id: str):
+        """בחירת קטגוריית רכב - שלב ד'"""
+        msg = message.strip()
+
+        # מיפוי בחירת המשתמש לקטגוריה
+        category = None
+        category_display = None
+        if "4 מקומות" in msg or "🚗" in msg:
+            category = "car_4"
+            category_display = "רכב 4 מקומות"
+        elif "7 מקומות" in msg or "🚐" in msg:
+            category = "car_7"
+            category_display = "7 מקומות"
+        elif "טנדר" in msg or "🛻" in msg:
+            category = "pickup_truck"
+            category_display = "טנדר"
+        elif "אופנוע" in msg or "🏍" in msg:
+            category = "motorcycle"
+            category_display = "אופנוע"
+
+        if not category:
+            response = MessageResponse(
+                "אנא בחר אחת מהאפשרויות:\n"
+                "1. 🚗 רכב 4 מקומות\n"
+                "2. 🚐 7 מקומות\n"
+                "3. 🛻 טנדר\n"
+                "4. 🏍️ אופנוע",
+                keyboard=[
+                    ["🚗 רכב 4 מקומות", "🚐 7 מקומות"],
+                    ["🛻 טנדר", "🏍️ אופנוע"],
+                ],
+                inline=True
+            )
+            return response, CourierState.REGISTER_COLLECT_VEHICLE_CATEGORY.value, {}
+
+        user.vehicle_category = category
+        await self.db.commit()
+
+        response = MessageResponse(
+            f"קטגוריית רכב: {category_display} ✓\n\n"
+            "<b>שלב ה' - תיעוד רכב:</b>\n"
+            "אנא צלם ושלח תמונה של הרכב שלך.\n\n"
+            "📸 שלח תמונה ברורה של הרכב."
+        )
+        return response, CourierState.REGISTER_COLLECT_VEHICLE_PHOTO.value, {"vehicle_category": category}
+
+    async def _handle_collect_vehicle_photo(self, user: User, message: str, context: dict, photo_file_id: str):
+        """איסוף תמונת רכב - שלב ה'"""
+        if not photo_file_id:
+            response = MessageResponse(
+                "לא התקבלה תמונה. אנא שלח תמונה של הרכב שלך."
+            )
+            return response, CourierState.REGISTER_COLLECT_VEHICLE_PHOTO.value, {}
+
+        # שומרים את תמונת הרכב ומעבירים לאישור תקנון
+        user.vehicle_photo_file_id = photo_file_id
+        await self.db.commit()
+
+        response = MessageResponse(
+            "תמונת הרכב התקבלה בהצלחה! ✓\n\n" + self.TERMS_TEXT,
             keyboard=[["קראתי ואני מאשר ✅"]]
         )
-        return response, CourierState.REGISTER_TERMS.value, {}
+        return response, CourierState.REGISTER_TERMS.value, {"vehicle_photo_file_id": photo_file_id}
 
     async def _handle_terms(self, user: User, message: str, context: dict, photo_file_id: str):
-        """Handle terms acceptance [1.3]"""
+        """אישור תקנון - שלב ו'"""
         from datetime import datetime
         from app.db.models.user import ApprovalStatus, UserRole
 
@@ -789,19 +864,25 @@ class CourierStateHandler:
             )
             return response, CourierState.REGISTER_TERMS.value, {}
 
-        # Update user status
+        # עדכון סטטוס המשתמש ושמירת כל הנתונים שנאספו במהלך ה-KYC
         user.terms_accepted_at = datetime.utcnow()
         user.role = UserRole.COURIER
         user.approval_status = ApprovalStatus.PENDING
 
-        # Save document URL from context
+        # שמירת מסמכים מהקונטקסט
         if context.get("document_file_id"):
             user.id_document_url = context["document_file_id"]
+        if context.get("selfie_file_id") and not user.selfie_file_id:
+            user.selfie_file_id = context["selfie_file_id"]
+        if context.get("vehicle_category") and not user.vehicle_category:
+            user.vehicle_category = context["vehicle_category"]
+        if context.get("vehicle_photo_file_id") and not user.vehicle_photo_file_id:
+            user.vehicle_photo_file_id = context["vehicle_photo_file_id"]
 
         await self.db.commit()
 
         response = MessageResponse(
-            "<b>הרישום הושלם בהצלחה!</b>\n\n"
+            "<b>הרישום הושלם בהצלחה!</b> 🎉\n\n"
             "פרטיך הועברו לבדיקת הנהלה.\n"
             "תקבל הודעה ברגע שחשבונך יאושר.\n\n"
             "⏳ בדרך כלל האישור מתבצע תוך 24 שעות."

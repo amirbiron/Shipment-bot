@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     WHATSAPP_GATEWAY_URL: str = "http://localhost:3000"
     WHATSAPP_ADMIN_GROUP_ID: Optional[str] = None  # קבוצת מנהלים לאישור שליחים
 
+    # קישורים לתפריט הראשי [שלב 1]
+    WHATSAPP_GROUP_LINK: str = ""  # קישור לקבוצת וואטסאפ להעלאת משלוח מהיר
+    ADMIN_WHATSAPP_NUMBER: str = ""  # מספר וואטסאפ של המנהל הראשי לפנייה ישירה
+
     # Telegram
     TELEGRAM_BOT_TOKEN: Optional[str] = None
     TELEGRAM_ADMIN_CHAT_ID: Optional[str] = None  # Admin chat for notifications

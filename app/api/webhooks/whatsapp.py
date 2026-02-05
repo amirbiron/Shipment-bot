@@ -317,21 +317,19 @@ async def _reject_courier(db: AsyncSession, user_id: int) -> str:
 
 
 async def send_welcome_message(phone_number: str):
-    """Send initial welcome message with role selection [1.1]"""
-    welcome_text = """שלום וברוכים הבאים! 👋
-
-אני הבוט של *משלוח בצ'יק*.
-
-מה תרצה לעשות?
-
-בכל שלב תוכלו לחזור לתפריט הראשי על ידי הקשה של #
-
-1️⃣ אני רוצה לשלוח חבילה
-2️⃣ אני שליח"""
+    """הודעת ברוכים הבאים ותפריט ראשי [שלב 1]"""
+    welcome_text = (
+        "ברוכים הבאים ל*משלוח בצ'יק* 🚚\n"
+        "המערכת החכמה לשיתוף משלוחים.\n\n"
+        "איך נוכל לעזור היום?\n\n"
+        "בכל שלב תוכלו לחזור לתפריט הראשי על ידי הקשה של #"
+    )
 
     keyboard = [
-        ["📦 אני רוצה לשלוח חבילה"],
-        ["🚚 אני שליח"]
+        ["🚚 הצטרפות למנוי וקבלת משלוחים"],
+        ["📦 העלאת משלוח מהיר"],
+        ["🏪 הצטרפות כתחנה"],
+        ["📞 פנייה לניהול"],
     ]
     await send_whatsapp_message(phone_number, welcome_text, keyboard)
 
@@ -500,33 +498,107 @@ async def whatsapp_webhook(
             })
             continue
 
-        # Check if user wants to be a courier [1.1]
-        if "שליח" in text and user.role == UserRole.SENDER:
-            # Switch to courier role and start registration
-            user.role = UserRole.COURIER
-            await db.commit()
+        # טיפול בכפתורי תפריט ראשי [שלב 1]
+        # הערה: הכפתורים הבאים פעילים רק למשתמשים שאינם שליחים באמצע תהליך רישום.
+        # שליח באמצע KYC ימשיך ישירות ל-CourierStateHandler למטה.
+        _is_courier_in_registration = (
+            user.role == UserRole.COURIER
+            and await state_manager.get_current_state(user.id, "whatsapp") in {
+                CourierState.REGISTER_COLLECT_NAME.value,
+                CourierState.REGISTER_COLLECT_DOCUMENT.value,
+                CourierState.REGISTER_COLLECT_SELFIE.value,
+                CourierState.REGISTER_COLLECT_VEHICLE_CATEGORY.value,
+                CourierState.REGISTER_COLLECT_VEHICLE_PHOTO.value,
+                CourierState.REGISTER_TERMS.value,
+            }
+        )
 
-            await state_manager.force_state(
-                user.id, "whatsapp",
-                CourierState.INITIAL.value,
-                context={}
-            )
+        if not _is_courier_in_registration:
+            if user.role == UserRole.SENDER and ("הצטרפות למנוי" in text or "שליח" in text):
+                # ניתוב לתהליך הרישום כנהג/שליח
+                user.role = UserRole.COURIER
+                await db.commit()
 
-            handler = CourierStateHandler(db, platform="whatsapp")
-            response, new_state = await handler.handle_message(user, text, photo_file_id)
+                await state_manager.force_state(
+                    user.id, "whatsapp",
+                    CourierState.INITIAL.value,
+                    context={}
+                )
 
-            background_tasks.add_task(
-                send_whatsapp_message,
-                reply_to,
-                response.text,
-                response.keyboard
-            )
-            responses.append({
-                "from": sender_id,
-                "response": response.text,
-                "new_state": new_state
-            })
-            continue
+                handler = CourierStateHandler(db, platform="whatsapp")
+                response, new_state = await handler.handle_message(user, text, photo_file_id)
+
+                background_tasks.add_task(
+                    send_whatsapp_message,
+                    reply_to,
+                    response.text,
+                    response.keyboard
+                )
+                responses.append({
+                    "from": sender_id,
+                    "response": response.text,
+                    "new_state": new_state
+                })
+                continue
+
+            if "העלאת משלוח מהיר" in text or "משלוח מהיר" in text:
+                # קישור חיצוני לקבוצת WhatsApp - משתמשים רגילים לא יכולים להעלות משלוח בתוך הבוט
+                if settings.WHATSAPP_GROUP_LINK:
+                    msg_text = (
+                        "📦 *העלאת משלוח מהיר*\n\n"
+                        "להעלאת משלוח מהיר, הצטרפו לקבוצת WhatsApp שלנו:\n"
+                        f"{settings.WHATSAPP_GROUP_LINK}"
+                    )
+                else:
+                    msg_text = (
+                        "📦 *העלאת משלוח מהיר*\n\n"
+                        "להעלאת משלוח מהיר, פנו להנהלה לקבלת קישור לקבוצת WhatsApp."
+                    )
+                background_tasks.add_task(send_whatsapp_message, reply_to, msg_text)
+                responses.append({"from": sender_id, "response": msg_text, "new_state": None})
+                continue
+
+            if "הצטרפות כתחנה" in text or "תחנה" in text:
+                # הודעה שיווקית עבור תחנות
+                station_text = (
+                    "🏪 *הצטרפות כתחנה*\n\n"
+                    "המערכת של ShipShare מסדרת לך את התחנה!\n\n"
+                    "✅ ניהול נהגים אוטומטי\n"
+                    "✅ גבייה מסודרת\n"
+                    "✅ תיעוד משלוחים מלא\n"
+                    "✅ סדר בבלגן\n\n"
+                    "לפרטים נוספים, פנו להנהלה."
+                )
+                background_tasks.add_task(
+                    send_whatsapp_message, reply_to, station_text,
+                    [["📞 פנייה לניהול"]]
+                )
+                responses.append({"from": sender_id, "response": station_text, "new_state": None})
+                continue
+
+            if "פנייה לניהול" in text:
+                # קישור WhatsApp ישיר למנהל הראשי
+                if settings.ADMIN_WHATSAPP_NUMBER:
+                    admin_link = f"https://wa.me/{settings.ADMIN_WHATSAPP_NUMBER}"
+                    admin_text = (
+                        "📞 *פנייה לניהול*\n\n"
+                        f"ליצירת קשר עם המנהל:\n{admin_link}"
+                    )
+                else:
+                    admin_text = (
+                        "📞 *פנייה לניהול*\n\n"
+                        "ליצירת קשר עם המנהל, שלחו הודעה כאן ונחזור אליכם בהקדם."
+                    )
+                background_tasks.add_task(send_whatsapp_message, reply_to, admin_text)
+                responses.append({"from": sender_id, "response": admin_text, "new_state": None})
+                continue
+
+            if "חזרה לתפריט" in text and user.role != UserRole.COURIER:
+                # כפתור "חזרה לתפריט" - מנתב כמו לחיצה על #
+                # שליחים רגילים חוזרים לתפריט הראשי. שליחים מאושרים ייפלו ל-CourierStateHandler למטה.
+                background_tasks.add_task(send_welcome_message, reply_to)
+                responses.append({"from": sender_id, "response": "welcome", "new_state": None})
+                continue
 
         # Route based on user role
         if user.role == UserRole.COURIER:
@@ -536,7 +608,7 @@ async def whatsapp_webhook(
             handler = CourierStateHandler(db, platform="whatsapp")
             response, new_state = await handler.handle_message(user, text, photo_file_id)
 
-            # שליחת התראה למנהלים רק במעבר הראשון למצב PENDING_APPROVAL
+            # שליחת "כרטיס נהג" למנהלים רק במעבר הראשון למצב PENDING_APPROVAL
             # (כלומר רק כשהמצב הקודם היה שונה - למניעת שליחה כפולה)
             if (new_state == CourierState.PENDING_APPROVAL.value and
                 previous_state != CourierState.PENDING_APPROVAL.value and
@@ -549,7 +621,10 @@ async def whatsapp_webhook(
                     user.service_area or "לא צוין",
                     user.phone_number,
                     context.get("document_file_id"),
-                    "whatsapp"  # פלטפורמה
+                    "whatsapp",
+                    user.vehicle_category,
+                    user.selfie_file_id,
+                    user.vehicle_photo_file_id,
                 )
 
             # Check if courier submitted deposit screenshot
