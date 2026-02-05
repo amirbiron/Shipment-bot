@@ -24,8 +24,10 @@ class _DummyCircuitBreaker:
 @pytest.mark.unit
 async def test_notify_new_courier_registration_returns_false_when_not_configured(monkeypatch):
     monkeypatch.setattr(settings, "WHATSAPP_ADMIN_GROUP_ID", None)
+    monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "")
     monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", None)
     monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_ID", None)
+    monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_IDS", "")
 
     ok = await AdminNotificationService.notify_new_courier_registration(
         user_id=1,
@@ -41,13 +43,16 @@ async def test_notify_new_courier_registration_returns_false_when_not_configured
 @pytest.mark.unit
 async def test_notify_new_courier_registration_sends_telegram_and_forwards_photo(monkeypatch):
     monkeypatch.setattr(settings, "WHATSAPP_ADMIN_GROUP_ID", None)
+    monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "")
     monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "test-token")
     monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_ID", "admin-chat")
+    monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_IDS", "")
 
     send_mock = AsyncMock(return_value=True)
     forward_mock = AsyncMock(return_value=True)
 
-    monkeypatch.setattr(AdminNotificationService, "_send_telegram_message", send_mock)
+    # השירות משתמש עכשיו ב-inline keyboard עם כפתורי אישור/דחייה
+    monkeypatch.setattr(AdminNotificationService, "_send_telegram_message_with_inline_keyboard", send_mock)
     monkeypatch.setattr(AdminNotificationService, "_forward_photo", forward_mock)
 
     ok = await AdminNotificationService.notify_new_courier_registration(
@@ -68,7 +73,9 @@ async def test_notify_new_courier_registration_sends_telegram_and_forwards_photo
 async def test_notify_new_courier_registration_sends_whatsapp_and_sends_media(monkeypatch):
     monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", None)
     monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_ID", None)
+    monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_IDS", "")
     monkeypatch.setattr(settings, "WHATSAPP_ADMIN_GROUP_ID", "wa-group")
+    monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "")
     monkeypatch.setattr(settings, "WHATSAPP_GATEWAY_URL", "http://localhost:3000")
 
     send_mock = AsyncMock(return_value=True)
