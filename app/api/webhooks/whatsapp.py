@@ -95,7 +95,6 @@ async def send_whatsapp_message(phone_number: str, text: str, keyboard: list = N
     transient_status_codes = {502, 503, 504, 429}
 
     async def _send_with_retry():
-        last_error = None
         for attempt in range(max_retries):
             try:
                 async with httpx.AsyncClient() as client:
@@ -133,9 +132,8 @@ async def send_whatsapp_message(phone_number: str, text: str, keyboard: list = N
                         response,
                         message=f"gateway /send returned status {response.status_code}",
                     )
-            except httpx.TimeoutException as e:
+            except httpx.TimeoutException:
                 # Timeout גם נחשב שגיאה זמנית
-                last_error = e
                 if attempt < max_retries - 1:
                     backoff_seconds = 2 ** attempt
                     logger.warning(
@@ -155,7 +153,6 @@ async def send_whatsapp_message(phone_number: str, text: str, keyboard: list = N
                 )
             except httpx.RequestError as e:
                 # שגיאות רשת (connection error וכו')
-                last_error = e
                 if attempt < max_retries - 1:
                     backoff_seconds = 2 ** attempt
                     logger.warning(
