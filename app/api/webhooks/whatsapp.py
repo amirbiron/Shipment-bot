@@ -403,20 +403,9 @@ async def whatsapp_webhook(
         # Get or create user
         user, is_new_user = await get_or_create_user(db, sender_id)
 
-        # Initialize state manager
-        state_manager = StateManager(db)
-
-        # New user - show welcome message with role selection [1.1]
-        if is_new_user:
-            background_tasks.add_task(send_welcome_message, reply_to)
-            responses.append({
-                "from": sender_id,
-                "response": "welcome",
-                "new_user": True
-            })
-            continue
-
         # טיפול בפקודות אישור/דחייה מהודעות פרטיות של מנהלים
+        # חייב להיות לפני בדיקת is_new_user כדי שמנהל חדש שעוד לא ב-DB
+        # יוכל לאשר/לדחות שליחים כבר מההודעה הראשונה שלו
         wa_admin_numbers = _get_whatsapp_admin_numbers()
         if sender_id in wa_admin_numbers and text:
             admin_response = await handle_admin_private_command(
@@ -430,6 +419,19 @@ async def whatsapp_webhook(
                     "admin_command": True
                 })
                 continue
+
+        # Initialize state manager
+        state_manager = StateManager(db)
+
+        # New user - show welcome message with role selection [1.1]
+        if is_new_user:
+            background_tasks.add_task(send_welcome_message, reply_to)
+            responses.append({
+                "from": sender_id,
+                "response": "welcome",
+                "new_user": True
+            })
+            continue
 
         # Handle "#" to return to main menu
         if text.strip() == "#":
