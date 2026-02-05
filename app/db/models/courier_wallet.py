@@ -17,7 +17,7 @@ class CourierWallet(Base):
     courier_id = Column(BigInteger, ForeignKey("users.id"), unique=True, nullable=False)
 
     balance = Column(Float, default=0.0)
-    credit_limit = Column(Float, default=-100.0)  # Minimum allowed balance
+    credit_limit = Column(Float, default=-500.0)  # Minimum allowed balance
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

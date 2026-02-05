@@ -118,6 +118,10 @@ async def startup() -> None:
             await conn.execute(text("""
                 CREATE INDEX IF NOT EXISTS idx_users_approval_status ON users(approval_status);
             """))
+            # עדכון ברירת מחדל של credit_limit בטבלת courier_wallets
+            await conn.execute(text("""
+                ALTER TABLE courier_wallets ALTER COLUMN credit_limit SET DEFAULT -500.00;
+            """))
 
             # מיגרציה 002 - שדות KYC לשליחים
             await conn.execute(text("""
