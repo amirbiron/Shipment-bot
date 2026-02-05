@@ -499,8 +499,9 @@ async def telegram_webhook(
             )
             return {"ok": True}
 
-        if "חזרה לתפריט" in text:
+        if "חזרה לתפריט" in text and user.role != UserRole.COURIER:
             # כפתור "חזרה לתפריט" - מנתב כמו לחיצה על #
+            # שליחים רגילים חוזרים לתפריט הראשי. שליחים מאושרים ייפלו ל-CourierStateHandler למטה.
             background_tasks.add_task(send_welcome_message, chat_id)
             return {"ok": True}
 
