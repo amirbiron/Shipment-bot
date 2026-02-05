@@ -93,6 +93,15 @@ async def startup() -> None:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database tables initialized")
 
+    # הרצת מיגרציות אוטומטיות - הוספת עמודות חדשות לטבלאות קיימות
+    # (create_all לא מוסיף עמודות לטבלאות שכבר קיימות)
+    # הערה: המיגרציות רצות רק על PostgreSQL. ב-SQLite (בדיקות) create_all מספיק.
+    if engine.dialect.name == "postgresql":
+        from app.db.migrations import run_all_migrations
+        async with engine.begin() as conn:
+            await run_all_migrations(conn)
+        logger.info("Auto-migrations completed")
+
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
