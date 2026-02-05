@@ -41,13 +41,13 @@ class CourierApprovalService:
         if user.approval_status == ApprovalStatus.APPROVED:
             return ApprovalResult(
                 False,
-                f"ℹ️ שליח {user_id} ({user.full_name or user.name}) כבר מאושר"
+                f"ℹ️ שליח {user_id} ({user.full_name or user.name or 'לא צוין'}) כבר מאושר"
             )
 
         if user.approval_status == ApprovalStatus.BLOCKED:
             return ApprovalResult(
                 False,
-                f"⛔ שליח {user_id} ({user.full_name or user.name}) חסום במערכת. לא ניתן לאשר משתמש חסום."
+                f"⛔ שליח {user_id} ({user.full_name or user.name or 'לא צוין'}) חסום במערכת. לא ניתן לאשר משתמש חסום."
             )
 
         user.approval_status = ApprovalStatus.APPROVED
@@ -55,12 +55,12 @@ class CourierApprovalService:
 
         logger.info(
             "Courier approved",
-            extra_data={"user_id": user_id, "name": user.full_name or user.name}
+            extra_data={"user_id": user_id, "name": user.full_name or user.name or 'לא צוין'}
         )
 
         return ApprovalResult(
             True,
-            f"✅ שליח {user_id} ({user.full_name or user.name}) אושר בהצלחה!",
+            f"✅ שליח {user_id} ({user.full_name or user.name or 'לא צוין'}) אושר בהצלחה!",
             user
         )
 
@@ -81,13 +81,13 @@ class CourierApprovalService:
         if user.approval_status == ApprovalStatus.REJECTED:
             return ApprovalResult(
                 False,
-                f"ℹ️ שליח {user_id} ({user.full_name or user.name}) כבר נדחה"
+                f"ℹ️ שליח {user_id} ({user.full_name or user.name or 'לא צוין'}) כבר נדחה"
             )
 
         if user.approval_status == ApprovalStatus.BLOCKED:
             return ApprovalResult(
                 False,
-                f"⛔ שליח {user_id} ({user.full_name or user.name}) חסום במערכת. לא ניתן לשנות סטטוס של משתמש חסום."
+                f"⛔ שליח {user_id} ({user.full_name or user.name or 'לא צוין'}) חסום במערכת. לא ניתן לשנות סטטוס של משתמש חסום."
             )
 
         user.approval_status = ApprovalStatus.REJECTED
@@ -95,11 +95,11 @@ class CourierApprovalService:
 
         logger.info(
             "Courier rejected",
-            extra_data={"user_id": user_id, "name": user.full_name or user.name}
+            extra_data={"user_id": user_id, "name": user.full_name or user.name or 'לא צוין'}
         )
 
         return ApprovalResult(
             True,
-            f"❌ שליח {user_id} ({user.full_name or user.name}) נדחה.",
+            f"❌ שליח {user_id} ({user.full_name or user.name or 'לא צוין'}) נדחה.",
             user
         )
