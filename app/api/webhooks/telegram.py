@@ -1,6 +1,7 @@
 """
 Telegram Webhook Handler - Bot Gateway Layer
 """
+import re
 import hashlib
 from fastapi import APIRouter, Depends, BackgroundTasks
 from pydantic import BaseModel, Field, ConfigDict
@@ -14,8 +15,10 @@ from app.state_machine.handlers import SenderStateHandler, CourierStateHandler
 from app.state_machine.states import CourierState
 from app.state_machine.manager import StateManager
 from app.domain.services import AdminNotificationService
+from app.domain.services.courier_approval_service import CourierApprovalService
 from app.core.logging import get_logger
 from app.core.circuit_breaker import get_telegram_circuit_breaker
+from app.core.config import settings
 from app.core.exceptions import TelegramError
 
 logger = get_logger(__name__)
@@ -283,6 +286,70 @@ async def telegram_webhook(
             name = callback.from_user.first_name
             if callback.from_user.last_name:
                 name += f" {callback.from_user.last_name}"
+
+        # טיפול בכפתורי אישור/דחיית שליח (מנהלים בלבד)
+        courier_action = re.match(r'^(approve|reject)_courier_(\d+)$', callback.data or "")
+        if courier_action and chat_id:
+            # בדיקה שהשולח הוא מנהל מוכר
+            admin_ids = {cid.strip() for cid in settings.TELEGRAM_ADMIN_CHAT_IDS.split(",") if cid.strip()}
+            if settings.TELEGRAM_ADMIN_CHAT_ID:
+                admin_ids.add(settings.TELEGRAM_ADMIN_CHAT_ID)
+
+            if chat_id in admin_ids:
+                action = courier_action.group(1)
+                courier_id = int(courier_action.group(2))
+                admin_name = name or "מנהל"
+
+                # אישור או דחייה
+                if action == "approve":
+                    result = await CourierApprovalService.approve(db, courier_id)
+                else:
+                    result = await CourierApprovalService.reject(db, courier_id)
+
+                # שליחת תוצאה למנהל
+                background_tasks.add_task(send_telegram_message, chat_id, result.message)
+
+                # אם הפעולה הצליחה - שליחת הודעה לשליח וסיכום לקבוצה
+                if result.success and result.user:
+                    courier = result.user
+                    # הודעה לשליח
+                    if action == "approve":
+                        courier_msg = """🎉 <b>חשבונך אושר!</b>
+
+ברוכים הבאים למערכת השליחים!
+מעכשיו תוכל לתפוס משלוחים ולהתחיל לעבוד.
+
+כתוב <b>תפריט</b> כדי להתחיל."""
+                    else:
+                        courier_msg = """😔 <b>לצערנו, בקשתך להצטרף כשליח נדחתה.</b>
+
+אם אתה חושב שזו טעות, אנא צור קשר עם התמיכה."""
+
+                    if courier.telegram_chat_id:
+                        background_tasks.add_task(
+                            send_telegram_message, courier.telegram_chat_id, courier_msg
+                        )
+                    elif courier.phone_number and not courier.phone_number.startswith("tg:"):
+                        from app.api.webhooks.whatsapp import send_whatsapp_message
+                        background_tasks.add_task(
+                            send_whatsapp_message, courier.phone_number, courier_msg
+                        )
+
+                    # סיכום לקבוצת מנהלים
+                    decision = "approved" if action == "approve" else "rejected"
+                    background_tasks.add_task(
+                        AdminNotificationService.notify_group_courier_decision,
+                        courier.id,
+                        courier.full_name or courier.name or "לא צוין",
+                        courier.service_area or "לא צוין",
+                        courier.vehicle_category,
+                        courier.platform or "telegram",
+                        decision,
+                        admin_name,
+                    )
+
+                return {"ok": True, "admin_action": action, "courier_id": courier_id}
+
     elif update.message:
         message = update.message
         chat_id = str(message.chat.id)

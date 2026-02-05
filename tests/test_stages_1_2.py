@@ -3,6 +3,7 @@
 
 שלב 1: מוודא שהודעת הפתיחה כוללת 4 כפתורים וטקסט מעודכן.
 שלב 2: מוודא את כל זרימת ה-KYC: שם -> מסמך -> סלפי -> קטגוריית רכב -> תמונת רכב -> תקנון.
+כולל בדיקות לתהליך אישור/דחייה של שליחים.
 """
 import pytest
 from unittest.mock import AsyncMock, patch
@@ -12,6 +13,8 @@ from app.state_machine.states import CourierState, COURIER_TRANSITIONS
 from app.state_machine.handlers import CourierStateHandler, MessageResponse
 from app.state_machine.manager import StateManager
 from app.db.models.user import User, UserRole, ApprovalStatus
+from app.domain.services.courier_approval_service import CourierApprovalService
+from app.core.config import settings
 
 
 # ============================================================================
@@ -682,3 +685,225 @@ class TestStage2UserModel:
         assert user.selfie_file_id == "selfie_abc"
         assert user.vehicle_category == "car_4"
         assert user.vehicle_photo_file_id == "vehicle_xyz"
+
+
+# ============================================================================
+# תהליך אישור/דחיית שליחים
+# ============================================================================
+
+
+class TestCourierApprovalService:
+    """בדיקות ל-CourierApprovalService - לוגיקת אישור/דחייה משותפת"""
+
+    @pytest.mark.asyncio
+    async def test_approve_pending_courier(self, db_session, user_factory):
+        """אישור שליח ממתין"""
+        user = await user_factory(
+            phone_number="tg:60001",
+            name="Pending Courier",
+            role=UserRole.COURIER,
+            platform="telegram",
+            telegram_chat_id="60001",
+            approval_status=ApprovalStatus.PENDING,
+        )
+        result = await CourierApprovalService.approve(db_session, user.id)
+        assert result.success is True
+        assert "אושר" in result.message
+        assert result.user.approval_status == ApprovalStatus.APPROVED
+
+    @pytest.mark.asyncio
+    async def test_approve_already_approved(self, db_session, user_factory):
+        """אישור שליח שכבר מאושר"""
+        user = await user_factory(
+            phone_number="tg:60002",
+            name="Approved Courier",
+            role=UserRole.COURIER,
+            platform="telegram",
+            telegram_chat_id="60002",
+            approval_status=ApprovalStatus.APPROVED,
+        )
+        result = await CourierApprovalService.approve(db_session, user.id)
+        assert result.success is False
+        assert "כבר מאושר" in result.message
+
+    @pytest.mark.asyncio
+    async def test_approve_blocked_courier(self, db_session, user_factory):
+        """אישור שליח חסום - נכשל"""
+        user = await user_factory(
+            phone_number="tg:60003",
+            name="Blocked Courier",
+            role=UserRole.COURIER,
+            platform="telegram",
+            telegram_chat_id="60003",
+            approval_status=ApprovalStatus.BLOCKED,
+        )
+        result = await CourierApprovalService.approve(db_session, user.id)
+        assert result.success is False
+        assert "חסום" in result.message
+
+    @pytest.mark.asyncio
+    async def test_approve_nonexistent_user(self, db_session):
+        """אישור משתמש שלא קיים"""
+        result = await CourierApprovalService.approve(db_session, 99999)
+        assert result.success is False
+        assert "לא נמצא" in result.message
+
+    @pytest.mark.asyncio
+    async def test_approve_non_courier(self, db_session, user_factory):
+        """אישור משתמש שאינו שליח"""
+        user = await user_factory(
+            phone_number="tg:60004",
+            name="Sender User",
+            role=UserRole.SENDER,
+            platform="telegram",
+            telegram_chat_id="60004",
+        )
+        result = await CourierApprovalService.approve(db_session, user.id)
+        assert result.success is False
+        assert "אינו שליח" in result.message
+
+    @pytest.mark.asyncio
+    async def test_reject_pending_courier(self, db_session, user_factory):
+        """דחיית שליח ממתין"""
+        user = await user_factory(
+            phone_number="tg:60005",
+            name="To Reject",
+            role=UserRole.COURIER,
+            platform="telegram",
+            telegram_chat_id="60005",
+            approval_status=ApprovalStatus.PENDING,
+        )
+        result = await CourierApprovalService.reject(db_session, user.id)
+        assert result.success is True
+        assert "נדחה" in result.message
+        assert result.user.approval_status == ApprovalStatus.REJECTED
+
+    @pytest.mark.asyncio
+    async def test_reject_already_rejected(self, db_session, user_factory):
+        """דחיית שליח שכבר נדחה"""
+        user = await user_factory(
+            phone_number="tg:60006",
+            name="Already Rejected",
+            role=UserRole.COURIER,
+            platform="telegram",
+            telegram_chat_id="60006",
+            approval_status=ApprovalStatus.REJECTED,
+        )
+        result = await CourierApprovalService.reject(db_session, user.id)
+        assert result.success is False
+        assert "כבר נדחה" in result.message
+
+
+class TestTelegramApprovalButtons:
+    """בדיקות לכפתורי אישור/דחייה בטלגרם"""
+
+    @pytest.mark.asyncio
+    async def test_approve_button_callback(
+        self, test_client: AsyncClient, user_factory, mock_telegram_api
+    ):
+        """כפתור אישור inline בטלגרם מאשר את השליח"""
+        courier = await user_factory(
+            phone_number="tg:70001",
+            name="To Approve TG",
+            role=UserRole.COURIER,
+            platform="telegram",
+            telegram_chat_id="70001",
+            approval_status=ApprovalStatus.PENDING,
+        )
+        admin_chat_id = "99999"
+        with (
+            patch.object(settings, "TELEGRAM_ADMIN_CHAT_IDS", admin_chat_id),
+            patch.object(settings, "TELEGRAM_ADMIN_CHAT_ID", admin_chat_id),
+            patch.object(settings, "TELEGRAM_BOT_TOKEN", "fake-token"),
+            patch.object(settings, "WHATSAPP_ADMIN_GROUP_ID", None),
+            patch.object(settings, "WHATSAPP_ADMIN_NUMBERS", ""),
+            patch.object(settings, "WHATSAPP_GATEWAY_URL", ""),
+        ):
+            resp = await test_client.post(
+                "/api/telegram/webhook",
+                json={
+                    "update_id": 1,
+                    "callback_query": {
+                        "id": "cb1",
+                        "from": {"id": 99999, "first_name": "Admin"},
+                        "message": {
+                            "message_id": 1,
+                            "chat": {"id": 99999, "type": "private"},
+                            "from": {"id": 99999, "first_name": "Admin"},
+                            "date": 1700000000,
+                            "text": "כרטיס נהג",
+                        },
+                        "data": f"approve_courier_{courier.id}",
+                    },
+                },
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data.get("admin_action") == "approve"
+
+    @pytest.mark.asyncio
+    async def test_reject_button_callback(
+        self, test_client: AsyncClient, user_factory, mock_telegram_api
+    ):
+        """כפתור דחייה inline בטלגרם דוחה את השליח"""
+        courier = await user_factory(
+            phone_number="tg:70002",
+            name="To Reject TG",
+            role=UserRole.COURIER,
+            platform="telegram",
+            telegram_chat_id="70002",
+            approval_status=ApprovalStatus.PENDING,
+        )
+        admin_chat_id = "99998"
+        with (
+            patch.object(settings, "TELEGRAM_ADMIN_CHAT_IDS", admin_chat_id),
+            patch.object(settings, "TELEGRAM_ADMIN_CHAT_ID", admin_chat_id),
+            patch.object(settings, "TELEGRAM_BOT_TOKEN", "fake-token"),
+            patch.object(settings, "WHATSAPP_ADMIN_GROUP_ID", None),
+            patch.object(settings, "WHATSAPP_ADMIN_NUMBERS", ""),
+            patch.object(settings, "WHATSAPP_GATEWAY_URL", ""),
+        ):
+            resp = await test_client.post(
+                "/api/telegram/webhook",
+                json={
+                    "update_id": 2,
+                    "callback_query": {
+                        "id": "cb2",
+                        "from": {"id": 99998, "first_name": "Admin2"},
+                        "message": {
+                            "message_id": 2,
+                            "chat": {"id": 99998, "type": "private"},
+                            "from": {"id": 99998, "first_name": "Admin2"},
+                            "date": 1700000000,
+                            "text": "כרטיס נהג",
+                        },
+                        "data": f"reject_courier_{courier.id}",
+                    },
+                },
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data.get("admin_action") == "reject"
+
+
+class TestWhatsAppAdminApproval:
+    """בדיקות לפקודות אישור/דחייה מפרטי של מנהלים בוואטסאפ"""
+
+    @pytest.mark.asyncio
+    async def test_whatsapp_command_matching(self):
+        """זיהוי פקודות אישור/דחייה"""
+        from app.api.webhooks.whatsapp import _match_approval_command
+
+        # אישור
+        assert _match_approval_command("אשר 123") == ("approve", 123)
+        assert _match_approval_command("✅ אשר 456") == ("approve", 456)
+        assert _match_approval_command("אשר שליח 789") == ("approve", 789)
+
+        # דחייה
+        assert _match_approval_command("דחה 123") == ("reject", 123)
+        assert _match_approval_command("❌ דחה 456") == ("reject", 456)
+        assert _match_approval_command("דחה שליח 789") == ("reject", 789)
+
+        # לא תקין
+        assert _match_approval_command("שלום") is None
+        assert _match_approval_command("הודעה אחרת") is None

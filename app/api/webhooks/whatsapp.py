@@ -17,6 +17,7 @@ from app.state_machine.handlers import SenderStateHandler, CourierStateHandler
 from app.state_machine.states import CourierState
 from app.state_machine.manager import StateManager
 from app.domain.services import AdminNotificationService
+from app.domain.services.courier_approval_service import CourierApprovalService
 from app.core.logging import get_logger
 from app.core.circuit_breaker import get_whatsapp_circuit_breaker
 from app.core.validation import PhoneNumberValidator, convert_html_to_whatsapp
@@ -184,136 +185,121 @@ async def send_whatsapp_message(phone_number: str, text: str, keyboard: list = N
         )
 
 
-async def handle_admin_group_command(
-    db: AsyncSession,
-    text: str
-) -> Optional[str]:
-    """
-    טיפול בפקודות מנהל מקבוצת הוואטסאפ.
-    מזהה פקודות כמו "אשר שליח 123" או "דחה שליח 456"
+def _get_whatsapp_admin_numbers() -> set[str]:
+    """מחזיר סט מספרי מנהלים פרטיים לוואטסאפ"""
+    return {n.strip() for n in settings.WHATSAPP_ADMIN_NUMBERS.split(",") if n.strip()}
 
-    Returns:
-        הודעת תגובה אם זוהתה פקודה, None אחרת
+
+def _match_approval_command(text: str) -> tuple[str, int] | None:
+    """
+    זיהוי פקודת אישור/דחייה בטקסט.
+    מחזיר (action, user_id) או None.
     """
     text = text.strip()
-
-    # זיהוי פקודת אישור - תומך בפורמטים:
-    # "אשר 123", "אשר שליח 123", "✅ אשר 123"
-    # חייב להתחיל בתחילת ההודעה - מונע התאמה של ציטוטים
     approve_match = re.match(r'^[✅\s]*אשר(?:\s+שליח)?\s+(\d+)\s*$', text)
     if approve_match:
-        user_id = int(approve_match.group(1))
-        return await _approve_courier(db, user_id)
+        return ("approve", int(approve_match.group(1)))
 
-    # זיהוי פקודת דחייה - תומך בפורמטים:
-    # "דחה 123", "דחה שליח 123", "❌ דחה 123"
-    # חייב להתחיל בתחילת ההודעה - מונע התאמה של ציטוטים
     reject_match = re.match(r'^[❌\s]*דחה(?:\s+שליח)?\s+(\d+)\s*$', text)
     if reject_match:
-        user_id = int(reject_match.group(1))
-        return await _reject_courier(db, user_id)
+        return ("reject", int(reject_match.group(1)))
 
     return None
 
 
-async def _approve_courier(db: AsyncSession, user_id: int) -> str:
-    """אישור שליח לפי user_id"""
-    result = await db.execute(
-        select(User).where(User.id == user_id)
-    )
-    user = result.scalar_one_or_none()
+async def _handle_whatsapp_approval(
+    db: AsyncSession,
+    action: str,
+    courier_id: int,
+    admin_name: str,
+) -> str:
+    """
+    ביצוע אישור/דחייה + שליחת הודעה לשליח + סיכום לקבוצה.
+    משותף לפקודות מקבוצה ומפרטי.
+    """
+    if action == "approve":
+        result = await CourierApprovalService.approve(db, courier_id)
+    else:
+        result = await CourierApprovalService.reject(db, courier_id)
 
-    if not user:
-        return f"❌ לא נמצא משתמש עם מזהה {user_id}"
+    if not result.success:
+        return result.message
 
-    if user.role != UserRole.COURIER:
-        return f"❌ משתמש {user_id} אינו שליח"
+    courier = result.user
 
-    if user.approval_status == ApprovalStatus.APPROVED:
-        return f"ℹ️ שליח {user_id} ({user.full_name or user.name}) כבר מאושר"
-
-    # בדיקה אם השליח חסום - לא מאפשרים אישור של משתמש חסום
-    if user.approval_status == ApprovalStatus.BLOCKED:
-        return f"⛔ שליח {user_id} ({user.full_name or user.name}) חסום במערכת. לא ניתן לאשר משתמש חסום."
-
-    # אישור השליח
-    user.approval_status = ApprovalStatus.APPROVED
-    await db.commit()
-
-    logger.info(
-        "Courier approved via WhatsApp admin group",
-        extra_data={"user_id": user_id, "name": user.full_name or user.name}
-    )
-
-    # שליחת הודעה לשליח שהוא אושר
-    if user.phone_number and not user.phone_number.endswith("@g.us"):
-        # משתמש וואטסאפ
-        approval_message = """🎉 *חשבונך אושר!*
+    # שליחת הודעה לשליח
+    if action == "approve":
+        wa_msg = """🎉 *חשבונך אושר!*
 
 ברוכים הבאים למערכת השליחים!
 מעכשיו תוכל לתפוס משלוחים ולהתחיל לעבוד.
 
 כתוב *תפריט* כדי להתחיל."""
-        await send_whatsapp_message(user.phone_number, approval_message)
-    elif user.telegram_chat_id:
-        # משתמש טלגרם
-        from app.api.webhooks.telegram import send_telegram_message
-        approval_message = """🎉 <b>חשבונך אושר!</b>
+        tg_msg = """🎉 <b>חשבונך אושר!</b>
 
 ברוכים הבאים למערכת השליחים!
 מעכשיו תוכל לתפוס משלוחים ולהתחיל לעבוד.
 
 כתוב <b>תפריט</b> כדי להתחיל."""
-        await send_telegram_message(user.telegram_chat_id, approval_message)
-
-    return f"✅ שליח {user_id} ({user.full_name or user.name}) אושר בהצלחה!"
-
-
-async def _reject_courier(db: AsyncSession, user_id: int) -> str:
-    """דחיית שליח לפי user_id"""
-    result = await db.execute(
-        select(User).where(User.id == user_id)
-    )
-    user = result.scalar_one_or_none()
-
-    if not user:
-        return f"❌ לא נמצא משתמש עם מזהה {user_id}"
-
-    if user.role != UserRole.COURIER:
-        return f"❌ משתמש {user_id} אינו שליח"
-
-    if user.approval_status == ApprovalStatus.REJECTED:
-        return f"ℹ️ שליח {user_id} ({user.full_name or user.name}) כבר נדחה"
-
-    # בדיקה אם השליח חסום - BLOCKED הוא סטטוס "דביק" שלא ניתן לשנות
-    if user.approval_status == ApprovalStatus.BLOCKED:
-        return f"⛔ שליח {user_id} ({user.full_name or user.name}) חסום במערכת. לא ניתן לשנות סטטוס של משתמש חסום."
-
-    # דחיית השליח
-    user.approval_status = ApprovalStatus.REJECTED
-    await db.commit()
-
-    logger.info(
-        "Courier rejected via WhatsApp admin group",
-        extra_data={"user_id": user_id, "name": user.full_name or user.name}
-    )
-
-    # שליחת הודעה לשליח שנדחה
-    if user.phone_number and not user.phone_number.endswith("@g.us"):
-        # משתמש וואטסאפ
-        rejection_message = """😔 *לצערנו, בקשתך להצטרף כשליח נדחתה.*
+    else:
+        wa_msg = """😔 *לצערנו, בקשתך להצטרף כשליח נדחתה.*
 
 אם אתה חושב שזו טעות, אנא צור קשר עם התמיכה."""
-        await send_whatsapp_message(user.phone_number, rejection_message)
-    elif user.telegram_chat_id:
-        # משתמש טלגרם
+        tg_msg = """😔 <b>לצערנו, בקשתך להצטרף כשליח נדחתה.</b>
+
+אם אתה חושב שזו טעות, אנא צור קשר עם התמיכה."""
+
+    if courier.phone_number and not courier.phone_number.startswith("tg:"):
+        await send_whatsapp_message(courier.phone_number, wa_msg)
+    elif courier.telegram_chat_id:
         from app.api.webhooks.telegram import send_telegram_message
-        rejection_message = """😔 <b>לצערנו, בקשתך להצטרף כשליח נדחתה.</b>
+        await send_telegram_message(courier.telegram_chat_id, tg_msg)
 
-אם אתה חושב שזו טעות, אנא צור קשר עם התמיכה."""
-        await send_telegram_message(user.telegram_chat_id, rejection_message)
+    # סיכום לקבוצת מנהלים
+    decision = "approved" if action == "approve" else "rejected"
+    await AdminNotificationService.notify_group_courier_decision(
+        courier.id,
+        courier.full_name or courier.name or "לא צוין",
+        courier.service_area or "לא צוין",
+        courier.vehicle_category,
+        courier.platform or "whatsapp",
+        decision,
+        admin_name,
+    )
 
-    return f"❌ שליח {user_id} ({user.full_name or user.name}) נדחה."
+    return result.message
+
+
+async def handle_admin_group_command(
+    db: AsyncSession,
+    text: str
+) -> Optional[str]:
+    """
+    טיפול בפקודות מנהל מקבוצת הוואטסאפ (תאימות לאחור).
+    מזהה פקודות כמו "אשר שליח 123" או "דחה שליח 456"
+    """
+    parsed = _match_approval_command(text)
+    if not parsed:
+        return None
+
+    action, user_id = parsed
+    return await _handle_whatsapp_approval(db, action, user_id, admin_name="מנהל (קבוצה)")
+
+
+async def handle_admin_private_command(
+    db: AsyncSession,
+    text: str,
+    admin_name: str,
+) -> Optional[str]:
+    """
+    טיפול בפקודות אישור/דחייה מהודעות פרטיות של מנהלים.
+    """
+    parsed = _match_approval_command(text)
+    if not parsed:
+        return None
+
+    action, user_id = parsed
+    return await _handle_whatsapp_approval(db, action, user_id, admin_name=admin_name)
 
 
 async def send_welcome_message(phone_number: str):
@@ -429,6 +415,21 @@ async def whatsapp_webhook(
                 "new_user": True
             })
             continue
+
+        # טיפול בפקודות אישור/דחייה מהודעות פרטיות של מנהלים
+        wa_admin_numbers = _get_whatsapp_admin_numbers()
+        if sender_id in wa_admin_numbers and text:
+            admin_response = await handle_admin_private_command(
+                db, text, admin_name=user.name or PhoneNumberValidator.mask(sender_id)
+            )
+            if admin_response:
+                background_tasks.add_task(send_whatsapp_message, reply_to, admin_response)
+                responses.append({
+                    "from": sender_id,
+                    "response": admin_response,
+                    "admin_command": True
+                })
+                continue
 
         # Handle "#" to return to main menu
         if text.strip() == "#":

@@ -6,6 +6,7 @@ from app.domain.services.capture_service import CaptureService
 from app.domain.services.wallet_service import WalletService
 from app.domain.services.outbox_service import OutboxService
 from app.domain.services.admin_notification_service import AdminNotificationService
+from app.domain.services.courier_approval_service import CourierApprovalService
 
 __all__ = [
     "DeliveryService",
@@ -13,4 +14,5 @@ __all__ = [
     "WalletService",
     "OutboxService",
     "AdminNotificationService",
+    "CourierApprovalService",
 ]
