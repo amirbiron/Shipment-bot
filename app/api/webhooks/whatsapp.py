@@ -225,46 +225,12 @@ async def _handle_whatsapp_approval(
     if not result.success:
         return result.message
 
-    courier = result.user
-
-    # שליחת הודעה לשליח
-    if action == "approve":
-        wa_msg = """🎉 *חשבונך אושר!*
-
-ברוכים הבאים למערכת השליחים!
-מעכשיו תוכל לתפוס משלוחים ולהתחיל לעבוד.
-
-כתוב *תפריט* כדי להתחיל."""
-        tg_msg = """🎉 <b>חשבונך אושר!</b>
-
-ברוכים הבאים למערכת השליחים!
-מעכשיו תוכל לתפוס משלוחים ולהתחיל לעבוד.
-
-כתוב <b>תפריט</b> כדי להתחיל."""
-    else:
-        wa_msg = """😔 *לצערנו, בקשתך להצטרף כשליח נדחתה.*
-
-אם אתה חושב שזו טעות, אנא צור קשר עם התמיכה."""
-        tg_msg = """😔 <b>לצערנו, בקשתך להצטרף כשליח נדחתה.</b>
-
-אם אתה חושב שזו טעות, אנא צור קשר עם התמיכה."""
-
-    if courier.phone_number and not courier.phone_number.startswith("tg:"):
-        await send_whatsapp_message(courier.phone_number, wa_msg)
-    elif courier.telegram_chat_id:
-        from app.api.webhooks.telegram import send_telegram_message
-        await send_telegram_message(courier.telegram_chat_id, tg_msg)
-
-    # סיכום לקבוצת מנהלים
-    decision = "approved" if action == "approve" else "rejected"
-    await AdminNotificationService.notify_group_courier_decision(
-        courier.id,
-        courier.full_name or courier.name or "לא צוין",
-        courier.service_area or "לא צוין",
-        courier.vehicle_category,
-        courier.platform or "whatsapp",
-        decision,
-        admin_name,
+    # הודעה לשליח וסיכום לקבוצה - לוגיקה משותפת
+    from app.api.webhooks.telegram import send_telegram_message
+    await CourierApprovalService.notify_after_decision(
+        result.user, action, admin_name,
+        send_telegram_fn=send_telegram_message,
+        send_whatsapp_fn=send_whatsapp_message,
     )
 
     return result.message

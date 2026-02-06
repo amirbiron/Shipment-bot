@@ -2,12 +2,13 @@
 Courier Approval Service - לוגיקת אישור/דחייה משותפת לטלגרם ווואטסאפ
 """
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Callable, Awaitable
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.db.models.user import User, UserRole, ApprovalStatus
+from app.domain.services.admin_notification_service import AdminNotificationService
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -102,4 +103,57 @@ class CourierApprovalService:
             True,
             f"❌ שליח {user_id} ({user.full_name or user.name or 'לא צוין'}) נדחה.",
             user
+        )
+
+    @staticmethod
+    async def notify_after_decision(
+        user: User,
+        action: str,
+        admin_name: str,
+        send_telegram_fn: Optional[Callable[..., Awaitable]] = None,
+        send_whatsapp_fn: Optional[Callable[..., Awaitable]] = None,
+    ) -> None:
+        """
+        שליחת הודעות לאחר החלטת אישור/דחייה:
+        1. הודעה לשליח (בפלטפורמה המתאימה)
+        2. סיכום לקבוצת מנהלים
+        """
+        # הודעות לשליח - בשני פורמטים (HTML לטלגרם, Markdown לוואטסאפ)
+        if action == "approve":
+            tg_msg = """🎉 <b>חשבונך אושר!</b>
+
+ברוכים הבאים למערכת השליחים!
+מעכשיו תוכל לתפוס משלוחים ולהתחיל לעבוד.
+
+כתוב <b>תפריט</b> כדי להתחיל."""
+            wa_msg = """🎉 *חשבונך אושר!*
+
+ברוכים הבאים למערכת השליחים!
+מעכשיו תוכל לתפוס משלוחים ולהתחיל לעבוד.
+
+כתוב *תפריט* כדי להתחיל."""
+        else:
+            tg_msg = """😔 <b>לצערנו, בקשתך להצטרף כשליח נדחתה.</b>
+
+אם אתה חושב שזו טעות, אנא צור קשר עם התמיכה."""
+            wa_msg = """😔 *לצערנו, בקשתך להצטרף כשליח נדחתה.*
+
+אם אתה חושב שזו טעות, אנא צור קשר עם התמיכה."""
+
+        # שליחה לשליח - זיהוי פלטפורמה עם סדר עקבי
+        if user.telegram_chat_id and send_telegram_fn:
+            await send_telegram_fn(user.telegram_chat_id, tg_msg)
+        elif user.phone_number and not user.phone_number.startswith("tg:") and send_whatsapp_fn:
+            await send_whatsapp_fn(user.phone_number, wa_msg)
+
+        # סיכום לקבוצת מנהלים
+        decision = "approved" if action == "approve" else "rejected"
+        await AdminNotificationService.notify_group_courier_decision(
+            user.id,
+            user.full_name or user.name or 'לא צוין',
+            user.service_area or 'לא צוין',
+            user.vehicle_category,
+            user.platform or 'telegram',
+            decision,
+            admin_name,
         )

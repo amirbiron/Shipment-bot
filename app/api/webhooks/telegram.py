@@ -309,43 +309,14 @@ async def telegram_webhook(
                 # שליחת תוצאה למנהל
                 background_tasks.add_task(send_telegram_message, chat_id, result.message)
 
-                # אם הפעולה הצליחה - שליחת הודעה לשליח וסיכום לקבוצה
+                # אם הפעולה הצליחה - הודעה לשליח וסיכום לקבוצה
                 if result.success and result.user:
-                    courier = result.user
-                    # הודעה לשליח
-                    if action == "approve":
-                        courier_msg = """🎉 <b>חשבונך אושר!</b>
-
-ברוכים הבאים למערכת השליחים!
-מעכשיו תוכל לתפוס משלוחים ולהתחיל לעבוד.
-
-כתוב <b>תפריט</b> כדי להתחיל."""
-                    else:
-                        courier_msg = """😔 <b>לצערנו, בקשתך להצטרף כשליח נדחתה.</b>
-
-אם אתה חושב שזו טעות, אנא צור קשר עם התמיכה."""
-
-                    if courier.telegram_chat_id:
-                        background_tasks.add_task(
-                            send_telegram_message, courier.telegram_chat_id, courier_msg
-                        )
-                    elif courier.phone_number and not courier.phone_number.startswith("tg:"):
-                        from app.api.webhooks.whatsapp import send_whatsapp_message
-                        background_tasks.add_task(
-                            send_whatsapp_message, courier.phone_number, courier_msg
-                        )
-
-                    # סיכום לקבוצת מנהלים
-                    decision = "approved" if action == "approve" else "rejected"
+                    from app.api.webhooks.whatsapp import send_whatsapp_message
                     background_tasks.add_task(
-                        AdminNotificationService.notify_group_courier_decision,
-                        courier.id,
-                        courier.full_name or courier.name or "לא צוין",
-                        courier.service_area or "לא צוין",
-                        courier.vehicle_category,
-                        courier.platform or "telegram",
-                        decision,
-                        admin_name,
+                        CourierApprovalService.notify_after_decision,
+                        result.user, action, admin_name,
+                        send_telegram_fn=send_telegram_message,
+                        send_whatsapp_fn=send_whatsapp_message,
                     )
 
                 return {"ok": True, "admin_action": action, "courier_id": courier_id}
