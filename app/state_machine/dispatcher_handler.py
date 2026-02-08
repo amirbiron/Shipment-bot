@@ -310,18 +310,15 @@ class DispatcherStateHandler:
             description = context.get("description", "")
             fee = context.get("fee", 10.0)
 
-            # יצירת המשלוח דרך DeliveryService - כולל שידור לנהגים
+            # יצירת המשלוח דרך DeliveryService - כולל שידור לנהגים ושיוך לתחנה
             delivery = await self.delivery_service.create_delivery(
                 sender_id=user.id,
                 pickup_address=pickup,
                 dropoff_address=dropoff,
                 pickup_notes=description,
                 fee=float(fee),
+                station_id=self.station_id,
             )
-
-            # שיוך לתחנה
-            delivery.station_id = self.station_id
-            await self.db.commit()
 
             response = MessageResponse(
                 "המשלוח נוצר בהצלחה! 🎉\n\n"

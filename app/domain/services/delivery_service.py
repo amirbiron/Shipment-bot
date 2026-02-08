@@ -28,7 +28,8 @@ class DeliveryService:
         dropoff_contact_name: Optional[str] = None,
         dropoff_contact_phone: Optional[str] = None,
         dropoff_notes: Optional[str] = None,
-        fee: float = 10.0
+        fee: float = 10.0,
+        station_id: Optional[int] = None
     ) -> Delivery:
         """
         Create a new delivery and queue broadcast messages.
@@ -45,7 +46,8 @@ class DeliveryService:
             dropoff_contact_phone=dropoff_contact_phone,
             dropoff_notes=dropoff_notes,
             fee=fee,
-            status=DeliveryStatus.OPEN
+            status=DeliveryStatus.OPEN,
+            station_id=station_id
         )
 
         self.db.add(delivery)

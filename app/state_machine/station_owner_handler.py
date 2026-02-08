@@ -157,7 +157,7 @@ class StationOwnerStateHandler:
         if "חזרה" in message:
             return await self._show_menu(user, context)
 
-        if "הוספה" in message or "הוסף" in message:
+        if "הוספת" in message or "הוספה" in message:
             response = MessageResponse(
                 "👥 <b>הוספת סדרן</b>\n\n"
                 "הזן את מספר הטלפון של הסדרן:"
@@ -362,7 +362,7 @@ class StationOwnerStateHandler:
         if "חזרה" in message:
             return await self._show_menu(user, context)
 
-        if "הוספה" in message or "חסום" in message or "הוסף" in message:
+        if "הוספת" in message or "הוספה" in message or "חסום" in message:
             response = MessageResponse(
                 "🚫 <b>הוספה לרשימה שחורה</b>\n\n"
                 "הזן את מספר הטלפון של הנהג:"
