@@ -299,11 +299,14 @@ async def _route_to_role_menu(
             )
             handler = StationOwnerStateHandler(db, station.id)
             return await handler.handle_message(user, "תפריט", None)
-        # בעל תחנה ללא תחנה פעילה - fallback לשולח
+        # בעל תחנה ללא תחנה פעילה - הורדת תפקיד לשולח כדי למנוע לולאה אינסופית
+        # (אחרת כל הודעה תיתפס שוב ע"י הבלוק של STATION_OWNER בשורה 611)
         logger.warning(
-            "Station owner without active station, falling back to sender menu",
+            "Station owner without active station, downgrading to sender",
             extra_data={"user_id": user.id}
         )
+        user.role = UserRole.SENDER
+        await db.commit()
         return await _sender_fallback(user, db, state_manager)
 
     if user.role == UserRole.SENDER or user.role == UserRole.ADMIN:
