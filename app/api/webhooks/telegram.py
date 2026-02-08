@@ -298,7 +298,8 @@ async def _route_to_role_menu(
             user_id=user.id, platform="telegram", message="תפריט"
         )
 
-    if user.role == UserRole.SENDER:
+    if user.role == UserRole.SENDER or user.role == UserRole.ADMIN:
+        # ADMIN מנוהל דרך ממשק אחר - בבוט מקבל תפריט שולח
         await state_manager.force_state(user.id, "telegram", SenderState.MENU.value, context={})
         handler = SenderStateHandler(db)
         return await handler.handle_message(
@@ -625,6 +626,15 @@ async def telegram_webhook(
             )
             return {"ok": True, "new_state": new_state}
 
+        # בעל תחנה ללא תחנה פעילה - fallback לתפריט שולח
+        response, new_state = await _route_to_role_menu(user, db, state_manager)
+        background_tasks.add_task(
+            send_telegram_message, chat_id,
+            response.text, response.keyboard,
+            getattr(response, 'inline', False)
+        )
+        return {"ok": True, "new_state": new_state}
+
     # ניתוב לתפריט סדרן (כפתור "תפריט סדרן" בתפריט נהג) [שלב 3.2]
     if ("תפריט סדרן" in text or "🏪 תפריט סדרן" in text) and user.role == UserRole.COURIER:
         from app.domain.services.station_service import StationService
@@ -705,6 +715,15 @@ async def telegram_webhook(
                 getattr(response, 'inline', False)
             )
             return {"ok": True, "new_state": new_state}
+
+        # תחנה לא נמצאה (בוטלה?) - איפוס ל-fallback
+        response, new_state = await _route_to_role_menu(user, db, state_manager)
+        background_tasks.add_task(
+            send_telegram_message, chat_id,
+            response.text, response.keyboard,
+            getattr(response, 'inline', False)
+        )
+        return {"ok": True, "new_state": new_state}
 
     # Route based on user role
     if user.role == UserRole.COURIER:

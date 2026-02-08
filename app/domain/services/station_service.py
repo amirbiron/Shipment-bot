@@ -50,9 +50,12 @@ class StationService:
         return station
 
     async def get_station(self, station_id: int) -> Optional[Station]:
-        """קבלת תחנה לפי מזהה"""
+        """קבלת תחנה פעילה לפי מזהה"""
         result = await self.db.execute(
-            select(Station).where(Station.id == station_id)
+            select(Station).where(
+                Station.id == station_id,
+                Station.is_active == True  # noqa: E712
+            )
         )
         return result.scalar_one_or_none()
 
