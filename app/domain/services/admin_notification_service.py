@@ -122,7 +122,8 @@ class AdminNotificationService:
         # --- שליחה למנהלים פרטיים בטלגרם ---
         tg_admin_ids = _parse_csv_setting(settings.TELEGRAM_ADMIN_CHAT_IDS)
         # fallback: אם לא הוגדרו מנהלים פרטיים, שולח ל-ADMIN_CHAT_ID (תאימות לאחור)
-        if not tg_admin_ids and settings.TELEGRAM_ADMIN_CHAT_ID:
+        is_tg_fallback_to_group = not tg_admin_ids
+        if is_tg_fallback_to_group and settings.TELEGRAM_ADMIN_CHAT_ID:
             tg_admin_ids = [settings.TELEGRAM_ADMIN_CHAT_ID]
 
         if tg_admin_ids and settings.TELEGRAM_BOT_TOKEN:
@@ -148,16 +149,23 @@ class AdminNotificationService:
   - סלפי: {tg_selfie_status}
   - תמונת רכב: {tg_vehicle_status}"""
 
-            # כפתורי inline לטלגרם
-            inline_keyboard = [[
+            # כפתורי inline רק בצ'אט פרטי; בקבוצה - הודעה רגילה בלבד
+            # (כפתורי inline לא עובדים בקבוצה כי בדיקת ההרשאה
+            #  מזהה לפי from_user.id שלא תואם ל-group ID)
+            inline_keyboard = None if is_tg_fallback_to_group else [[
                 {"text": "✅ אשר", "callback_data": f"approve_courier_{user_id}"},
                 {"text": "❌ דחה", "callback_data": f"reject_courier_{user_id}"},
             ]]
 
             for admin_id in tg_admin_ids:
-                tg_sent = await AdminNotificationService._send_telegram_message_with_inline_keyboard(
-                    admin_id, tg_message, inline_keyboard
-                )
+                if inline_keyboard:
+                    tg_sent = await AdminNotificationService._send_telegram_message_with_inline_keyboard(
+                        admin_id, tg_message, inline_keyboard
+                    )
+                else:
+                    tg_sent = await AdminNotificationService._send_telegram_message(
+                        admin_id, tg_message
+                    )
                 success = success or tg_sent
 
                 # שליחת תמונות (רק אם מטלגרם)

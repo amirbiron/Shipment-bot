@@ -217,6 +217,8 @@ async def _handle_whatsapp_approval(
     ביצוע אישור/דחייה + שליחת הודעה לשליח + סיכום לקבוצה.
     משותף לפקודות מקבוצה ומפרטי.
     """
+    import asyncio
+
     if action == "approve":
         result = await CourierApprovalService.approve(db, courier_id)
     else:
@@ -225,12 +227,14 @@ async def _handle_whatsapp_approval(
     if not result.success:
         return result.message
 
-    # הודעה לשליח וסיכום לקבוצה - לוגיקה משותפת
+    # הודעה לשליח וסיכום לקבוצה - ברקע כדי לא לחסום את ה-webhook
     from app.api.webhooks.telegram import send_telegram_message
-    await CourierApprovalService.notify_after_decision(
-        result.user, action, admin_name,
-        send_telegram_fn=send_telegram_message,
-        send_whatsapp_fn=send_whatsapp_message,
+    asyncio.create_task(
+        CourierApprovalService.notify_after_decision(
+            result.user, action, admin_name,
+            send_telegram_fn=send_telegram_message,
+            send_whatsapp_fn=send_whatsapp_message,
+        )
     )
 
     return result.message

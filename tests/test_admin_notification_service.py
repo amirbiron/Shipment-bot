@@ -45,8 +45,9 @@ async def test_notify_new_courier_registration_sends_telegram_and_forwards_photo
     monkeypatch.setattr(settings, "WHATSAPP_ADMIN_GROUP_ID", None)
     monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "")
     monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "test-token")
-    monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_ID", "admin-chat")
-    monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_IDS", "")
+    monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_ID", "")
+    # הגדרת מנהל פרטי - כפתורי inline נשלחים רק בצ'אט פרטי
+    monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_IDS", "admin-chat")
 
     send_mock = AsyncMock(return_value=True)
     forward_mock = AsyncMock(return_value=True)
