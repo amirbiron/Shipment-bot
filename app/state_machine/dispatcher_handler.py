@@ -16,11 +16,10 @@ from app.state_machine.states import DispatcherState
 from app.state_machine.manager import StateManager
 from app.state_machine.handlers import MessageResponse
 from app.db.models.user import User
-from app.db.models.delivery import Delivery, DeliveryStatus
+from app.db.models.delivery import DeliveryStatus
 from app.domain.services.station_service import StationService
 from app.domain.services.delivery_service import DeliveryService
 from app.core.logging import get_logger
-from app.core.validation import AddressValidator
 
 logger = get_logger(__name__)
 
@@ -311,19 +310,18 @@ class DispatcherStateHandler:
             description = context.get("description", "")
             fee = context.get("fee", 10.0)
 
-            # יצירת המשלוח עם שיוך לתחנה
-            delivery = Delivery(
+            # יצירת המשלוח דרך DeliveryService - כולל שידור לנהגים
+            delivery = await self.delivery_service.create_delivery(
                 sender_id=user.id,
                 pickup_address=pickup,
                 dropoff_address=dropoff,
                 pickup_notes=description,
                 fee=float(fee),
-                status=DeliveryStatus.OPEN,
-                station_id=self.station_id,
             )
-            self.db.add(delivery)
+
+            # שיוך לתחנה
+            delivery.station_id = self.station_id
             await self.db.commit()
-            await self.db.refresh(delivery)
 
             response = MessageResponse(
                 "המשלוח נוצר בהצלחה! 🎉\n\n"
