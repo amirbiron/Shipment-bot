@@ -22,6 +22,32 @@ const API_WEBHOOK_URL = process.env.API_WEBHOOK_URL || 'http://localhost:8000/ap
 const SESSION_FOLDER = '/app/sessions';
 const SESSION_NAME = 'shipment-bot';
 
+// חילוץ מספר טלפון ישראלי ממחרוזת (מחזיר רק ספרות)
+function normalizeIsraeliPhone(raw) {
+    if (!raw) return null;
+    const digits = String(raw).replace(/\D/g, '');
+    if (!digits) return null;
+
+    if (digits.startsWith('0') && (digits.length === 9 || digits.length === 10)) {
+        return digits;
+    }
+    if (digits.startsWith('972') && (digits.length === 11 || digits.length === 12)) {
+        return digits;
+    }
+
+    return null;
+}
+
+function extractIsraeliPhoneFromCandidates(...candidates) {
+    for (const candidate of candidates) {
+        const normalized = normalizeIsraeliPhone(candidate);
+        if (normalized) {
+            return normalized;
+        }
+    }
+    return null;
+}
+
 /**
  * Clean up stale Chrome lock files that prevent browser from starting.
  * This happens when the container restarts but the persistent disk keeps the lock.
@@ -159,6 +185,11 @@ async function initializeClient() {
             }
             console.log('Final message text:', messageText);
 
+            // ניסיון לחלץ מספר טלפון אמיתי (אם מופיע במידע של השולח)
+            let realPhone = extractIsraeliPhoneFromCandidates(
+                message?.sender?.formattedName
+            );
+
             // Get the correct ID to reply to
             let replyTo = message.from;
 
@@ -170,6 +201,13 @@ async function initializeClient() {
                     // Try to get contact info which might have real phone
                     const contact = await client.getContact(replyTo);
                     console.log('Contact info:', JSON.stringify(contact));
+
+                    if (!realPhone) {
+                        realPhone = extractIsraeliPhoneFromCandidates(
+                            contact?.number,
+                            contact?.formattedName
+                        );
+                    }
 
                     if (contact && contact.id && contact.id._serialized && !contact.id._serialized.includes('@lid')) {
                         replyTo = contact.id._serialized;
@@ -187,6 +225,12 @@ async function initializeClient() {
                     try {
                         const chat = await client.getChatById(message.chatId);
                         console.log('Chat info:', JSON.stringify(chat?.contact || chat?.id));
+                        if (!realPhone) {
+                            realPhone = extractIsraeliPhoneFromCandidates(
+                                chat?.contact?.number,
+                                chat?.contact?.formattedName
+                            );
+                        }
                         if (chat && chat.contact && chat.contact.number) {
                             replyTo = `${chat.contact.number}@c.us`;
                             console.log('Got number from chat contact:', replyTo);
@@ -219,6 +263,10 @@ async function initializeClient() {
             }
 
             console.log('Final replyTo:', replyTo);
+
+            if (!realPhone) {
+                realPhone = extractIsraeliPhoneFromCandidates(replyTo);
+            }
 
             // Check if message has media (image)
             let mediaUrl = null;
@@ -263,8 +311,8 @@ async function initializeClient() {
                         sender_id: message.from,
                         // יעד תשובה בפועל - מנסים לפתור LID למספר טלפון, אם אפשר
                         reply_to: replyTo,
-                        // שדה legacy לתאימות (בצד ה-API נשתמש ב-sender_id אם קיים)
-                        from_number: replyTo,
+                        // מספר אמיתי לזיהוי אדמינים (אם נמצא), אחרת fallback ל-reply_to
+                        from_number: realPhone || replyTo,
                         message_id: message.id,
                         // משתמשים ב-messageText שכבר מכיל את הטקסט הנכון (כולל מ-listResponse/selectedButtonId)
                         text: messageText,

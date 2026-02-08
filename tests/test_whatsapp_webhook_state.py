@@ -282,7 +282,7 @@ async def test_whatsapp_admin_root_menu_matches_reply_to_or_from_number(
     לפי reply_to/from_number כדי לאפשר חזרה לתפריט הראשי.
     """
     admin_sender_id = "device-abc@lid"
-    from_number = "972501234567@c.us"
+    from_number = "972501234567"
     monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "0501234567")
 
     admin_user = await user_factory(
