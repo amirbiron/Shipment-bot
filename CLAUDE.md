@@ -285,6 +285,12 @@ if not _is_in_multi_step_flow:
 ה-guard `_is_in_multi_step_flow` בודק prefixes: `"DISPATCHER."`, `"STATION."`, ו-states של רישום שליח.
 **כשמוסיפים prefix חדש ל-state machine - חובה לעדכן את ה-guard.**
 
+### זיהוי אדמין ב-WhatsApp (Gateway)
+- **אסור** לזהות אדמין לפי שמות תצוגה (`formattedName` / `pushname`) — זה קלט נשלט משתמש.
+- זיהוי אדמין מתבסס רק על **מספר טלפון אמיתי** (למשל `contact.number` / `chat.contact.number`)
+  או מזהים מאומתים עם `@c.us`.
+- ערכי `@lid` אינם מספר אמיתי — אם אין מספר אמיתי, **לא** מעניקים הרשאות אדמין.
+
 ### אטומיות בפעולות DB
 - כל **read-modify-write על ארנק** חייב `with_for_update()` (נעילת שורה)
 - כל שדה שנכתב **חייב להיות באותה טרנזקציה** - לא לעשות commit ואז לעדכן שדה נוסף
