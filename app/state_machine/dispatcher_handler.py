@@ -311,11 +311,12 @@ class DispatcherStateHandler:
             fee = context.get("fee", 10.0)
 
             # יצירת המשלוח דרך DeliveryService - כולל שידור לנהגים ושיוך לתחנה
+            # תיאור המשלוח ("מה נשלח?") נשמר ב-dropoff_notes (תוכן השליחה)
             delivery = await self.delivery_service.create_delivery(
                 sender_id=user.id,
                 pickup_address=pickup,
                 dropoff_address=dropoff,
-                pickup_notes=description,
+                dropoff_notes=description,
                 fee=float(fee),
                 station_id=self.station_id,
             )

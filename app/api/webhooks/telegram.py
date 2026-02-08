@@ -497,11 +497,12 @@ async def telegram_webhook(
         return {"ok": True, "new_state": new_state}
 
     # טיפול בכפתורי תפריט ראשי [שלב 1]
-    # הערה: הכפתורים הבאים פעילים רק למשתמשים שאינם שליחים באמצע תהליך רישום.
-    # שליח באמצע KYC ימשיך ישירות ל-CourierStateHandler למטה.
+    # הערה: הכפתורים הבאים פעילים רק למשתמשים שאינם באמצע תהליך רישום או זרימת סדרן/בעל תחנה.
+    # שליח באמצע KYC, סדרן באמצע הוספת משלוח/חיוב, או בעל תחנה באמצע פעולה - ימשיכו ישירות ל-handler שלהם למטה.
+    _current_state_value = await state_manager.get_current_state(user.id, "telegram")
     _is_courier_in_registration = (
         user.role == UserRole.COURIER
-        and await state_manager.get_current_state(user.id, "telegram") in {
+        and _current_state_value in {
             CourierState.REGISTER_COLLECT_NAME.value,
             CourierState.REGISTER_COLLECT_DOCUMENT.value,
             CourierState.REGISTER_COLLECT_SELFIE.value,
@@ -510,8 +511,12 @@ async def telegram_webhook(
             CourierState.REGISTER_TERMS.value,
         }
     )
+    _is_in_multi_step_flow = (
+        _is_courier_in_registration
+        or (isinstance(_current_state_value, str) and _current_state_value.startswith("DISPATCHER."))
+    )
 
-    if not _is_courier_in_registration:
+    if not _is_in_multi_step_flow:
         if user.role == UserRole.SENDER and ("הצטרפות למנוי" in text or "שליח" in text):
             # ניתוב לתהליך הרישום כנהג/שליח
             user.role = UserRole.COURIER
