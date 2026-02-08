@@ -327,7 +327,7 @@ async def _route_to_role_menu_wa(
                 StationOwnerState.MENU.value,
                 context={}
             )
-            handler = StationOwnerStateHandler(db, station.id)
+            handler = StationOwnerStateHandler(db, station.id, platform="whatsapp")
             return await handler.handle_message(user, "תפריט", None)
         # בעל תחנה ללא תחנה פעילה - הורדת תפקיד לשולח
         logger.warning(
@@ -659,7 +659,7 @@ async def whatsapp_webhook(
             station = await station_service.get_station_by_owner(user.id)
 
             if station:
-                handler = StationOwnerStateHandler(db, station.id)
+                handler = StationOwnerStateHandler(db, station.id, platform="whatsapp")
                 response, new_state = await handler.handle_message(user, text, photo_file_id)
             else:
                 # בעל תחנה ללא תחנה פעילה - fallback
@@ -684,7 +684,7 @@ async def whatsapp_webhook(
                     DispatcherState.MENU.value,
                     context={}
                 )
-                handler = DispatcherStateHandler(db, station.id)
+                handler = DispatcherStateHandler(db, station.id, platform="whatsapp")
                 response, new_state = await handler.handle_message(user, "תפריט", None)
             else:
                 # סדרן הוסר או תחנה בוטלה
@@ -718,7 +718,7 @@ async def whatsapp_webhook(
                     handler = CourierStateHandler(db, platform="whatsapp")
                     response, new_state = await handler.handle_message(user, "תפריט", None)
                 else:
-                    handler = DispatcherStateHandler(db, station.id)
+                    handler = DispatcherStateHandler(db, station.id, platform="whatsapp")
                     response, new_state = await handler.handle_message(user, text, photo_file_id)
             else:
                 # תחנה לא נמצאה - איפוס לתפריט נהג
@@ -742,7 +742,7 @@ async def whatsapp_webhook(
             station = await station_service.get_station_by_owner(user.id)
 
             if station:
-                handler = StationOwnerStateHandler(db, station.id)
+                handler = StationOwnerStateHandler(db, station.id, platform="whatsapp")
                 response, new_state = await handler.handle_message(user, text, photo_file_id)
             else:
                 # תחנה לא נמצאה - fallback
