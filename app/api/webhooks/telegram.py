@@ -533,7 +533,7 @@ async def telegram_webhook(
             )
             return {"ok": True, "new_state": new_state}
 
-        if "העלאת משלוח מהיר" in text or "משלוח מהיר" in text:
+        if ("העלאת משלוח מהיר" in text or "משלוח מהיר" in text) and user.role == UserRole.SENDER:
             # קישור חיצוני לקבוצת WhatsApp - משתמשים רגילים לא יכולים להעלות משלוח בתוך הבוט
             from app.core.config import settings as app_settings
             if app_settings.WHATSAPP_GROUP_LINK:
@@ -554,7 +554,7 @@ async def telegram_webhook(
             )
             return {"ok": True}
 
-        if ("הצטרפות כתחנה" in text or "תחנה" in text) and user.role != UserRole.STATION_OWNER:
+        if ("הצטרפות כתחנה" in text or "תחנה" in text) and user.role == UserRole.SENDER:
             # הודעה שיווקית עבור תחנות
             station_text = (
                 "🏪 <b>הצטרפות כתחנה</b>\n\n"
@@ -696,6 +696,19 @@ async def telegram_webhook(
                 getattr(response, 'inline', False)
             )
             return {"ok": True, "new_state": new_state}
+
+        # תחנה לא נמצאה (בוטלה או סדרן הוסר) - איפוס לתפריט נהג
+        logger.warning(
+            "Dispatcher station not found, resetting to courier menu",
+            extra_data={"user_id": user.id, "state": current_state}
+        )
+        response, new_state = await _route_to_role_menu(user, db, state_manager)
+        background_tasks.add_task(
+            send_telegram_message, chat_id,
+            response.text, response.keyboard,
+            getattr(response, 'inline', False)
+        )
+        return {"ok": True, "new_state": new_state}
 
     # אם המשתמש באמצע זרימת בעל תחנה - ממשיכים
     if current_state and current_state.startswith("STATION."):
