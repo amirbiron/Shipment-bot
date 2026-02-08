@@ -426,18 +426,35 @@ class StationService:
 
     # ==================== דוח גבייה [3.3] ====================
 
+    @staticmethod
+    def _get_billing_cycle_start() -> datetime:
+        """חישוב תחילת מחזור החיוב הנוכחי (28 לחודש)"""
+        now = datetime.utcnow()
+        if now.day >= 28:
+            # אחרי ה-28 - מחזור התחיל ב-28 בחודש הנוכחי
+            return now.replace(day=28, hour=0, minute=0, second=0, microsecond=0)
+        # לפני ה-28 - מחזור התחיל ב-28 בחודש הקודם
+        if now.month == 1:
+            return now.replace(year=now.year - 1, month=12, day=28,
+                               hour=0, minute=0, second=0, microsecond=0)
+        return now.replace(month=now.month - 1, day=28,
+                           hour=0, minute=0, second=0, microsecond=0)
+
     async def get_collection_report(
         self, station_id: int
     ) -> List[dict]:
         """
-        דוח גבייה - רשימת נהגים שחייבים כסף לתחנה.
+        דוח גבייה - רשימת נהגים שחייבים כסף לתחנה במחזור הנוכחי.
 
-        הדוח מופק ב-28 לחודש ומציג את כל הנהגים שלא שילמו.
+        מחזור חיוב: מה-28 בחודש הקודם עד ה-28 בחודש הנוכחי.
         """
-        # קבלת כל החיובים הידניים של התחנה
+        cycle_start = self._get_billing_cycle_start()
+
+        # קבלת חיובים ממחזור החיוב הנוכחי בלבד
         result = await self.db.execute(
             select(ManualCharge).where(
-                ManualCharge.station_id == station_id
+                ManualCharge.station_id == station_id,
+                ManualCharge.created_at >= cycle_start,
             ).order_by(ManualCharge.created_at.desc())
         )
         charges = list(result.scalars().all())
