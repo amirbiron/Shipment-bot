@@ -7,11 +7,9 @@ was created for a different user record each time.
 """
 
 import pytest
-from unittest.mock import patch
 from httpx import AsyncClient
-from sqlalchemy import select
 
-from app.db.models.user import User, UserRole, ApprovalStatus
+from app.db.models.user import UserRole, ApprovalStatus
 from app.state_machine.states import CourierState
 from app.core.config import settings
 
@@ -77,28 +75,35 @@ async def test_whatsapp_document_image_captured_as_photo(
         platform="whatsapp",
     )
     from app.state_machine.manager import StateManager
+
     sm = StateManager(db_session)
-    await sm.force_state(courier.id, "whatsapp", CourierState.REGISTER_COLLECT_DOCUMENT.value, context={})
+    await sm.force_state(
+        courier.id, "whatsapp", CourierState.REGISTER_COLLECT_DOCUMENT.value, context={}
+    )
 
     resp = await test_client.post(
         "/api/webhooks/whatsapp/webhook",
         json={
-            "messages": [{
-                "from_number": "972551234@lid",
-                "sender_id": "972551234@lid",
-                "message_id": "m-doc-1",
-                "text": "",
-                "timestamp": 1700000000,
-                "media_url": "http://gateway/media/id_card.jpg",
-                "media_type": "document",
-                "mime_type": "image/jpeg",
-            }]
+            "messages": [
+                {
+                    "from_number": "972551234@lid",
+                    "sender_id": "972551234@lid",
+                    "message_id": "m-doc-1",
+                    "text": "",
+                    "timestamp": 1700000000,
+                    "media_url": "http://gateway/media/id_card.jpg",
+                    "media_type": "document",
+                    "mime_type": "image/jpeg",
+                }
+            ]
         },
     )
     assert resp.status_code == 200
     data = resp.json()
     # מסמך תמונה צריך להתקבל - ולהעביר למצב סלפי
-    assert data["responses"][0]["new_state"] == CourierState.REGISTER_COLLECT_SELFIE.value
+    assert (
+        data["responses"][0]["new_state"] == CourierState.REGISTER_COLLECT_SELFIE.value
+    )
 
     # אימות שה-URL נשמר
     await db_session.refresh(courier)
@@ -120,22 +125,27 @@ async def test_whatsapp_non_image_document_not_captured(
         platform="whatsapp",
     )
     from app.state_machine.manager import StateManager
+
     sm = StateManager(db_session)
-    await sm.force_state(courier.id, "whatsapp", CourierState.REGISTER_COLLECT_DOCUMENT.value, context={})
+    await sm.force_state(
+        courier.id, "whatsapp", CourierState.REGISTER_COLLECT_DOCUMENT.value, context={}
+    )
 
     resp = await test_client.post(
         "/api/webhooks/whatsapp/webhook",
         json={
-            "messages": [{
-                "from_number": "972551235@lid",
-                "sender_id": "972551235@lid",
-                "message_id": "m-pdf-1",
-                "text": "",
-                "timestamp": 1700000000,
-                "media_url": "http://gateway/media/doc.pdf",
-                "media_type": "document",
-                "mime_type": "application/pdf",
-            }]
+            "messages": [
+                {
+                    "from_number": "972551235@lid",
+                    "sender_id": "972551235@lid",
+                    "message_id": "m-pdf-1",
+                    "text": "",
+                    "timestamp": 1700000000,
+                    "media_url": "http://gateway/media/doc.pdf",
+                    "media_type": "document",
+                    "mime_type": "application/pdf",
+                }
+            ]
         },
     )
     assert resp.status_code == 200
@@ -143,6 +153,59 @@ async def test_whatsapp_non_image_document_not_captured(
     # PDF לא נתפס כתמונה - ההודעה נדלגת (אין text ואין photo)
     assert data["processed"] == 0 or (
         "new_state" not in data.get("responses", [{}])[0]
-        or data["responses"][0].get("new_state") != CourierState.REGISTER_COLLECT_SELFIE.value
+        or data["responses"][0].get("new_state")
+        != CourierState.REGISTER_COLLECT_SELFIE.value
     )
 
+
+@pytest.mark.asyncio
+async def test_whatsapp_admin_can_return_to_main_menu_from_courier_flow(
+    test_client: AsyncClient,
+    db_session,
+    user_factory,
+    mock_whatsapp_gateway,
+    monkeypatch,
+):
+    """
+    רגרסיה: אדמין שנרשם כשליח בווטסאפ עלול להינעל בתפריט שליח.
+    לחיצה על # חייבת להחזיר אותו לתפריט הראשי (welcome) ולאפשר שוב גישה לאפשרויות הרישום.
+    """
+    admin_sender_id = "972501234567@lid"
+    # הגדרת מספר האדמין (נרמול מתבצע בצד הקוד)
+    monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "972501234567")
+
+    # יצירת משתמש כאילו נרשם כשליח (מצב שכבר "נתקע" עליו)
+    admin_user = await user_factory(
+        phone_number=admin_sender_id,
+        name="Admin User",
+        role=UserRole.COURIER,
+        platform="whatsapp",
+        approval_status=ApprovalStatus.APPROVED,
+    )
+
+    resp = await test_client.post(
+        "/api/webhooks/whatsapp/webhook",
+        json={
+            "messages": [
+                {
+                    "from_number": admin_sender_id,
+                    "sender_id": admin_sender_id,
+                    "reply_to": admin_sender_id,
+                    "message_id": "m-admin-1",
+                    "text": "#",
+                    "timestamp": 1700000000,
+                }
+            ]
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["processed"] == 1
+    assert data["responses"][0]["response"].startswith("welcome")
+
+    # המשתמש צריך להפוך ל-ADMIN (כדי שלא ינותב שוב אוטומטית לתפריט שליח)
+    await db_session.refresh(admin_user)
+    assert admin_user.role == UserRole.ADMIN
+
+    # אימות שנשלחה הודעת welcome בפועל דרך ה-gateway (קריאה אחת לפחות)
+    assert mock_whatsapp_gateway.post.call_count >= 1
