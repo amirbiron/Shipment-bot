@@ -12,6 +12,11 @@ from app.db.models.user import User, UserRole, ApprovalStatus
 from app.db.models.station import Station
 from app.db.models.station_wallet import StationWallet
 from app.state_machine.states import CourierState, StationOwnerState
+from app.api.webhooks.whatsapp import (
+    _normalize_whatsapp_identifier,
+    _is_whatsapp_admin,
+    _match_approval_command,
+)
 
 
 # ============================================================================
@@ -248,3 +253,91 @@ class TestMultiStepFlowGuard:
         assert data["ok"] is True
         # לא צריך ליפול לתשובת שיווק - צריך להישאר בזרימת בעל תחנה
         assert "new_state" in data
+
+
+# ============================================================================
+# נרמול מזהי וואטסאפ וזיהוי מנהלים
+# ============================================================================
+
+
+class TestWhatsAppNormalization:
+    """בדיקות לנרמול מספרי טלפון/מזהים ולזיהוי מנהלים"""
+
+    @pytest.mark.unit
+    def test_normalize_with_lid_suffix(self):
+        assert _normalize_whatsapp_identifier("972501234567@lid") == "972501234567"
+
+    @pytest.mark.unit
+    def test_normalize_with_c_us_suffix(self):
+        assert _normalize_whatsapp_identifier("972501234567@c.us") == "972501234567"
+
+    @pytest.mark.unit
+    def test_normalize_local_format(self):
+        """050... מתנרמל ל-972..."""
+        assert _normalize_whatsapp_identifier("0501234567") == "972501234567"
+
+    @pytest.mark.unit
+    def test_normalize_with_plus(self):
+        assert _normalize_whatsapp_identifier("+972501234567") == "972501234567"
+
+    @pytest.mark.unit
+    def test_normalize_empty(self):
+        assert _normalize_whatsapp_identifier("") == ""
+
+    @pytest.mark.unit
+    def test_is_admin_cross_format(self, monkeypatch):
+        """מנהל עם 050 בהגדרות מזוהה כשה-sender_id הוא 972...@lid"""
+        from app.core.config import settings
+        monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "0501234567")
+        assert _is_whatsapp_admin("972501234567@lid") is True
+
+    @pytest.mark.unit
+    def test_is_admin_same_format(self, monkeypatch):
+        from app.core.config import settings
+        monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "972501234567")
+        assert _is_whatsapp_admin("972501234567@c.us") is True
+
+    @pytest.mark.unit
+    def test_is_not_admin(self, monkeypatch):
+        from app.core.config import settings
+        monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "972509999999")
+        assert _is_whatsapp_admin("972501234567@lid") is False
+
+
+# ============================================================================
+# זיהוי פקודות אישור/דחייה
+# ============================================================================
+
+
+class TestApprovalCommandMatching:
+    """בדיקות לרגקס זיהוי פקודות אישור/דחייה"""
+
+    @pytest.mark.unit
+    def test_approve_basic(self):
+        assert _match_approval_command("אשר 123") == ("approve", 123)
+
+    @pytest.mark.unit
+    def test_approve_with_emoji(self):
+        assert _match_approval_command("✅ אשר 456") == ("approve", 456)
+
+    @pytest.mark.unit
+    def test_approve_with_ishur(self):
+        """אישור כחלופה לאשר"""
+        assert _match_approval_command("אישור 789") == ("approve", 789)
+
+    @pytest.mark.unit
+    def test_reject_basic(self):
+        assert _match_approval_command("דחה 100") == ("reject", 100)
+
+    @pytest.mark.unit
+    def test_reject_dchiya(self):
+        """דחייה כחלופה לדחה"""
+        assert _match_approval_command("דחייה 200") == ("reject", 200)
+
+    @pytest.mark.unit
+    def test_reject_with_emoji_and_bold(self):
+        assert _match_approval_command("*❌ דחה 300*") == ("reject", 300)
+
+    @pytest.mark.unit
+    def test_no_match(self):
+        assert _match_approval_command("שלום עולם") is None

@@ -72,6 +72,12 @@ class AdminNotificationService:
             selfie_status = 'נשלח למטה ⬇️' if has_wa_selfie else 'זמין בטלגרם' if selfie_file_id else '✗'
             vehicle_status = 'נשלח למטה ⬇️' if has_wa_vehicle else 'זמין בטלגרם' if vehicle_photo_file_id else '✗'
 
+            # קישור יצירת קשר - לינק לפרופיל בטלגרם או מספר טלפון בוואטסאפ
+            if platform == "telegram":
+                wa_contact_line = f"טלגרם ID: {phone_or_chat_id}"
+            else:
+                wa_contact_line = phone_or_chat_id
+
             wa_message = f"""👤 *כרטיס נהג חדש #{user_id}*
 
 📋 *פרטים:*
@@ -79,7 +85,7 @@ class AdminNotificationService:
 • אזור: {service_area}
 • רכב: {vehicle_display}
 • פלטפורמה: {platform}
-• ליצירת קשר: {phone_or_chat_id}
+• ליצירת קשר: {wa_contact_line}
 
 📎 מסמכים:
   - ת.ז./רישיון: {doc_status}
@@ -102,10 +108,19 @@ class AdminNotificationService:
                 wa_sent = await AdminNotificationService._send_whatsapp_admin_message(
                     target, wa_message, keyboard=wa_keyboard
                 )
+                # fallback: אם נכשל עם כפתורים, ננסה בלי
+                if not wa_sent and wa_keyboard:
+                    logger.warning(
+                        "WhatsApp admin message with keyboard failed, retrying without",
+                        extra_data={"user_id": user_id, "target": target}
+                    )
+                    wa_sent = await AdminNotificationService._send_whatsapp_admin_message(
+                        target, wa_message, keyboard=None
+                    )
                 success = success or wa_sent
 
-                # שליחת תמונות (רק אם מוואטסאפ)
-                if is_whatsapp and wa_sent:
+                # שליחת תמונות (רק אם מוואטסאפ) - שולחים גם אם ההודעה הטקסטית נכשלה
+                if is_whatsapp:
                     for label, file_id in [
                         ("document", document_file_id),
                         ("selfie", selfie_file_id),
@@ -116,7 +131,9 @@ class AdminNotificationService:
                         photo_sent = await AdminNotificationService._send_whatsapp_admin_photo(
                             target, file_id
                         )
-                        if not photo_sent:
+                        if photo_sent:
+                            success = True
+                        else:
                             logger.warning(
                                 f"Failed to send {label} photo to WhatsApp admin",
                                 extra_data={"user_id": user_id, "target": target}
@@ -139,6 +156,12 @@ class AdminNotificationService:
             tg_selfie_status = 'נשלח למטה ⬇️' if has_tg_selfie else 'זמין בוואטסאפ' if selfie_file_id else '✗'
             tg_vehicle_status = 'נשלח למטה ⬇️' if has_tg_vehicle else 'זמין בוואטסאפ' if vehicle_photo_file_id else '✗'
 
+            # קישור יצירת קשר - לינק לפרופיל בטלגרם או מספר טלפון בוואטסאפ
+            if platform == "telegram":
+                contact_line = f'<a href="tg://user?id={phone_or_chat_id}">פתח צ\'אט בטלגרם</a> (ID: {phone_or_chat_id})'
+            else:
+                contact_line = phone_or_chat_id
+
             tg_message = f"""👤 <b>כרטיס נהג חדש #{user_id}</b>
 
 📋 <b>פרטים:</b>
@@ -146,7 +169,7 @@ class AdminNotificationService:
 • אזור: {service_area}
 • רכב: {vehicle_display}
 • פלטפורמה: {platform}
-• ליצירת קשר: {phone_or_chat_id}
+• ליצירת קשר: {contact_line}
 
 📎 <b>מסמכים:</b>
   - ת.ז./רישיון: {tg_doc_status}

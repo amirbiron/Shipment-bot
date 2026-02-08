@@ -36,6 +36,15 @@ class CourierApprovalService:
         if not user:
             return ApprovalResult(False, f"❌ לא נמצא משתמש עם מזהה {user_id}")
 
+        # שליח שלחץ # בזמן המתנה לאישור חזר להיות SENDER -
+        # עדיין מאפשרים אישור אם יש לו סטטוס PENDING ומחזירים ל-COURIER
+        if user.role == UserRole.SENDER and user.approval_status == ApprovalStatus.PENDING:
+            logger.info(
+                "Approving courier who reverted to sender via #",
+                extra_data={"user_id": user_id}
+            )
+            user.role = UserRole.COURIER
+
         if user.role != UserRole.COURIER:
             return ApprovalResult(False, f"❌ משתמש {user_id} אינו שליח")
 
@@ -75,6 +84,15 @@ class CourierApprovalService:
 
         if not user:
             return ApprovalResult(False, f"❌ לא נמצא משתמש עם מזהה {user_id}")
+
+        # שליח שלחץ # בזמן המתנה לאישור חזר להיות SENDER -
+        # עדיין מאפשרים דחייה אם יש לו סטטוס PENDING ומחזירים ל-COURIER
+        if user.role == UserRole.SENDER and user.approval_status == ApprovalStatus.PENDING:
+            logger.info(
+                "Rejecting courier who reverted to sender via #",
+                extra_data={"user_id": user_id}
+            )
+            user.role = UserRole.COURIER
 
         if user.role != UserRole.COURIER:
             return ApprovalResult(False, f"❌ משתמש {user_id} אינו שליח")

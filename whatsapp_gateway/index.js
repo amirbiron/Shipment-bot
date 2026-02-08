@@ -393,6 +393,90 @@ app.post('/send', async (req, res) => {
     }
 });
 
+// שליחת מדיה (תמונה כ-base64 או data URL)
+app.post('/send-media', async (req, res) => {
+    const { phone, media_url, media_type, caption } = req.body;
+
+    console.log('Send media request received - media_type:', media_type);
+
+    if (!client || !isConnected) {
+        return res.status(503).json({
+            error: 'WhatsApp client not connected'
+        });
+    }
+
+    if (!media_url) {
+        return res.status(400).json({
+            error: 'media_url is required'
+        });
+    }
+
+    // ולידציה בסיסית לטלפון כדי למנוע שגיאה ב-includes
+    if (!phone || typeof phone !== 'string' || !phone.trim()) {
+        return res.status(400).json({
+            error: 'phone is required'
+        });
+    }
+
+    try {
+        let chatId = phone;
+
+        const hasValidSuffix = chatId.includes('@c.us') ||
+                               chatId.includes('@g.us') ||
+                               chatId.includes('@lid');
+
+        if (!hasValidSuffix) {
+            let cleanPhone = phone.replace(/\D/g, '');
+            if (cleanPhone.startsWith('0')) {
+                cleanPhone = '972' + cleanPhone.substring(1);
+            }
+            chatId = `${cleanPhone}@c.us`;
+        }
+
+        let filename = 'media';
+        let mimeType = null;
+        const dataUrlMatch = /^data:([^;]+);base64,/.exec(media_url);
+        if (dataUrlMatch && dataUrlMatch[1]) {
+            mimeType = dataUrlMatch[1];
+        }
+
+        if (mimeType && mimeType.includes('/')) {
+            const extRaw = mimeType.split('/')[1] || 'jpg';
+            const ext = extRaw === 'jpeg' ? 'jpg' : extRaw;
+            filename = `media.${ext}`;
+        } else if (media_type && media_type.includes('image')) {
+            filename = 'image.jpg';
+        }
+
+        const captionText = caption || '';
+        let result;
+
+        const isImage = (() => {
+            if (mimeType) {
+                return mimeType.startsWith('image/');
+            }
+            if (media_type) {
+                return media_type.includes('image');
+            }
+            return true; // ברירת מחדל: תמונה
+        })();
+
+        if (!isImage) {
+            result = await client.sendFile(chatId, media_url, filename, captionText);
+        } else {
+            result = await client.sendImage(chatId, media_url, filename, captionText);
+        }
+
+        res.json({ success: true, messageId: result?.id });
+    } catch (error) {
+        console.error('Error sending media:', error.message);
+        res.status(500).json({
+            error: 'Failed to send media',
+            details: error.message
+        });
+    }
+});
+
 // Send message with buttons (if supported)
 app.post('/send-buttons', async (req, res) => {
     const { phone, message, buttons } = req.body;
