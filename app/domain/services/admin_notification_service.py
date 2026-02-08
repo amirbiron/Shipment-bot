@@ -57,6 +57,7 @@ class AdminNotificationService:
         # --- שליחה למנהלים פרטיים בוואטסאפ ---
         wa_admin_numbers = _parse_csv_setting(settings.WHATSAPP_ADMIN_NUMBERS)
         # fallback: אם לא הוגדרו מנהלים פרטיים, שולח לקבוצה (תאימות לאחור)
+        is_wa_fallback_to_group = not wa_admin_numbers
         wa_targets = wa_admin_numbers if wa_admin_numbers else (
             [settings.WHATSAPP_ADMIN_GROUP_ID] if settings.WHATSAPP_ADMIN_GROUP_ID else []
         )
@@ -84,8 +85,15 @@ class AdminNotificationService:
   - סלפי: {selfie_status}
   - תמונת רכב: {vehicle_status}"""
 
-            # כפתורי אישור/דחייה לוואטסאפ
-            wa_keyboard = [[f"✅ אשר {user_id}", f"❌ דחה {user_id}"]]
+            # כפתורים רק בצ'אט פרטי; בקבוצה - הנחיות טקסטואליות
+            if is_wa_fallback_to_group:
+                wa_message += f"""
+
+✅ לאישור: *אשר {user_id}*
+❌ לדחייה: *דחה {user_id}*"""
+                wa_keyboard = None
+            else:
+                wa_keyboard = [[f"✅ אשר {user_id}", f"❌ דחה {user_id}"]]
 
             for target in wa_targets:
                 wa_sent = await AdminNotificationService._send_whatsapp_admin_message(

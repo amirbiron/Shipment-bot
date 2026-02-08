@@ -143,7 +143,12 @@ class CourierApprovalService:
         # שליחה לשליח - זיהוי פלטפורמה עם סדר עקבי
         if user.telegram_chat_id and send_telegram_fn:
             await send_telegram_fn(user.telegram_chat_id, tg_msg)
-        elif user.phone_number and not user.phone_number.startswith("tg:") and send_whatsapp_fn:
+        elif (
+            user.phone_number
+            and not user.phone_number.startswith("tg:")
+            and not user.phone_number.endswith("@g.us")
+            and send_whatsapp_fn
+        ):
             await send_whatsapp_fn(user.phone_number, wa_msg)
 
         # סיכום לקבוצת מנהלים
