@@ -233,14 +233,45 @@ def _is_whatsapp_admin(sender_id: str) -> bool:
     return normalized_sender in wa_admin_numbers
 
 
+def _resolve_admin_send_target(sender_id: str, reply_to: str) -> str:
+    """
+    מציאת כתובת שליחה למנהל — מעדיף את המספר מההגדרות (שאנחנו יודעים שעובד).
+
+    כרטיס הנהג נשלח למנהל דרך המספר שבהגדרות (WHATSAPP_ADMIN_NUMBERS) ומגיע בהצלחה.
+    אבל כש-reply_to הוא @lid, הגטוויי עשוי לא להצליח לשלוח אליו.
+    לכן אם אנחנו מזהים שה-sender_id תואם למספר מנהל מההגדרות — נשלח למספר ההגדרות.
+    """
+    normalized_sender = _normalize_whatsapp_identifier(sender_id)
+    if not normalized_sender:
+        return reply_to
+
+    for raw in settings.WHATSAPP_ADMIN_NUMBERS.split(","):
+        raw = raw.strip()
+        if not raw:
+            continue
+        if _normalize_whatsapp_identifier(raw) == normalized_sender:
+            logger.debug(
+                "Using admin number from settings for reply",
+                extra_data={
+                    "original_reply_to": PhoneNumberValidator.mask(reply_to),
+                    "resolved_to": PhoneNumberValidator.mask(raw),
+                }
+            )
+            return raw
+
+    return reply_to
+
+
 def _match_approval_command(text: str) -> tuple[str, int] | None:
     """
     זיהוי פקודת אישור/דחייה בטקסט.
     מחזיר (action, user_id) או None.
     תומך באמוג'י שונים (✅✔️☑️), רווחים מרובים, וניקוד (כוכביות מ-WhatsApp).
     """
-    # ניקוי: הסרת כוכביות (bold של WhatsApp), רווחים עודפים
+    # ניקוי: הסרת כוכביות (bold של WhatsApp), תווים בלתי-נראים (zero-width, RTL/LTR marks),
+    # ורווחים עודפים — WhatsApp עשוי להזריק תווי Unicode בלתי-נראים
     text = text.strip().replace("*", "")
+    text = re.sub(r'[\u200b\u200c\u200d\u200e\u200f\u202a-\u202e\ufeff]', '', text)
     text = re.sub(r'\s+', ' ', text)
 
     approve_match = re.match(r'^[✅✔️☑️\s]*(?:אשר|אישור)(?:\s+(?:שליח|נהג))?\s+(\d+)\s*$', text)
@@ -514,7 +545,10 @@ async def whatsapp_webhook(
                 background_tasks=background_tasks,
             )
             if admin_response:
-                background_tasks.add_task(send_whatsapp_message, reply_to, admin_response)
+                # שליחת התגובה למספר המנהל מההגדרות (שאנחנו יודעים שעובד)
+                # במקום ל-reply_to (שעלול להיות @lid שהגטוויי לא יודע לשלוח אליו)
+                admin_send_to = _resolve_admin_send_target(sender_id, reply_to)
+                background_tasks.add_task(send_whatsapp_message, admin_send_to, admin_response)
                 responses.append({
                     "from": sender_id,
                     "response": admin_response,

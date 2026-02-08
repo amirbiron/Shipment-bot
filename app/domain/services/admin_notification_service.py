@@ -448,9 +448,14 @@ class AdminNotificationService:
         base_url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}"
         circuit_breaker = get_telegram_circuit_breaker()
 
-        # ניסיון ראשון: sendPhoto — בלי circuit breaker כי כשלון כאן צפוי.
-        # אבל אם ה-CB פתוח (טלגרם למטה) — מדלגים כדי לא לחכות 30 שניות לחינם.
-        if await circuit_breaker.can_execute():
+        # בדיקה חד-פעמית אם ה-CB מאפשר קריאות.
+        # שומרים את התוצאה כדי לא לקרוא can_execute פעמיים (כל קריאה צורכת slot ב-HALF_OPEN).
+        cb_allows = await circuit_breaker.can_execute()
+
+        # ניסיון ראשון: sendPhoto — בלי circuit breaker כי כשלון כאן צפוי
+        # (file_id ממסמך לא עובד עם sendPhoto).
+        # אם ה-CB פתוח (טלגרם למטה) — מדלגים כדי לא לחכות 30 שניות לחינם.
+        if cb_allows:
             try:
                 async with httpx.AsyncClient() as client:
                     response = await client.post(
@@ -459,17 +464,19 @@ class AdminNotificationService:
                         timeout=30.0,
                     )
                     if response.status_code == 200:
+                        # דיווח הצלחה ל-CB כדי שלא יישאר תקוע ב-HALF_OPEN
+                        await circuit_breaker.record_success()
                         return True
             except Exception:
                 pass
 
-            # fallback: sendDocument — דרך circuit breaker כי כשלון כאן הוא אמיתי
+            # fallback: sendDocument — ידנית (בלי cb.execute) כדי לא לצרוך slot נוסף
             logger.info(
                 "sendPhoto failed, retrying with sendDocument",
                 extra_data={"chat_id": chat_id}
             )
 
-        async def _send_as_document():
+        try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     f"{base_url}/sendDocument",
@@ -482,11 +489,10 @@ class AdminNotificationService:
                         response,
                         message=f"sendDocument returned status {response.status_code}",
                     )
+                await circuit_breaker.record_success()
                 return True
-
-        try:
-            return await circuit_breaker.execute(_send_as_document)
         except Exception as e:
+            await circuit_breaker.record_failure(e)
             logger.error(
                 "Error sending photo/document",
                 extra_data={"chat_id": chat_id, "error": str(e)},
