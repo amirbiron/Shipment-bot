@@ -270,6 +270,67 @@ async def test_whatsapp_admin_root_menu_works_with_cross_format_normalization(
 
 
 @pytest.mark.asyncio
+async def test_whatsapp_admin_root_menu_matches_reply_to_or_from_number(
+    test_client: AsyncClient,
+    db_session,
+    user_factory,
+    mock_whatsapp_gateway,
+    monkeypatch,
+):
+    """
+    רגרסיה: sender_id לא מספרי (למשל @lid) עדיין צריך לזהות אדמין
+    לפי reply_to/from_number כדי לאפשר חזרה לתפריט הראשי.
+    """
+    admin_sender_id = "device-abc@lid"
+    from_number = "972501234567"
+    monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "0501234567")
+
+    admin_user = await user_factory(
+        phone_number=admin_sender_id,
+        name="Admin LID",
+        role=UserRole.COURIER,
+        platform="whatsapp",
+        approval_status=ApprovalStatus.APPROVED,
+    )
+
+    resp = await test_client.post(
+        "/api/webhooks/whatsapp/webhook",
+        json={
+            "messages": [
+                {
+                    "from_number": from_number,
+                    "sender_id": admin_sender_id,
+                    "reply_to": admin_sender_id,
+                    "message_id": "m-admin-lid-1",
+                    "text": "#",
+                    "timestamp": 1700000000,
+                }
+            ]
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["processed"] == 1
+    assert data["responses"][0]["response"].startswith("welcome")
+    assert data["responses"][0].get("admin_main_menu") is True
+
+    await db_session.refresh(admin_user)
+    assert admin_user.role == UserRole.COURIER
+
+    assert mock_whatsapp_gateway.post.call_count >= 1
+    last_call = mock_whatsapp_gateway.post.call_args
+    sent_payload = (
+        last_call[1].get("json", {})
+        if last_call[1]
+        else last_call[0][1]
+        if len(last_call[0]) > 1
+        else {}
+    )
+    if "phone" in sent_payload:
+        assert sent_payload["phone"] == "0501234567"
+
+
+@pytest.mark.asyncio
 async def test_whatsapp_admin_station_owner_does_not_lose_role_on_main_menu_reset(
     test_client: AsyncClient,
     db_session,
