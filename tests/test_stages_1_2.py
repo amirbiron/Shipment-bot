@@ -760,7 +760,7 @@ class TestCourierApprovalService:
         )
         result = await CourierApprovalService.approve(db_session, user.id)
         assert result.success is False
-        assert "אינו שליח" in result.message
+        assert "אינו נהג" in result.message
 
     @pytest.mark.asyncio
     async def test_reject_pending_courier(self, db_session, user_factory):
@@ -839,7 +839,7 @@ class TestCourierApprovalService:
         )
         result = await CourierApprovalService.approve(db_session, user.id)
         assert result.success is False
-        assert "אינו שליח" in result.message
+        assert "אינו נהג" in result.message
 
 
 class TestTelegramApprovalButtons:
