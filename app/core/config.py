@@ -41,7 +41,11 @@ class Settings(BaseSettings):
 
     # WhatsApp Gateway
     WHATSAPP_GATEWAY_URL: str = "http://localhost:3000"
-    WHATSAPP_ADMIN_GROUP_ID: Optional[str] = None  # קבוצת מנהלים לאישור שליחים
+    WHATSAPP_ADMIN_GROUP_ID: Optional[str] = None  # קבוצת מנהלים - לסיכומי אישור/דחייה
+
+    # מנהלים פרטיים - לשליחת כרטיסי נהג לאישור עם כפתורים
+    TELEGRAM_ADMIN_CHAT_IDS: str = ""  # מזהי צ'אט פרטיים של מנהלים בטלגרם (מופרדים בפסיקים)
+    WHATSAPP_ADMIN_NUMBERS: str = ""  # מספרי וואטסאפ פרטיים של מנהלים (מופרדים בפסיקים)
 
     # קישורים לתפריט הראשי [שלב 1]
     WHATSAPP_GROUP_LINK: str = ""  # קישור לקבוצת וואטסאפ להעלאת משלוח מהיר
@@ -49,7 +53,7 @@ class Settings(BaseSettings):
 
     # Telegram
     TELEGRAM_BOT_TOKEN: Optional[str] = None
-    TELEGRAM_ADMIN_CHAT_ID: Optional[str] = None  # Admin chat for notifications
+    TELEGRAM_ADMIN_CHAT_ID: Optional[str] = None  # קבוצת מנהלים בטלגרם - לסיכומי אישור/דחייה
 
     # Credit settings
     DEFAULT_CREDIT_LIMIT: float = -500.0  # Minimum balance allowed (500₪ credit)

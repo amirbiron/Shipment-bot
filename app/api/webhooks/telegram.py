@@ -1,6 +1,7 @@
 """
 Telegram Webhook Handler - Bot Gateway Layer
 """
+import re
 import hashlib
 from fastapi import APIRouter, Depends, BackgroundTasks
 from pydantic import BaseModel, Field, ConfigDict
@@ -14,8 +15,10 @@ from app.state_machine.handlers import SenderStateHandler, CourierStateHandler
 from app.state_machine.states import CourierState
 from app.state_machine.manager import StateManager
 from app.domain.services import AdminNotificationService
+from app.domain.services.courier_approval_service import CourierApprovalService
 from app.core.logging import get_logger
 from app.core.circuit_breaker import get_telegram_circuit_breaker
+from app.core.config import settings
 from app.core.exceptions import TelegramError
 
 logger = get_logger(__name__)
@@ -283,6 +286,49 @@ async def telegram_webhook(
             name = callback.from_user.first_name
             if callback.from_user.last_name:
                 name += f" {callback.from_user.last_name}"
+
+        # טיפול בכפתורי אישור/דחיית שליח (מנהלים בלבד)
+        courier_action = re.match(r'^(approve|reject)_courier_(\d+)$', callback.data or "")
+        if courier_action:
+            # זיהוי מנהל לפי from_user.id (מי שלחץ) ולא לפי chat.id (איפה ההודעה)
+            clicker_id = str(callback.from_user.id) if callback.from_user else None
+            admin_ids = {cid.strip() for cid in settings.TELEGRAM_ADMIN_CHAT_IDS.split(",") if cid.strip()}
+            if settings.TELEGRAM_ADMIN_CHAT_ID:
+                admin_ids.add(settings.TELEGRAM_ADMIN_CHAT_ID)
+
+            if clicker_id and clicker_id in admin_ids:
+                action = courier_action.group(1)
+                courier_id = int(courier_action.group(2))
+                admin_name = name or "מנהל"
+
+                # אישור או דחייה
+                if action == "approve":
+                    result = await CourierApprovalService.approve(db, courier_id)
+                else:
+                    result = await CourierApprovalService.reject(db, courier_id)
+
+                # שליחת תוצאה למנהל (בצ'אט שבו לחץ)
+                background_tasks.add_task(send_telegram_message, chat_id, result.message)
+
+                # אם הפעולה הצליחה - הודעה לשליח וסיכום לקבוצה
+                if result.success and result.user:
+                    from app.api.webhooks.whatsapp import send_whatsapp_message
+                    background_tasks.add_task(
+                        CourierApprovalService.notify_after_decision,
+                        result.user, action, admin_name,
+                        send_telegram_fn=send_telegram_message,
+                        send_whatsapp_fn=send_whatsapp_message,
+                    )
+
+                return {"ok": True, "admin_action": action, "courier_id": courier_id}
+
+            # משתמש שאינו מנהל לחץ על כפתור אישור - מתעלמים
+            logger.warning(
+                "Non-admin clicked approval button",
+                extra_data={"clicker_id": clicker_id, "chat_id": chat_id}
+            )
+            return {"ok": True}
+
     elif update.message:
         message = update.message
         chat_id = str(message.chat.id)
