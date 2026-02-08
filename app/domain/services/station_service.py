@@ -180,11 +180,14 @@ class StationService:
         return await self.get_station(dispatcher.station_id)
 
     async def is_dispatcher(self, user_id: int) -> bool:
-        """בדיקה אם המשתמש הוא סדרן פעיל בתחנה כלשהי"""
+        """בדיקה אם המשתמש הוא סדרן פעיל בתחנה פעילה"""
         result = await self.db.execute(
-            select(StationDispatcher).where(
+            select(StationDispatcher).join(
+                Station, StationDispatcher.station_id == Station.id
+            ).where(
                 StationDispatcher.user_id == user_id,
-                StationDispatcher.is_active == True  # noqa: E712
+                StationDispatcher.is_active == True,  # noqa: E712
+                Station.is_active == True,  # noqa: E712
             ).limit(1)
         )
         return result.scalar_one_or_none() is not None

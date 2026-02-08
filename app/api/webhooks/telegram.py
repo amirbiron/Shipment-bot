@@ -254,6 +254,20 @@ async def send_welcome_message(chat_id: str):
     await send_telegram_message(chat_id, welcome_text, keyboard, inline=True)
 
 
+async def _sender_fallback(
+    user: User,
+    db: AsyncSession,
+    state_manager: StateManager,
+) -> tuple:
+    """fallback לתפריט שולח - משותף לכל ה-fallbacks ב-_route_to_role_menu"""
+    from app.state_machine.states import SenderState
+    await state_manager.force_state(user.id, "telegram", SenderState.MENU.value, context={})
+    handler = SenderStateHandler(db)
+    return await handler.handle_message(
+        user_id=user.id, platform="telegram", message="תפריט"
+    )
+
+
 async def _route_to_role_menu(
     user: User,
     db: AsyncSession,
@@ -267,8 +281,6 @@ async def _route_to_role_menu(
 
     Returns: (response, new_state)
     """
-    from app.state_machine.states import SenderState
-
     if user.role == UserRole.COURIER:
         await state_manager.force_state(user.id, "telegram", CourierState.MENU.value, context={})
         handler = CourierStateHandler(db)
@@ -292,30 +304,18 @@ async def _route_to_role_menu(
             "Station owner without active station, falling back to sender menu",
             extra_data={"user_id": user.id}
         )
-        await state_manager.force_state(user.id, "telegram", SenderState.MENU.value, context={})
-        handler = SenderStateHandler(db)
-        return await handler.handle_message(
-            user_id=user.id, platform="telegram", message="תפריט"
-        )
+        return await _sender_fallback(user, db, state_manager)
 
     if user.role == UserRole.SENDER or user.role == UserRole.ADMIN:
         # ADMIN מנוהל דרך ממשק אחר - בבוט מקבל תפריט שולח
-        await state_manager.force_state(user.id, "telegram", SenderState.MENU.value, context={})
-        handler = SenderStateHandler(db)
-        return await handler.handle_message(
-            user_id=user.id, platform="telegram", message="תפריט"
-        )
+        return await _sender_fallback(user, db, state_manager)
 
     # תפקיד לא מוכר - אזהרה בלוג ו-fallback לשולח
     logger.warning(
         "Unknown user role in menu routing, falling back to sender",
         extra_data={"user_id": user.id, "role": str(user.role)}
     )
-    await state_manager.force_state(user.id, "telegram", SenderState.MENU.value, context={})
-    handler = SenderStateHandler(db)
-    return await handler.handle_message(
-        user_id=user.id, platform="telegram", message="תפריט"
-    )
+    return await _sender_fallback(user, db, state_manager)
 
 
 @router.post(
@@ -572,7 +572,7 @@ async def telegram_webhook(
             )
             return {"ok": True}
 
-        if "פנייה לניהול" in text:
+        if "פנייה לניהול" in text and user.role == UserRole.SENDER:
             # קישור WhatsApp ישיר למנהל הראשי
             from app.core.config import settings as app_settings
             if app_settings.ADMIN_WHATSAPP_NUMBER:
