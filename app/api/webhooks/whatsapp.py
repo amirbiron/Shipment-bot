@@ -441,7 +441,7 @@ async def whatsapp_webhook(
             mt = message.media_type.lower()
             if 'image' in mt:
                 photo_file_id = message.media_url
-            elif 'document' in mt and message.mime_type and message.mime_type.startswith('image/'):
+            elif 'document' in mt and message.mime_type and message.mime_type.lower().startswith('image/'):
                 photo_file_id = message.media_url
             else:
                 photo_file_id = None

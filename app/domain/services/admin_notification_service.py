@@ -434,23 +434,24 @@ class AdminNotificationService:
 
     @staticmethod
     async def _forward_photo(chat_id: str, file_id: str) -> bool:
-        """Send a photo via Telegram Bot API using file_id"""
+        """
+        שליחת תמונה דרך Telegram Bot API לפי file_id.
+        מנסה קודם sendPhoto; אם נכשל (למשל file_id ממסמך) — fallback ל-sendDocument.
+        """
         if not settings.TELEGRAM_BOT_TOKEN:
             logger.warning("Telegram bot token not configured for photo forwarding")
             return False
 
-        url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendPhoto"
-
-        payload = {
-            "chat_id": chat_id,
-            "photo": file_id,
-        }
-
+        base_url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}"
         circuit_breaker = get_telegram_circuit_breaker()
 
-        async def _send():
+        async def _send_as_photo():
             async with httpx.AsyncClient() as client:
-                response = await client.post(url, json=payload, timeout=30.0)
+                response = await client.post(
+                    f"{base_url}/sendPhoto",
+                    json={"chat_id": chat_id, "photo": file_id},
+                    timeout=30.0,
+                )
                 if response.status_code != 200:
                     raise TelegramError.from_response(
                         "sendPhoto",
@@ -459,13 +460,37 @@ class AdminNotificationService:
                     )
                 return True
 
+        async def _send_as_document():
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{base_url}/sendDocument",
+                    json={"chat_id": chat_id, "document": file_id},
+                    timeout=30.0,
+                )
+                if response.status_code != 200:
+                    raise TelegramError.from_response(
+                        "sendDocument",
+                        response,
+                        message=f"sendDocument returned status {response.status_code}",
+                    )
+                return True
+
         try:
-            return await circuit_breaker.execute(_send)
+            return await circuit_breaker.execute(_send_as_photo)
+        except Exception:
+            # file_id ממסמך לא עובד עם sendPhoto — ננסה sendDocument
+            logger.info(
+                "sendPhoto failed, retrying with sendDocument",
+                extra_data={"chat_id": chat_id}
+            )
+
+        try:
+            return await circuit_breaker.execute(_send_as_document)
         except Exception as e:
             logger.error(
-                "Error sending photo",
+                "Error sending photo/document",
                 extra_data={"chat_id": chat_id, "error": str(e)},
-                exc_info=True
+                exc_info=True,
             )
             return False
 
