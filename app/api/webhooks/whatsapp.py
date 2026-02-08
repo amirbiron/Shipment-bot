@@ -14,7 +14,9 @@ from sqlalchemy import select
 from app.db.database import get_db
 from app.db.models.user import User, UserRole, ApprovalStatus
 from app.state_machine.handlers import SenderStateHandler, CourierStateHandler
-from app.state_machine.states import CourierState
+from app.state_machine.states import CourierState, DispatcherState, StationOwnerState
+from app.state_machine.dispatcher_handler import DispatcherStateHandler
+from app.state_machine.station_owner_handler import StationOwnerStateHandler
 from app.state_machine.manager import StateManager
 from app.domain.services import AdminNotificationService
 from app.domain.services.courier_approval_service import CourierApprovalService
@@ -285,6 +287,68 @@ async def handle_admin_private_command(
     )
 
 
+async def _sender_fallback_wa(
+    user: User,
+    db: AsyncSession,
+    state_manager: StateManager,
+) -> tuple:
+    """fallback לתפריט שולח — גרסת WhatsApp"""
+    from app.state_machine.states import SenderState
+    await state_manager.force_state(user.id, "whatsapp", SenderState.MENU.value, context={})
+    handler = SenderStateHandler(db)
+    return await handler.handle_message(
+        user_id=user.id, platform="whatsapp", message="תפריט"
+    )
+
+
+async def _route_to_role_menu_wa(
+    user: User,
+    db: AsyncSession,
+    state_manager: StateManager,
+) -> tuple:
+    """
+    ניתוב לתפריט הנכון לפי תפקיד — גרסת WhatsApp.
+
+    חובה: כל תפקיד (UserRole) חייב להיות מטופל כאן במפורש.
+    """
+    if user.role == UserRole.COURIER:
+        await state_manager.force_state(user.id, "whatsapp", CourierState.MENU.value, context={})
+        handler = CourierStateHandler(db, platform="whatsapp")
+        return await handler.handle_message(user, "תפריט", None)
+
+    if user.role == UserRole.STATION_OWNER:
+        from app.domain.services.station_service import StationService
+        station_service = StationService(db)
+        station = await station_service.get_station_by_owner(user.id)
+
+        if station:
+            await state_manager.force_state(
+                user.id, "whatsapp",
+                StationOwnerState.MENU.value,
+                context={}
+            )
+            handler = StationOwnerStateHandler(db, station.id)
+            return await handler.handle_message(user, "תפריט", None)
+        # בעל תחנה ללא תחנה פעילה - הורדת תפקיד לשולח
+        logger.warning(
+            "Station owner without active station, downgrading to sender",
+            extra_data={"user_id": user.id}
+        )
+        user.role = UserRole.SENDER
+        await db.commit()
+        return await _sender_fallback_wa(user, db, state_manager)
+
+    if user.role == UserRole.SENDER or user.role == UserRole.ADMIN:
+        return await _sender_fallback_wa(user, db, state_manager)
+
+    # תפקיד לא מוכר
+    logger.warning(
+        "Unknown user role in menu routing, falling back to sender",
+        extra_data={"user_id": user.id, "role": str(user.role)}
+    )
+    return await _sender_fallback_wa(user, db, state_manager)
+
+
 async def send_welcome_message(phone_number: str):
     """הודעת ברוכים הבאים ותפריט ראשי [שלב 1]"""
     welcome_text = (
@@ -459,18 +523,9 @@ async def whatsapp_webhook(
                     })
                     continue
 
-                await state_manager.force_state(user.id, "whatsapp", CourierState.MENU.value, context={})
-                handler = CourierStateHandler(db, platform="whatsapp")
-                response, new_state = await handler.handle_message(user, "תפריט", None)
+                response, new_state = await _route_to_role_menu_wa(user, db, state_manager)
             else:
-                from app.state_machine.states import SenderState
-                await state_manager.force_state(user.id, "whatsapp", SenderState.MENU.value, context={})
-                handler = SenderStateHandler(db)
-                response, new_state = await handler.handle_message(
-                    user_id=user.id,
-                    platform="whatsapp",
-                    message="תפריט"
-                )
+                response, new_state = await _route_to_role_menu_wa(user, db, state_manager)
 
             background_tasks.add_task(
                 send_whatsapp_message,
@@ -486,11 +541,12 @@ async def whatsapp_webhook(
             continue
 
         # טיפול בכפתורי תפריט ראשי [שלב 1]
-        # הערה: הכפתורים הבאים פעילים רק למשתמשים שאינם שליחים באמצע תהליך רישום.
-        # שליח באמצע KYC ימשיך ישירות ל-CourierStateHandler למטה.
+        # הכפתורים פעילים רק למשתמשים שאינם באמצע זרימה רב-שלבית
+        # (רישום שליח, זרימת סדרן, זרימת בעל תחנה)
+        _current_state_value = await state_manager.get_current_state(user.id, "whatsapp")
         _is_courier_in_registration = (
             user.role == UserRole.COURIER
-            and await state_manager.get_current_state(user.id, "whatsapp") in {
+            and _current_state_value in {
                 CourierState.REGISTER_COLLECT_NAME.value,
                 CourierState.REGISTER_COLLECT_DOCUMENT.value,
                 CourierState.REGISTER_COLLECT_SELFIE.value,
@@ -499,8 +555,13 @@ async def whatsapp_webhook(
                 CourierState.REGISTER_TERMS.value,
             }
         )
+        _is_in_multi_step_flow = (
+            _is_courier_in_registration
+            or (isinstance(_current_state_value, str)
+                and _current_state_value.startswith(("DISPATCHER.", "STATION.")))
+        )
 
-        if not _is_courier_in_registration:
+        if not _is_in_multi_step_flow:
             if user.role == UserRole.SENDER and ("הצטרפות למנוי" in text or "שליח" in text):
                 # ניתוב לתהליך הרישום כנהג/שליח
                 user.role = UserRole.COURIER
@@ -528,8 +589,8 @@ async def whatsapp_webhook(
                 })
                 continue
 
-            if "העלאת משלוח מהיר" in text or "משלוח מהיר" in text:
-                # קישור חיצוני לקבוצת WhatsApp - משתמשים רגילים לא יכולים להעלות משלוח בתוך הבוט
+            if ("העלאת משלוח מהיר" in text or "משלוח מהיר" in text) and user.role == UserRole.SENDER:
+                # קישור חיצוני לקבוצת WhatsApp
                 if settings.WHATSAPP_GROUP_LINK:
                     msg_text = (
                         "📦 *העלאת משלוח מהיר*\n\n"
@@ -545,7 +606,7 @@ async def whatsapp_webhook(
                 responses.append({"from": sender_id, "response": msg_text, "new_state": None})
                 continue
 
-            if "הצטרפות כתחנה" in text or "תחנה" in text:
+            if ("הצטרפות כתחנה" in text or "תחנה" in text) and user.role == UserRole.SENDER:
                 # הודעה שיווקית עבור תחנות
                 station_text = (
                     "🏪 *הצטרפות כתחנה*\n\n"
@@ -563,7 +624,7 @@ async def whatsapp_webhook(
                 responses.append({"from": sender_id, "response": station_text, "new_state": None})
                 continue
 
-            if "פנייה לניהול" in text:
+            if "פנייה לניהול" in text and user.role == UserRole.SENDER:
                 # קישור WhatsApp ישיר למנהל הראשי
                 if settings.ADMIN_WHATSAPP_NUMBER:
                     admin_link = f"https://wa.me/{settings.ADMIN_WHATSAPP_NUMBER}"
@@ -580,23 +641,129 @@ async def whatsapp_webhook(
                 responses.append({"from": sender_id, "response": admin_text, "new_state": None})
                 continue
 
-            if "חזרה לתפריט" in text and user.role != UserRole.COURIER:
-                # כפתור "חזרה לתפריט" - מנתב כמו לחיצה על #
-                # שליחים רגילים חוזרים לתפריט הראשי. שליחים מאושרים ייפלו ל-CourierStateHandler למטה.
+            if ("חזרה לתפריט" in text
+                    and user.role not in (UserRole.COURIER, UserRole.STATION_OWNER)):
+                # כפתור "חזרה לתפריט" - שולחים רגילים חוזרים לתפריט הראשי
                 background_tasks.add_task(send_welcome_message, reply_to)
                 responses.append({"from": sender_id, "response": "welcome", "new_state": None})
                 continue
 
+        # ==================== ניתוב לפי תפקיד [שלב 3] ====================
+
+        current_state = _current_state_value
+
+        # ניתוב לבעל תחנה [שלב 3.3]
+        if user.role == UserRole.STATION_OWNER:
+            from app.domain.services.station_service import StationService
+            station_service = StationService(db)
+            station = await station_service.get_station_by_owner(user.id)
+
+            if station:
+                handler = StationOwnerStateHandler(db, station.id)
+                response, new_state = await handler.handle_message(user, text, photo_file_id)
+            else:
+                # בעל תחנה ללא תחנה פעילה - fallback
+                response, new_state = await _route_to_role_menu_wa(user, db, state_manager)
+
+            background_tasks.add_task(
+                send_whatsapp_message, reply_to,
+                response.text, response.keyboard
+            )
+            responses.append({"from": sender_id, "response": response.text, "new_state": new_state})
+            continue
+
+        # ניתוב לתפריט סדרן (כפתור "תפריט סדרן" בתפריט נהג) [שלב 3.2]
+        if ("תפריט סדרן" in text or "🏪 תפריט סדרן" in text) and user.role == UserRole.COURIER:
+            from app.domain.services.station_service import StationService
+            station_service = StationService(db)
+            station = await station_service.get_dispatcher_station(user.id)
+
+            if station:
+                await state_manager.force_state(
+                    user.id, "whatsapp",
+                    DispatcherState.MENU.value,
+                    context={}
+                )
+                handler = DispatcherStateHandler(db, station.id)
+                response, new_state = await handler.handle_message(user, "תפריט", None)
+            else:
+                # סדרן הוסר או תחנה בוטלה
+                logger.warning(
+                    "Dispatcher clicked station menu but station not found",
+                    extra_data={"user_id": user.id}
+                )
+                response, new_state = await _route_to_role_menu_wa(user, db, state_manager)
+
+            background_tasks.add_task(
+                send_whatsapp_message, reply_to,
+                response.text, response.keyboard
+            )
+            responses.append({"from": sender_id, "response": response.text, "new_state": new_state})
+            continue
+
+        # אם המשתמש באמצע זרימת סדרן - ממשיכים עם DispatcherStateHandler
+        if current_state and current_state.startswith("DISPATCHER."):
+            from app.domain.services.station_service import StationService
+            station_service = StationService(db)
+            station = await station_service.get_dispatcher_station(user.id)
+
+            if station:
+                # כפתור "חזרה לתפריט נהג" מחזיר לתפריט הנהג הרגיל
+                if "חזרה לתפריט נהג" in text:
+                    await state_manager.force_state(
+                        user.id, "whatsapp",
+                        CourierState.MENU.value,
+                        context={}
+                    )
+                    handler = CourierStateHandler(db, platform="whatsapp")
+                    response, new_state = await handler.handle_message(user, "תפריט", None)
+                else:
+                    handler = DispatcherStateHandler(db, station.id)
+                    response, new_state = await handler.handle_message(user, text, photo_file_id)
+            else:
+                # תחנה לא נמצאה - איפוס לתפריט נהג
+                logger.warning(
+                    "Dispatcher station not found, resetting to courier menu",
+                    extra_data={"user_id": user.id, "state": current_state}
+                )
+                response, new_state = await _route_to_role_menu_wa(user, db, state_manager)
+
+            background_tasks.add_task(
+                send_whatsapp_message, reply_to,
+                response.text, response.keyboard
+            )
+            responses.append({"from": sender_id, "response": response.text, "new_state": new_state})
+            continue
+
+        # אם המשתמש באמצע זרימת בעל תחנה - ממשיכים
+        if current_state and current_state.startswith("STATION."):
+            from app.domain.services.station_service import StationService
+            station_service = StationService(db)
+            station = await station_service.get_station_by_owner(user.id)
+
+            if station:
+                handler = StationOwnerStateHandler(db, station.id)
+                response, new_state = await handler.handle_message(user, text, photo_file_id)
+            else:
+                # תחנה לא נמצאה - fallback
+                response, new_state = await _route_to_role_menu_wa(user, db, state_manager)
+
+            background_tasks.add_task(
+                send_whatsapp_message, reply_to,
+                response.text, response.keyboard
+            )
+            responses.append({"from": sender_id, "response": response.text, "new_state": new_state})
+            continue
+
         # Route based on user role
         if user.role == UserRole.COURIER:
             # שמירת המצב הקודם לפני הטיפול בהודעה
-            previous_state = await state_manager.get_current_state(user.id, "whatsapp")
+            previous_state = current_state
 
             handler = CourierStateHandler(db, platform="whatsapp")
             response, new_state = await handler.handle_message(user, text, photo_file_id)
 
             # שליחת "כרטיס נהג" למנהלים רק במעבר הראשון למצב PENDING_APPROVAL
-            # (כלומר רק כשהמצב הקודם היה שונה - למניעת שליחה כפולה)
             if (new_state == CourierState.PENDING_APPROVAL.value and
                 previous_state != CourierState.PENDING_APPROVAL.value and
                 user.approval_status == ApprovalStatus.PENDING):
@@ -639,7 +806,7 @@ async def whatsapp_webhook(
             })
             continue
 
-        # Sender flow - check if starting new delivery
+        # Sender flow
         if "שלוח" in text or "חבילה" in text:
             handler = SenderStateHandler(db)
             response, new_state = await handler.handle_message(
@@ -661,11 +828,12 @@ async def whatsapp_webhook(
             })
             continue
 
-        # Check current state for senders
-        current_state = await state_manager.get_current_state(user.id, "whatsapp")
-
         # If user is in the middle of a sender flow, continue it
-        if current_state and not current_state.startswith("COURIER.") and current_state not in ["INITIAL", "SENDER.INITIAL"]:
+        if (current_state
+                and not current_state.startswith("COURIER.")
+                and not current_state.startswith("DISPATCHER.")
+                and not current_state.startswith("STATION.")
+                and current_state not in ["INITIAL", "SENDER.INITIAL"]):
             handler = SenderStateHandler(db)
             response, new_state = await handler.handle_message(
                 user_id=user.id,
