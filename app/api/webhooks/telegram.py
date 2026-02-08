@@ -767,14 +767,14 @@ async def telegram_webhook(
         if (new_state == CourierState.PENDING_APPROVAL.value and
             previous_state != CourierState.PENDING_APPROVAL.value and
             user.approval_status == ApprovalStatus.PENDING):
-            context = await state_manager.get_context(user.id, "telegram")
+            # שליפת מסמכים ישירות מה-DB - כל השדות כבר נשמרו בשלבי ה-KYC
             background_tasks.add_task(
                 AdminNotificationService.notify_new_courier_registration,
                 user.id,
                 user.full_name or user.name or "לא צוין",
                 user.service_area or "לא צוין",
                 user.telegram_chat_id,
-                context.get("document_file_id"),
+                user.id_document_url,
                 "telegram",
                 user.vehicle_category,
                 user.selfie_file_id,

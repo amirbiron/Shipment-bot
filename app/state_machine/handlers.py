@@ -755,7 +755,10 @@ class CourierStateHandler:
             )
             return response, CourierState.REGISTER_COLLECT_DOCUMENT.value, {}
 
-        # שומרים את מזהה התמונה ומעבירים לשלב הסלפי
+        # שומרים את מזהה התמונה ישירות ב-DB (כמו סלפי ותמונת רכב)
+        user.id_document_url = photo_file_id
+        await self.db.commit()
+
         response = MessageResponse(
             "המסמך התקבל בהצלחה! ✓\n\n"
             "<b>שלב ג' - אימות חי:</b>\n"
@@ -869,14 +872,15 @@ class CourierStateHandler:
         user.role = UserRole.COURIER
         user.approval_status = ApprovalStatus.PENDING
 
-        # שמירת מסמכים מהקונטקסט
-        if context.get("document_file_id"):
+        # fallback לתקופת מעבר: שליחים שהתחילו KYC לפני הפריסה
+        # עדיין מחזיקים מסמכים רק ב-context. נעתיק ל-DB אם השדה ריק.
+        if not user.id_document_url and context.get("document_file_id"):
             user.id_document_url = context["document_file_id"]
-        if context.get("selfie_file_id") and not user.selfie_file_id:
+        if not user.selfie_file_id and context.get("selfie_file_id"):
             user.selfie_file_id = context["selfie_file_id"]
-        if context.get("vehicle_category") and not user.vehicle_category:
+        if not user.vehicle_category and context.get("vehicle_category"):
             user.vehicle_category = context["vehicle_category"]
-        if context.get("vehicle_photo_file_id") and not user.vehicle_photo_file_id:
+        if not user.vehicle_photo_file_id and context.get("vehicle_photo_file_id"):
             user.vehicle_photo_file_id = context["vehicle_photo_file_id"]
 
         await self.db.commit()

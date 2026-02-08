@@ -194,13 +194,17 @@ def _match_approval_command(text: str) -> tuple[str, int] | None:
     """
     זיהוי פקודת אישור/דחייה בטקסט.
     מחזיר (action, user_id) או None.
+    תומך באמוג'י שונים (✅✔️☑️), רווחים מרובים, וניקוד (כוכביות מ-WhatsApp).
     """
-    text = text.strip()
-    approve_match = re.match(r'^[✅\s]*אשר(?:\s+שליח)?\s+(\d+)\s*$', text)
+    # ניקוי: הסרת כוכביות (bold של WhatsApp), רווחים עודפים
+    text = text.strip().replace("*", "")
+    text = re.sub(r'\s+', ' ', text)
+
+    approve_match = re.match(r'^[✅✔️☑️\s]*אשר(?:\s+שליח)?\s+(\d+)\s*$', text)
     if approve_match:
         return ("approve", int(approve_match.group(1)))
 
-    reject_match = re.match(r'^[❌\s]*דחה(?:\s+שליח)?\s+(\d+)\s*$', text)
+    reject_match = re.match(r'^[❌✖️\s]*דחה(?:\s+שליח)?\s+(\d+)\s*$', text)
     if reject_match:
         return ("reject", int(reject_match.group(1)))
 
@@ -600,14 +604,14 @@ async def whatsapp_webhook(
             if (new_state == CourierState.PENDING_APPROVAL.value and
                 previous_state != CourierState.PENDING_APPROVAL.value and
                 user.approval_status == ApprovalStatus.PENDING):
-                context = await state_manager.get_context(user.id, "whatsapp")
+                # שליפת מסמכים ישירות מה-DB - כל השדות כבר נשמרו בשלבי ה-KYC
                 background_tasks.add_task(
                     AdminNotificationService.notify_new_courier_registration,
                     user.id,
                     user.full_name or user.name or "לא צוין",
                     user.service_area or "לא צוין",
                     user.phone_number,
-                    context.get("document_file_id"),
+                    user.id_document_url,
                     "whatsapp",
                     user.vehicle_category,
                     user.selfie_file_id,
