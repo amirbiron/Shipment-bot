@@ -99,7 +99,8 @@ class StationOwnerStateHandler:
             keyboard=[
                 ["👥 ניהול סדרנים", "💰 ארנק תחנה"],
                 ["📊 דוח גבייה", "🚫 רשימה שחורה"],
-            ]
+            ],
+            inline=True
         )
         return response, StationOwnerState.MENU.value, {}
 

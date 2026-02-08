@@ -974,7 +974,8 @@ class CourierStateHandler:
             f"💰 <b>מצב הארנק:</b> 0.00 ₪\n"
             f"📍 <b>האזור שלך:</b> {user.service_area or 'לא הוגדר'}\n\n"
             "בחר פעולה:",
-            keyboard=keyboard
+            keyboard=keyboard,
+            inline=True
         )
         return response, CourierState.MENU.value, {}
 
