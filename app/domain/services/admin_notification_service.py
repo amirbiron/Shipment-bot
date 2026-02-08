@@ -437,6 +437,8 @@ class AdminNotificationService:
         """
         שליחת תמונה דרך Telegram Bot API לפי file_id.
         מנסה קודם sendPhoto; אם נכשל (למשל file_id ממסמך) — fallback ל-sendDocument.
+        ניסיון sendPhoto נעשה בלי circuit breaker כי כשלון צפוי (file_id ממסמך)
+        לא צריך להשפיע על ה-circuit breaker המשותף.
         """
         if not settings.TELEGRAM_BOT_TOKEN:
             logger.warning("Telegram bot token not configured for photo forwarding")
@@ -445,20 +447,24 @@ class AdminNotificationService:
         base_url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}"
         circuit_breaker = get_telegram_circuit_breaker()
 
-        async def _send_as_photo():
+        # ניסיון ראשון: sendPhoto — בלי circuit breaker כי כשלון כאן צפוי
+        try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     f"{base_url}/sendPhoto",
                     json={"chat_id": chat_id, "photo": file_id},
                     timeout=30.0,
                 )
-                if response.status_code != 200:
-                    raise TelegramError.from_response(
-                        "sendPhoto",
-                        response,
-                        message=f"sendPhoto returned status {response.status_code}",
-                    )
-                return True
+                if response.status_code == 200:
+                    return True
+        except Exception:
+            pass
+
+        # fallback: sendDocument — דרך circuit breaker כי כשלון כאן הוא אמיתי
+        logger.info(
+            "sendPhoto failed, retrying with sendDocument",
+            extra_data={"chat_id": chat_id}
+        )
 
         async def _send_as_document():
             async with httpx.AsyncClient() as client:
@@ -474,15 +480,6 @@ class AdminNotificationService:
                         message=f"sendDocument returned status {response.status_code}",
                     )
                 return True
-
-        try:
-            return await circuit_breaker.execute(_send_as_photo)
-        except Exception:
-            # file_id ממסמך לא עובד עם sendPhoto — ננסה sendDocument
-            logger.info(
-                "sendPhoto failed, retrying with sendDocument",
-                extra_data={"chat_id": chat_id}
-            )
 
         try:
             return await circuit_breaker.execute(_send_as_document)
