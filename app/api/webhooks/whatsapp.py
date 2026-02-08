@@ -1,6 +1,7 @@
 """
 WhatsApp Webhook Handler - Bot Gateway Layer
 """
+
 import asyncio
 import re
 
@@ -33,6 +34,7 @@ router = APIRouter()
 
 class WhatsAppMessage(BaseModel):
     """Incoming WhatsApp message structure"""
+
     from_number: str
     # מזהה יציב לשיחה/שולח (למשל message.from של WPPConnect). אם לא נשלח, ניפול ל-from_number.
     sender_id: Optional[str] = None
@@ -50,12 +52,12 @@ class WhatsAppMessage(BaseModel):
 
 class WhatsAppWebhookPayload(BaseModel):
     """WhatsApp webhook payload"""
+
     messages: list[WhatsAppMessage] = []
 
 
 async def get_or_create_user(
-    db: AsyncSession,
-    sender_identifier: str
+    db: AsyncSession, sender_identifier: str
 ) -> tuple[User, bool]:
     """
     Get existing user or create new one. Returns (user, is_new)
@@ -70,9 +72,7 @@ async def get_or_create_user(
 
     if not user:
         user = User(
-            phone_number=sender_identifier,
-            platform="whatsapp",
-            role=UserRole.SENDER
+            phone_number=sender_identifier, platform="whatsapp", role=UserRole.SENDER
         )
         db.add(user)
         await db.commit()
@@ -82,7 +82,9 @@ async def get_or_create_user(
     return user, False  # Existing user
 
 
-async def send_whatsapp_message(phone_number: str, text: str, keyboard: list = None) -> None:
+async def send_whatsapp_message(
+    phone_number: str, text: str, keyboard: list = None
+) -> None:
     """
     Send message via WhatsApp Gateway (Node.js microservice) with circuit breaker protection.
     ממיר אוטומטית תגי HTML לפורמט וואטסאפ.
@@ -111,15 +113,18 @@ async def send_whatsapp_message(phone_number: str, text: str, keyboard: list = N
                         json={
                             "phone": phone_number,
                             "message": formatted_text,
-                            "keyboard": keyboard
-                        }
+                            "keyboard": keyboard,
+                        },
                     )
                     if response.status_code == 200:
                         return  # הצלחה
 
                     # בדיקה אם זו שגיאה זמנית שכדאי לנסות שוב
-                    if response.status_code in transient_status_codes and attempt < max_retries - 1:
-                        backoff_seconds = 2 ** attempt  # 1, 2, 4 שניות
+                    if (
+                        response.status_code in transient_status_codes
+                        and attempt < max_retries - 1
+                    ):
+                        backoff_seconds = 2**attempt  # 1, 2, 4 שניות
                         logger.warning(
                             "WhatsApp send got transient error, retrying",
                             extra_data={
@@ -127,8 +132,8 @@ async def send_whatsapp_message(phone_number: str, text: str, keyboard: list = N
                                 "status_code": response.status_code,
                                 "attempt": attempt + 1,
                                 "max_retries": max_retries,
-                                "backoff_seconds": backoff_seconds
-                            }
+                                "backoff_seconds": backoff_seconds,
+                            },
                         )
                         await asyncio.sleep(backoff_seconds)
                         continue
@@ -142,26 +147,26 @@ async def send_whatsapp_message(phone_number: str, text: str, keyboard: list = N
                 except httpx.TimeoutException:
                     # Timeout גם נחשב שגיאה זמנית
                     if attempt < max_retries - 1:
-                        backoff_seconds = 2 ** attempt
+                        backoff_seconds = 2**attempt
                         logger.warning(
                             "WhatsApp send timeout, retrying",
                             extra_data={
                                 "phone": PhoneNumberValidator.mask(phone_number),
                                 "attempt": attempt + 1,
                                 "max_retries": max_retries,
-                                "backoff_seconds": backoff_seconds
-                            }
+                                "backoff_seconds": backoff_seconds,
+                            },
                         )
                         await asyncio.sleep(backoff_seconds)
                         continue
                     raise WhatsAppError(
                         message="gateway /send timeout after retries",
-                        details={"timeout": True, "attempts": max_retries}
+                        details={"timeout": True, "attempts": max_retries},
                     )
                 except httpx.RequestError as e:
                     # שגיאות רשת (connection error וכו')
                     if attempt < max_retries - 1:
-                        backoff_seconds = 2 ** attempt
+                        backoff_seconds = 2**attempt
                         logger.warning(
                             "WhatsApp send network error, retrying",
                             extra_data={
@@ -169,14 +174,14 @@ async def send_whatsapp_message(phone_number: str, text: str, keyboard: list = N
                                 "error": str(e),
                                 "attempt": attempt + 1,
                                 "max_retries": max_retries,
-                                "backoff_seconds": backoff_seconds
-                            }
+                                "backoff_seconds": backoff_seconds,
+                            },
                         )
                         await asyncio.sleep(backoff_seconds)
                         continue
                     raise WhatsAppError(
                         message=f"gateway /send network error: {str(e)}",
-                        details={"network_error": True, "attempts": max_retries}
+                        details={"network_error": True, "attempts": max_retries},
                     )
 
     try:
@@ -184,8 +189,11 @@ async def send_whatsapp_message(phone_number: str, text: str, keyboard: list = N
     except Exception as e:
         logger.error(
             "WhatsApp send failed",
-            extra_data={"phone": PhoneNumberValidator.mask(phone_number), "error": str(e)},
-            exc_info=True
+            extra_data={
+                "phone": PhoneNumberValidator.mask(phone_number),
+                "error": str(e),
+            },
+            exc_info=True,
         )
 
 
@@ -241,13 +249,15 @@ def _match_approval_command(text: str) -> tuple[str, int] | None:
     """
     # ניקוי: הסרת כוכביות (bold של WhatsApp), רווחים עודפים
     text = text.strip().replace("*", "")
-    text = re.sub(r'\s+', ' ', text)
+    text = re.sub(r"\s+", " ", text)
 
-    approve_match = re.match(r'^[✅✔️☑️\s]*(?:אשר|אישור)(?:\s+שליח)?\s+(\d+)\s*$', text)
+    approve_match = re.match(r"^[✅✔️☑️\s]*(?:אשר|אישור)(?:\s+שליח)?\s+(\d+)\s*$", text)
     if approve_match:
         return ("approve", int(approve_match.group(1)))
 
-    reject_match = re.match(r'^[❌✖️\s]*(?:דחה|דחייה|דחיה)(?:\s+שליח)?\s+(\d+)\s*$', text)
+    reject_match = re.match(
+        r"^[❌✖️\s]*(?:דחה|דחייה|דחיה)(?:\s+שליח)?\s+(\d+)\s*$", text
+    )
     if reject_match:
         return ("reject", int(reject_match.group(1)))
 
@@ -275,16 +285,21 @@ async def _handle_whatsapp_approval(
 
     # הודעה לשליח וסיכום לקבוצה - ברקע כדי לא לחסום את ה-webhook
     from app.api.webhooks.telegram import send_telegram_message
+
     if background_tasks:
         background_tasks.add_task(
             CourierApprovalService.notify_after_decision,
-            result.user, action, admin_name,
+            result.user,
+            action,
+            admin_name,
             send_telegram_fn=send_telegram_message,
             send_whatsapp_fn=send_whatsapp_message,
         )
     else:
         await CourierApprovalService.notify_after_decision(
-            result.user, action, admin_name,
+            result.user,
+            action,
+            admin_name,
             send_telegram_fn=send_telegram_message,
             send_whatsapp_fn=send_whatsapp_message,
         )
@@ -307,7 +322,10 @@ async def handle_admin_group_command(
 
     action, user_id = parsed
     return await _handle_whatsapp_approval(
-        db, action, user_id, admin_name="מנהל (קבוצה)",
+        db,
+        action,
+        user_id,
+        admin_name="מנהל (קבוצה)",
         background_tasks=background_tasks,
     )
 
@@ -327,7 +345,10 @@ async def handle_admin_private_command(
 
     action, user_id = parsed
     return await _handle_whatsapp_approval(
-        db, action, user_id, admin_name=admin_name,
+        db,
+        action,
+        user_id,
+        admin_name=admin_name,
         background_tasks=background_tasks,
     )
 
@@ -339,7 +360,10 @@ async def _sender_fallback_wa(
 ) -> tuple:
     """fallback לתפריט שולח — גרסת WhatsApp"""
     from app.state_machine.states import SenderState
-    await state_manager.force_state(user.id, "whatsapp", SenderState.MENU.value, context={})
+
+    await state_manager.force_state(
+        user.id, "whatsapp", SenderState.MENU.value, context={}
+    )
     handler = SenderStateHandler(db)
     return await handler.handle_message(
         user_id=user.id, platform="whatsapp", message="תפריט"
@@ -357,27 +381,28 @@ async def _route_to_role_menu_wa(
     חובה: כל תפקיד (UserRole) חייב להיות מטופל כאן במפורש.
     """
     if user.role == UserRole.COURIER:
-        await state_manager.force_state(user.id, "whatsapp", CourierState.MENU.value, context={})
+        await state_manager.force_state(
+            user.id, "whatsapp", CourierState.MENU.value, context={}
+        )
         handler = CourierStateHandler(db, platform="whatsapp")
         return await handler.handle_message(user, "תפריט", None)
 
     if user.role == UserRole.STATION_OWNER:
         from app.domain.services.station_service import StationService
+
         station_service = StationService(db)
         station = await station_service.get_station_by_owner(user.id)
 
         if station:
             await state_manager.force_state(
-                user.id, "whatsapp",
-                StationOwnerState.MENU.value,
-                context={}
+                user.id, "whatsapp", StationOwnerState.MENU.value, context={}
             )
             handler = StationOwnerStateHandler(db, station.id, platform="whatsapp")
             return await handler.handle_message(user, "תפריט", None)
         # בעל תחנה ללא תחנה פעילה - הורדת תפקיד לשולח
         logger.warning(
             "Station owner without active station, downgrading to sender",
-            extra_data={"user_id": user.id}
+            extra_data={"user_id": user.id},
         )
         user.role = UserRole.SENDER
         await db.commit()
@@ -389,7 +414,7 @@ async def _route_to_role_menu_wa(
     # תפקיד לא מוכר
     logger.warning(
         "Unknown user role in menu routing, falling back to sender",
-        extra_data={"user_id": user.id, "role": str(user.role)}
+        extra_data={"user_id": user.id, "role": str(user.role)},
     )
     return await _sender_fallback_wa(user, db, state_manager)
 
@@ -423,7 +448,7 @@ async def send_welcome_message(phone_number: str):
 async def whatsapp_webhook(
     payload: WhatsAppWebhookPayload,
     background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Handle incoming WhatsApp messages.
@@ -439,9 +464,13 @@ async def whatsapp_webhook(
         # או מסמך שהוא בעצם תמונה (media_type=document + mime_type מתחיל ב-image/)
         if message.media_url and message.media_type:
             mt = message.media_type.lower()
-            if 'image' in mt:
+            if "image" in mt:
                 photo_file_id = message.media_url
-            elif 'document' in mt and message.mime_type and message.mime_type.startswith('image/'):
+            elif (
+                "document" in mt
+                and message.mime_type
+                and message.mime_type.startswith("image/")
+            ):
                 photo_file_id = message.media_url
             else:
                 photo_file_id = None
@@ -455,8 +484,8 @@ async def whatsapp_webhook(
                 "reply_to": PhoneNumberValidator.mask(reply_to),
                 "text_preview": text[:50] if text else "",
                 "media_type": message.media_type,
-                "has_media_url": bool(message.media_url)
-            }
+                "has_media_url": bool(message.media_url),
+            },
         )
 
         # Skip empty messages
@@ -468,27 +497,32 @@ async def whatsapp_webhook(
 
         if is_group_message:
             # בדיקה אם זו קבוצת המנהלים
-            if settings.WHATSAPP_ADMIN_GROUP_ID and sender_id == settings.WHATSAPP_ADMIN_GROUP_ID:
+            if (
+                settings.WHATSAPP_ADMIN_GROUP_ID
+                and sender_id == settings.WHATSAPP_ADMIN_GROUP_ID
+            ):
                 logger.info(
                     "Admin group message received",
-                    extra_data={"group_id": sender_id, "text": text[:50]}
+                    extra_data={"group_id": sender_id, "text": text[:50]},
                 )
 
                 # ניסיון לזהות פקודת מנהל
-                response_text = await handle_admin_group_command(db, text, background_tasks=background_tasks)
+                response_text = await handle_admin_group_command(
+                    db, text, background_tasks=background_tasks
+                )
 
                 if response_text:
                     # שליחת תגובה לקבוצה
                     background_tasks.add_task(
-                        send_whatsapp_message,
-                        sender_id,  # שליחה לקבוצה
-                        response_text
+                        send_whatsapp_message, sender_id, response_text  # שליחה לקבוצה
                     )
-                    responses.append({
-                        "from": sender_id,
-                        "response": response_text,
-                        "admin_command": True
-                    })
+                    responses.append(
+                        {
+                            "from": sender_id,
+                            "response": response_text,
+                            "admin_command": True,
+                        }
+                    )
                 else:
                     # הודעה רגילה בקבוצה (לא פקודה) - מתעלמים
                     logger.debug("Non-command message in admin group, ignoring")
@@ -497,7 +531,7 @@ async def whatsapp_webhook(
                 # הודעה מקבוצה אחרת - מתעלמים
                 logger.debug(
                     "Message from non-admin group, ignoring",
-                    extra_data={"group_id": sender_id}
+                    extra_data={"group_id": sender_id},
                 )
 
             continue  # לא ממשיכים לטיפול רגיל בהודעות מקבוצות
@@ -510,16 +544,22 @@ async def whatsapp_webhook(
         # יוכל לאשר/לדחות שליחים כבר מההודעה הראשונה שלו
         if _is_whatsapp_admin(sender_id) and text:
             admin_response = await handle_admin_private_command(
-                db, text, admin_name=user.name or PhoneNumberValidator.mask(sender_id),
+                db,
+                text,
+                admin_name=user.name or PhoneNumberValidator.mask(sender_id),
                 background_tasks=background_tasks,
             )
             if admin_response:
-                background_tasks.add_task(send_whatsapp_message, reply_to, admin_response)
-                responses.append({
-                    "from": sender_id,
-                    "response": admin_response,
-                    "admin_command": True
-                })
+                background_tasks.add_task(
+                    send_whatsapp_message, reply_to, admin_response
+                )
+                responses.append(
+                    {
+                        "from": sender_id,
+                        "response": admin_response,
+                        "admin_command": True,
+                    }
+                )
                 continue
 
         # Initialize state manager
@@ -528,15 +568,13 @@ async def whatsapp_webhook(
         # New user - show welcome message with role selection [1.1]
         if is_new_user:
             background_tasks.add_task(send_welcome_message, reply_to)
-            responses.append({
-                "from": sender_id,
-                "response": "welcome",
-                "new_user": True
-            })
+            responses.append(
+                {"from": sender_id, "response": "welcome", "new_user": True}
+            )
             continue
 
         # Handle "#" to return to main menu
-        if text.strip() == "#":
+        if text.strip() in {"#", "תפריט ראשי"}:
             # רענון מהDB לפני בדיקת סטטוס - למניעת stale data אם האדמין אישר בינתיים
             await db.refresh(user)
             # לוג לדיבאג - מראה את מצב המשתמש בלחיצה על #
@@ -546,54 +584,87 @@ async def whatsapp_webhook(
                     "user_id": user.id,
                     "phone": PhoneNumberValidator.mask(sender_id),
                     "role": user.role.value if user.role else None,
-                    "approval_status": user.approval_status.value if user.approval_status else None
-                }
+                    "approval_status": (
+                        user.approval_status.value if user.approval_status else None
+                    ),
+                },
             )
+
+            # אדמין (לפי WHATSAPP_ADMIN_NUMBERS): מאפשרים יציאה "קשיחה" מכל זרימה וחזרה לתפריט הראשי
+            # של כל אפשרויות הרישום - בלי לשנות role ב-DB (כדי לא למחוק STATION_OWNER וכו').
+            if _is_whatsapp_admin(sender_id):
+                from app.state_machine.states import SenderState
+
+                # איפוס state כדי לאפשר עבודה עם תפריט ראשי גם אם האדמין היה באמצע זרימה רב-שלבית כשליח
+                await state_manager.force_state(
+                    user.id,
+                    "whatsapp",
+                    SenderState.MENU.value,
+                    context={"admin_root_menu": True},
+                )
+
+                background_tasks.add_task(send_welcome_message, reply_to)
+                responses.append(
+                    {
+                        "from": sender_id,
+                        "response": "welcome (admin main menu)",
+                        "new_state": SenderState.MENU.value,
+                        "admin_main_menu": True,
+                    }
+                )
+                continue
+
             # Reset state to menu
-            if user.role == UserRole.COURIER and user.approval_status != ApprovalStatus.APPROVED:
+            if (
+                user.role == UserRole.COURIER
+                and user.approval_status != ApprovalStatus.APPROVED
+            ):
                 # שליח לא מאושר - מחזירים אותו להיות שולח רגיל
                 logger.info(
                     "Non-approved courier pressed #, switching to sender",
                     extra_data={
                         "user_id": user.id,
                         "phone": PhoneNumberValidator.mask(sender_id),
-                        "reply_to": PhoneNumberValidator.mask(reply_to)
-                    }
+                        "reply_to": PhoneNumberValidator.mask(reply_to),
+                    },
                 )
                 user.role = UserRole.SENDER
                 await db.commit()
                 from app.state_machine.states import SenderState
-                await state_manager.force_state(user.id, "whatsapp", SenderState.MENU.value, context={})
+
+                await state_manager.force_state(
+                    user.id, "whatsapp", SenderState.MENU.value, context={}
+                )
                 background_tasks.add_task(send_welcome_message, reply_to)
-                responses.append({
-                    "from": sender_id,
-                    "response": "welcome (switched from non-approved courier)",
-                    "new_state": SenderState.MENU.value
-                })
+                responses.append(
+                    {
+                        "from": sender_id,
+                        "response": "welcome (switched from non-approved courier)",
+                        "new_state": SenderState.MENU.value,
+                    }
+                )
                 continue
 
             response, new_state = await _route_to_role_menu_wa(user, db, state_manager)
 
             background_tasks.add_task(
-                send_whatsapp_message,
-                reply_to,
-                response.text,
-                response.keyboard
+                send_whatsapp_message, reply_to, response.text, response.keyboard
             )
-            responses.append({
-                "from": sender_id,
-                "response": response.text,
-                "new_state": new_state
-            })
+            responses.append(
+                {"from": sender_id, "response": response.text, "new_state": new_state}
+            )
             continue
 
         # טיפול בכפתורי תפריט ראשי [שלב 1]
         # הכפתורים פעילים רק למשתמשים שאינם באמצע זרימה רב-שלבית
         # (רישום שליח, זרימת סדרן, זרימת בעל תחנה)
-        _current_state_value = await state_manager.get_current_state(user.id, "whatsapp")
+        _current_state_value = await state_manager.get_current_state(
+            user.id, "whatsapp"
+        )
         _is_courier_in_registration = (
             user.role == UserRole.COURIER
-            and _current_state_value in {
+            and _current_state_value
+            in {
                 CourierState.REGISTER_COLLECT_NAME.value,
                 CourierState.REGISTER_COLLECT_DOCUMENT.value,
                 CourierState.REGISTER_COLLECT_SELFIE.value,
@@ -602,41 +673,47 @@ async def whatsapp_webhook(
                 CourierState.REGISTER_TERMS.value,
             }
         )
-        _is_in_multi_step_flow = (
-            _is_courier_in_registration
-            or (isinstance(_current_state_value, str)
-                and _current_state_value.startswith(("DISPATCHER.", "STATION.")))
+        _is_in_multi_step_flow = _is_courier_in_registration or (
+            isinstance(_current_state_value, str)
+            and _current_state_value.startswith(("DISPATCHER.", "STATION."))
+        )
+        _context = await state_manager.get_context(user.id, "whatsapp")
+        _admin_root_menu = bool(_context.get("admin_root_menu")) and _is_whatsapp_admin(
+            sender_id
         )
 
         if not _is_in_multi_step_flow:
-            if user.role == UserRole.SENDER and ("הצטרפות למנוי" in text or "שליח" in text):
+            if (
+                user.role in (UserRole.SENDER, UserRole.ADMIN) or _admin_root_menu
+            ) and ("הצטרפות למנוי" in text or "שליח" in text):
                 # ניתוב לתהליך הרישום כנהג/שליח
                 user.role = UserRole.COURIER
                 await db.commit()
 
                 await state_manager.force_state(
-                    user.id, "whatsapp",
-                    CourierState.INITIAL.value,
-                    context={}
+                    user.id, "whatsapp", CourierState.INITIAL.value, context={}
                 )
 
                 handler = CourierStateHandler(db, platform="whatsapp")
-                response, new_state = await handler.handle_message(user, text, photo_file_id)
+                response, new_state = await handler.handle_message(
+                    user, text, photo_file_id
+                )
 
                 background_tasks.add_task(
-                    send_whatsapp_message,
-                    reply_to,
-                    response.text,
-                    response.keyboard
+                    send_whatsapp_message, reply_to, response.text, response.keyboard
                 )
-                responses.append({
-                    "from": sender_id,
-                    "response": response.text,
-                    "new_state": new_state
-                })
+                responses.append(
+                    {
+                        "from": sender_id,
+                        "response": response.text,
+                        "new_state": new_state,
+                    }
+                )
                 continue
 
-            if ("העלאת משלוח מהיר" in text or "משלוח מהיר" in text) and user.role == UserRole.SENDER:
+            if ("העלאת משלוח מהיר" in text or "משלוח מהיר" in text) and (
+                user.role in (UserRole.SENDER, UserRole.ADMIN) or _admin_root_menu
+            ):
                 # קישור חיצוני לקבוצת WhatsApp
                 if settings.WHATSAPP_GROUP_LINK:
                     msg_text = (
@@ -650,10 +727,14 @@ async def whatsapp_webhook(
                         "להעלאת משלוח מהיר, פנו להנהלה לקבלת קישור לקבוצת WhatsApp."
                     )
                 background_tasks.add_task(send_whatsapp_message, reply_to, msg_text)
-                responses.append({"from": sender_id, "response": msg_text, "new_state": None})
+                responses.append(
+                    {"from": sender_id, "response": msg_text, "new_state": None}
+                )
                 continue
 
-            if ("הצטרפות כתחנה" in text or "תחנה" in text) and user.role == UserRole.SENDER:
+            if ("הצטרפות כתחנה" in text or "תחנה" in text) and (
+                user.role in (UserRole.SENDER, UserRole.ADMIN) or _admin_root_menu
+            ):
                 # הודעה שיווקית עבור תחנות
                 station_text = (
                     "🏪 *הצטרפות כתחנה*\n\n"
@@ -665,19 +746,21 @@ async def whatsapp_webhook(
                     "לפרטים נוספים, פנו להנהלה."
                 )
                 background_tasks.add_task(
-                    send_whatsapp_message, reply_to, station_text,
-                    [["📞 פנייה לניהול"]]
+                    send_whatsapp_message, reply_to, station_text, [["📞 פנייה לניהול"]]
                 )
-                responses.append({"from": sender_id, "response": station_text, "new_state": None})
+                responses.append(
+                    {"from": sender_id, "response": station_text, "new_state": None}
+                )
                 continue
 
-            if "פנייה לניהול" in text and user.role == UserRole.SENDER:
+            if "פנייה לניהול" in text and (
+                user.role in (UserRole.SENDER, UserRole.ADMIN) or _admin_root_menu
+            ):
                 # קישור WhatsApp ישיר למנהל הראשי
                 if settings.ADMIN_WHATSAPP_NUMBER:
                     admin_link = f"https://wa.me/{settings.ADMIN_WHATSAPP_NUMBER}"
                     admin_text = (
-                        "📞 *פנייה לניהול*\n\n"
-                        f"ליצירת קשר עם המנהל:\n{admin_link}"
+                        "📞 *פנייה לניהול*\n\n" f"ליצירת קשר עם המנהל:\n{admin_link}"
                     )
                 else:
                     admin_text = (
@@ -685,14 +768,20 @@ async def whatsapp_webhook(
                         "ליצירת קשר עם המנהל, שלחו הודעה כאן ונחזור אליכם בהקדם."
                     )
                 background_tasks.add_task(send_whatsapp_message, reply_to, admin_text)
-                responses.append({"from": sender_id, "response": admin_text, "new_state": None})
+                responses.append(
+                    {"from": sender_id, "response": admin_text, "new_state": None}
+                )
                 continue
 
-            if ("חזרה לתפריט" in text
-                    and user.role not in (UserRole.COURIER, UserRole.STATION_OWNER)):
+            if "חזרה לתפריט" in text and (
+                user.role not in (UserRole.COURIER, UserRole.STATION_OWNER)
+                or _admin_root_menu
+            ):
                 # כפתור "חזרה לתפריט" - שולחים רגילים חוזרים לתפריט הראשי
                 background_tasks.add_task(send_welcome_message, reply_to)
-                responses.append({"from": sender_id, "response": "welcome", "new_state": None})
+                responses.append(
+                    {"from": sender_id, "response": "welcome", "new_state": None}
+                )
                 continue
 
         # ==================== ניתוב לפי תפקיד [שלב 3] ====================
@@ -702,34 +791,41 @@ async def whatsapp_webhook(
         # ניתוב לבעל תחנה [שלב 3.3]
         if user.role == UserRole.STATION_OWNER:
             from app.domain.services.station_service import StationService
+
             station_service = StationService(db)
             station = await station_service.get_station_by_owner(user.id)
 
             if station:
                 handler = StationOwnerStateHandler(db, station.id, platform="whatsapp")
-                response, new_state = await handler.handle_message(user, text, photo_file_id)
+                response, new_state = await handler.handle_message(
+                    user, text, photo_file_id
+                )
             else:
                 # בעל תחנה ללא תחנה פעילה - fallback
-                response, new_state = await _route_to_role_menu_wa(user, db, state_manager)
+                response, new_state = await _route_to_role_menu_wa(
+                    user, db, state_manager
+                )
 
             background_tasks.add_task(
-                send_whatsapp_message, reply_to,
-                response.text, response.keyboard
+                send_whatsapp_message, reply_to, response.text, response.keyboard
             )
-            responses.append({"from": sender_id, "response": response.text, "new_state": new_state})
+            responses.append(
+                {"from": sender_id, "response": response.text, "new_state": new_state}
+            )
             continue
 
         # ניתוב לתפריט סדרן (כפתור "תפריט סדרן" בתפריט נהג) [שלב 3.2]
-        if ("תפריט סדרן" in text or "🏪 תפריט סדרן" in text) and user.role == UserRole.COURIER:
+        if (
+            "תפריט סדרן" in text or "🏪 תפריט סדרן" in text
+        ) and user.role == UserRole.COURIER:
             from app.domain.services.station_service import StationService
+
             station_service = StationService(db)
             station = await station_service.get_dispatcher_station(user.id)
 
             if station:
                 await state_manager.force_state(
-                    user.id, "whatsapp",
-                    DispatcherState.MENU.value,
-                    context={}
+                    user.id, "whatsapp", DispatcherState.MENU.value, context={}
                 )
                 handler = DispatcherStateHandler(db, station.id, platform="whatsapp")
                 response, new_state = await handler.handle_message(user, "תפריט", None)
@@ -737,20 +833,24 @@ async def whatsapp_webhook(
                 # סדרן הוסר או תחנה בוטלה
                 logger.warning(
                     "Dispatcher clicked station menu but station not found",
-                    extra_data={"user_id": user.id}
+                    extra_data={"user_id": user.id},
                 )
-                response, new_state = await _route_to_role_menu_wa(user, db, state_manager)
+                response, new_state = await _route_to_role_menu_wa(
+                    user, db, state_manager
+                )
 
             background_tasks.add_task(
-                send_whatsapp_message, reply_to,
-                response.text, response.keyboard
+                send_whatsapp_message, reply_to, response.text, response.keyboard
             )
-            responses.append({"from": sender_id, "response": response.text, "new_state": new_state})
+            responses.append(
+                {"from": sender_id, "response": response.text, "new_state": new_state}
+            )
             continue
 
         # אם המשתמש באמצע זרימת סדרן - ממשיכים עם DispatcherStateHandler
         if current_state and current_state.startswith("DISPATCHER."):
             from app.domain.services.station_service import StationService
+
             station_service = StationService(db)
             station = await station_service.get_dispatcher_station(user.id)
 
@@ -758,48 +858,61 @@ async def whatsapp_webhook(
                 # כפתור "חזרה לתפריט נהג" מחזיר לתפריט הנהג הרגיל
                 if "חזרה לתפריט נהג" in text:
                     await state_manager.force_state(
-                        user.id, "whatsapp",
-                        CourierState.MENU.value,
-                        context={}
+                        user.id, "whatsapp", CourierState.MENU.value, context={}
                     )
                     handler = CourierStateHandler(db, platform="whatsapp")
-                    response, new_state = await handler.handle_message(user, "תפריט", None)
+                    response, new_state = await handler.handle_message(
+                        user, "תפריט", None
+                    )
                 else:
-                    handler = DispatcherStateHandler(db, station.id, platform="whatsapp")
-                    response, new_state = await handler.handle_message(user, text, photo_file_id)
+                    handler = DispatcherStateHandler(
+                        db, station.id, platform="whatsapp"
+                    )
+                    response, new_state = await handler.handle_message(
+                        user, text, photo_file_id
+                    )
             else:
                 # תחנה לא נמצאה - איפוס לתפריט נהג
                 logger.warning(
                     "Dispatcher station not found, resetting to courier menu",
-                    extra_data={"user_id": user.id, "state": current_state}
+                    extra_data={"user_id": user.id, "state": current_state},
                 )
-                response, new_state = await _route_to_role_menu_wa(user, db, state_manager)
+                response, new_state = await _route_to_role_menu_wa(
+                    user, db, state_manager
+                )
 
             background_tasks.add_task(
-                send_whatsapp_message, reply_to,
-                response.text, response.keyboard
+                send_whatsapp_message, reply_to, response.text, response.keyboard
             )
-            responses.append({"from": sender_id, "response": response.text, "new_state": new_state})
+            responses.append(
+                {"from": sender_id, "response": response.text, "new_state": new_state}
+            )
             continue
 
         # אם המשתמש באמצע זרימת בעל תחנה - ממשיכים
         if current_state and current_state.startswith("STATION."):
             from app.domain.services.station_service import StationService
+
             station_service = StationService(db)
             station = await station_service.get_station_by_owner(user.id)
 
             if station:
                 handler = StationOwnerStateHandler(db, station.id, platform="whatsapp")
-                response, new_state = await handler.handle_message(user, text, photo_file_id)
+                response, new_state = await handler.handle_message(
+                    user, text, photo_file_id
+                )
             else:
                 # תחנה לא נמצאה - fallback
-                response, new_state = await _route_to_role_menu_wa(user, db, state_manager)
+                response, new_state = await _route_to_role_menu_wa(
+                    user, db, state_manager
+                )
 
             background_tasks.add_task(
-                send_whatsapp_message, reply_to,
-                response.text, response.keyboard
+                send_whatsapp_message, reply_to, response.text, response.keyboard
             )
-            responses.append({"from": sender_id, "response": response.text, "new_state": new_state})
+            responses.append(
+                {"from": sender_id, "response": response.text, "new_state": new_state}
+            )
             continue
 
         # Route based on user role
@@ -808,12 +921,16 @@ async def whatsapp_webhook(
             previous_state = current_state
 
             handler = CourierStateHandler(db, platform="whatsapp")
-            response, new_state = await handler.handle_message(user, text, photo_file_id)
+            response, new_state = await handler.handle_message(
+                user, text, photo_file_id
+            )
 
             # שליחת "כרטיס נהג" למנהלים רק במעבר הראשון למצב PENDING_APPROVAL
-            if (new_state == CourierState.PENDING_APPROVAL.value and
-                previous_state != CourierState.PENDING_APPROVAL.value and
-                user.approval_status == ApprovalStatus.PENDING):
+            if (
+                new_state == CourierState.PENDING_APPROVAL.value
+                and previous_state != CourierState.PENDING_APPROVAL.value
+                and user.approval_status == ApprovalStatus.PENDING
+            ):
                 # שליפת מסמכים ישירות מה-DB - כל השדות כבר נשמרו בשלבי ה-KYC
                 background_tasks.add_task(
                     AdminNotificationService.notify_new_courier_registration,
@@ -837,77 +954,56 @@ async def whatsapp_webhook(
                         user.id,
                         user.full_name or user.name or "לא ידוע",
                         user.phone_number,
-                        photo_file_id
+                        photo_file_id,
                     )
 
             background_tasks.add_task(
-                send_whatsapp_message,
-                reply_to,
-                response.text,
-                response.keyboard
+                send_whatsapp_message, reply_to, response.text, response.keyboard
             )
-            responses.append({
-                "from": sender_id,
-                "response": response.text,
-                "new_state": new_state
-            })
+            responses.append(
+                {"from": sender_id, "response": response.text, "new_state": new_state}
+            )
             continue
 
         # Sender flow
         if "שלוח" in text or "חבילה" in text:
             handler = SenderStateHandler(db)
             response, new_state = await handler.handle_message(
-                user_id=user.id,
-                platform="whatsapp",
-                message=text
+                user_id=user.id, platform="whatsapp", message=text
             )
 
             background_tasks.add_task(
-                send_whatsapp_message,
-                reply_to,
-                response.text,
-                response.keyboard
+                send_whatsapp_message, reply_to, response.text, response.keyboard
             )
-            responses.append({
-                "from": sender_id,
-                "response": response.text,
-                "new_state": new_state
-            })
+            responses.append(
+                {"from": sender_id, "response": response.text, "new_state": new_state}
+            )
             continue
 
         # If user is in the middle of a sender flow, continue it
-        if (current_state
-                and not current_state.startswith("COURIER.")
-                and not current_state.startswith("DISPATCHER.")
-                and not current_state.startswith("STATION.")
-                and current_state not in ["INITIAL", "SENDER.INITIAL"]):
+        if (
+            current_state
+            and not current_state.startswith("COURIER.")
+            and not current_state.startswith("DISPATCHER.")
+            and not current_state.startswith("STATION.")
+            and current_state not in ["INITIAL", "SENDER.INITIAL"]
+        ):
             handler = SenderStateHandler(db)
             response, new_state = await handler.handle_message(
-                user_id=user.id,
-                platform="whatsapp",
-                message=text
+                user_id=user.id, platform="whatsapp", message=text
             )
 
             background_tasks.add_task(
-                send_whatsapp_message,
-                reply_to,
-                response.text,
-                response.keyboard
+                send_whatsapp_message, reply_to, response.text, response.keyboard
             )
-            responses.append({
-                "from": sender_id,
-                "response": response.text,
-                "new_state": new_state
-            })
+            responses.append(
+                {"from": sender_id, "response": response.text, "new_state": new_state}
+            )
             continue
 
         # Default: show welcome message with role selection
         background_tasks.add_task(send_welcome_message, reply_to)
-        responses.append({
-            "from": sender_id,
-            "response": "welcome",
-            "new_state": None
-        })
+        responses.append({"from": sender_id, "response": "welcome", "new_state": None})
 
     return {"processed": len(responses), "responses": responses}
 
@@ -918,9 +1014,7 @@ async def whatsapp_webhook(
     description="אימות webhook (challenge) עבור WhatsApp Business API.",
 )
 async def whatsapp_verify(
-    hub_mode: str = None,
-    hub_challenge: str = None,
-    hub_verify_token: str = None
+    hub_mode: str = None, hub_challenge: str = None, hub_verify_token: str = None
 ):
     """Webhook verification for WhatsApp Business API"""
     if hub_mode == "subscribe" and hub_challenge:
