@@ -139,21 +139,23 @@ async function initializeClient() {
             console.log('Sender:', JSON.stringify(message.sender));
             console.log('NotifyName:', message.notifyName);
 
-            // בדיקה אם זו תגובה לרשימה אינטראקטיבית (list message)
-            // WPPConnect עשוי לשלוח את הבחירה בשדה listResponse
+            // חילוץ טקסט מתגובות אינטראקטיביות (רשימה / כפתורים)
+            // WPPConnect עשוי לשלוח את הבחירה בשדות שונים לפי סוג ההודעה
             let messageText = message.body || '';
             if (message.listResponse) {
                 console.log('ListResponse detected:', JSON.stringify(message.listResponse));
-                // נסה לחלץ את הטקסט מתגובת הרשימה
                 const listReply = message.listResponse.singleSelectReply || message.listResponse;
                 if (listReply && listReply.title) {
                     messageText = listReply.title;
                     console.log('Using listResponse title:', messageText);
                 } else if (listReply && listReply.selectedRowId) {
-                    // אם יש רק rowId, נשתמש בו (הוא יכיל את הטקסט בתיקון החדש)
                     messageText = listReply.selectedRowId;
                     console.log('Using listResponse rowId:', messageText);
                 }
+            } else if (message.selectedButtonId) {
+                // תגובה ללחיצת כפתור (sendButtons) — הטקסט בשדה selectedButtonId
+                messageText = message.selectedButtonId;
+                console.log('Using selectedButtonId:', messageText);
             }
             console.log('Final message text:', messageText);
 
@@ -264,11 +266,13 @@ async function initializeClient() {
                         // שדה legacy לתאימות (בצד ה-API נשתמש ב-sender_id אם קיים)
                         from_number: replyTo,
                         message_id: message.id,
-                        // משתמשים ב-messageText שכבר מכיל את הטקסט הנכון (כולל מ-listResponse)
+                        // משתמשים ב-messageText שכבר מכיל את הטקסט הנכון (כולל מ-listResponse/selectedButtonId)
                         text: messageText,
                         timestamp: message.timestamp,
                         media_url: mediaUrl,
-                        media_type: mediaType
+                        media_type: mediaType,
+                        // סוג MIME מדויק (למשל image/jpeg) — לזיהוי מסמכים שהם בעצם תמונות
+                        mime_type: message.mimetype || null
                     }]
                 };
                 console.log('Payload has media:', !!mediaUrl);

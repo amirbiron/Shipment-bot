@@ -46,18 +46,18 @@ class CourierApprovalService:
             user.role = UserRole.COURIER
 
         if user.role != UserRole.COURIER:
-            return ApprovalResult(False, f"❌ משתמש {user_id} אינו שליח")
+            return ApprovalResult(False, f"❌ משתמש {user_id} אינו נהג")
 
         if user.approval_status == ApprovalStatus.APPROVED:
             return ApprovalResult(
                 False,
-                f"ℹ️ שליח {user_id} ({user.full_name or user.name or 'לא צוין'}) כבר מאושר"
+                f"ℹ️ נהג {user_id} ({user.full_name or user.name or 'לא צוין'}) כבר מאושר"
             )
 
         if user.approval_status == ApprovalStatus.BLOCKED:
             return ApprovalResult(
                 False,
-                f"⛔ שליח {user_id} ({user.full_name or user.name or 'לא צוין'}) חסום במערכת. לא ניתן לאשר משתמש חסום."
+                f"⛔ נהג {user_id} ({user.full_name or user.name or 'לא צוין'}) חסום במערכת. לא ניתן לאשר משתמש חסום."
             )
 
         user.approval_status = ApprovalStatus.APPROVED
@@ -70,7 +70,7 @@ class CourierApprovalService:
 
         return ApprovalResult(
             True,
-            f"✅ שליח {user_id} ({user.full_name or user.name or 'לא צוין'}) אושר בהצלחה!",
+            f"✅ נהג {user_id} ({user.full_name or user.name or 'לא צוין'}) אושר בהצלחה!",
             user
         )
 
@@ -95,18 +95,18 @@ class CourierApprovalService:
             user.role = UserRole.COURIER
 
         if user.role != UserRole.COURIER:
-            return ApprovalResult(False, f"❌ משתמש {user_id} אינו שליח")
+            return ApprovalResult(False, f"❌ משתמש {user_id} אינו נהג")
 
         if user.approval_status == ApprovalStatus.REJECTED:
             return ApprovalResult(
                 False,
-                f"ℹ️ שליח {user_id} ({user.full_name or user.name or 'לא צוין'}) כבר נדחה"
+                f"ℹ️ נהג {user_id} ({user.full_name or user.name or 'לא צוין'}) כבר נדחה"
             )
 
         if user.approval_status == ApprovalStatus.BLOCKED:
             return ApprovalResult(
                 False,
-                f"⛔ שליח {user_id} ({user.full_name or user.name or 'לא צוין'}) חסום במערכת. לא ניתן לשנות סטטוס של משתמש חסום."
+                f"⛔ נהג {user_id} ({user.full_name or user.name or 'לא צוין'}) חסום במערכת. לא ניתן לשנות סטטוס של משתמש חסום."
             )
 
         user.approval_status = ApprovalStatus.REJECTED
@@ -119,7 +119,7 @@ class CourierApprovalService:
 
         return ApprovalResult(
             True,
-            f"❌ שליח {user_id} ({user.full_name or user.name or 'לא צוין'}) נדחה.",
+            f"❌ נהג {user_id} ({user.full_name or user.name or 'לא צוין'}) נדחה.",
             user
         )
 

@@ -170,6 +170,143 @@ async def test_whatsapp_keyboard_fallback_on_failure(monkeypatch):
 
 
 @pytest.mark.unit
+async def test_forward_photo_records_success_on_send_photo(monkeypatch):
+    """sendPhoto שמצליח מדווח הצלחה ל-circuit breaker (לא נשאר תקוע ב-HALF_OPEN)"""
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "test-token")
+
+    mock_response = MagicMock(spec=Response)
+    mock_response.status_code = 200
+
+    mock_instance = AsyncMock()
+    mock_instance.post = AsyncMock(return_value=mock_response)
+    mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+    mock_instance.__aexit__ = AsyncMock(return_value=None)
+
+    # CB מדומה שעוקב אחרי record_success
+    class _TrackingCB:
+        success_count = 0
+
+        async def can_execute(self):
+            return True
+
+        async def record_success(self):
+            _TrackingCB.success_count += 1
+
+        async def record_failure(self, e=None):
+            pass
+
+        async def execute(self, func, *args, **kwargs):
+            return await func(*args, **kwargs)
+
+    tracking_cb = _TrackingCB()
+    monkeypatch.setattr(
+        "app.domain.services.admin_notification_service.get_telegram_circuit_breaker",
+        lambda: tracking_cb,
+    )
+
+    with patch("app.domain.services.admin_notification_service.httpx.AsyncClient") as mock_client:
+        mock_client.return_value = mock_instance
+
+        ok = await AdminNotificationService._forward_photo("chat-1", "file-123")
+
+    assert ok is True
+    assert tracking_cb.success_count == 1
+
+
+@pytest.mark.unit
+async def test_forward_photo_no_double_can_execute(monkeypatch):
+    """can_execute נקרא פעם אחת בלבד (לא צורך slots מיותרים ב-HALF_OPEN)"""
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "test-token")
+
+    # sendPhoto נכשל (400) → fallback ל-sendDocument שמצליח
+    call_count = 0
+
+    async def _mock_post(url, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        resp = MagicMock(spec=Response)
+        if "sendPhoto" in url:
+            resp.status_code = 400
+            resp.text = "Bad Request: wrong file"
+        else:
+            resp.status_code = 200
+        return resp
+
+    mock_instance = AsyncMock()
+    mock_instance.post = _mock_post
+    mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+    mock_instance.__aexit__ = AsyncMock(return_value=None)
+
+    class _CountingCB:
+        can_execute_count = 0
+        success_recorded = False
+
+        async def can_execute(self):
+            _CountingCB.can_execute_count += 1
+            return True
+
+        async def record_success(self):
+            _CountingCB.success_recorded = True
+
+        async def record_failure(self, e=None):
+            pass
+
+        async def execute(self, func, *args, **kwargs):
+            return await func(*args, **kwargs)
+
+    counting_cb = _CountingCB()
+    monkeypatch.setattr(
+        "app.domain.services.admin_notification_service.get_telegram_circuit_breaker",
+        lambda: counting_cb,
+    )
+
+    with patch("app.domain.services.admin_notification_service.httpx.AsyncClient") as mock_client:
+        mock_client.return_value = mock_instance
+
+        ok = await AdminNotificationService._forward_photo("chat-1", "doc-file")
+
+    assert ok is True
+    # can_execute נקרא פעם אחת בלבד (לא דרך cb.execute)
+    assert counting_cb.can_execute_count == 1
+    assert counting_cb.success_recorded is True
+
+
+@pytest.mark.unit
+async def test_forward_photo_fast_fails_when_cb_open(monkeypatch):
+    """כש-CB פתוח (טלגרם למטה) — fast-fail, לא מנסים לשלוח בכלל"""
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "test-token")
+
+    class _OpenCB:
+        async def can_execute(self):
+            return False
+
+        async def record_success(self):
+            pass
+
+        async def record_failure(self, e=None):
+            pass
+
+    monkeypatch.setattr(
+        "app.domain.services.admin_notification_service.get_telegram_circuit_breaker",
+        lambda: _OpenCB(),
+    )
+
+    # לא צריכים mock ל-httpx כי הקוד לא אמור להגיע אליו בכלל
+    with patch("app.domain.services.admin_notification_service.httpx.AsyncClient") as mock_client:
+        mock_instance = AsyncMock()
+        mock_instance.post = AsyncMock()
+        mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+        mock_instance.__aexit__ = AsyncMock(return_value=None)
+        mock_client.return_value = mock_instance
+
+        ok = await AdminNotificationService._forward_photo("chat-1", "file-123")
+
+    assert ok is False
+    # לא נעשתה שום קריאת HTTP
+    mock_instance.post.assert_not_awaited()
+
+
+@pytest.mark.unit
 async def test_send_telegram_message_non_200_returns_false(monkeypatch):
     monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "test-token")
     monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_ID", "admin-chat")

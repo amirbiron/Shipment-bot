@@ -417,7 +417,7 @@ async def telegram_webhook(
         if message.photo:
             # תמונה דחוסה - לוקחים את הגודל הגדול ביותר
             photo_file_id = message.photo[-1].file_id
-        elif message.document and message.document.mime_type and message.document.mime_type.startswith("image/"):
+        elif message.document and message.document.mime_type and message.document.mime_type.lower().startswith("image/"):
             # קובץ תמונה שנשלח כמסמך (לא דחוס) - תומך בשליחה מדסקטופ או "שלח כקובץ"
             photo_file_id = message.document.file_id
 

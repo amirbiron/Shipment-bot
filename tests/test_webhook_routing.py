@@ -16,6 +16,7 @@ from app.api.webhooks.whatsapp import (
     _normalize_whatsapp_identifier,
     _is_whatsapp_admin,
     _match_approval_command,
+    _resolve_admin_send_target,
 )
 
 
@@ -341,3 +342,64 @@ class TestApprovalCommandMatching:
     @pytest.mark.unit
     def test_no_match(self):
         assert _match_approval_command("שלום עולם") is None
+
+    @pytest.mark.unit
+    def test_approve_with_zero_width_chars(self):
+        """טקסט עם תווי Unicode בלתי-נראים (zero-width space, RTL mark) עדיין מזוהה"""
+        # \u200b = zero-width space, \u200f = RTL mark
+        assert _match_approval_command("✅\u200b אשר\u200f 42") == ("approve", 42)
+
+    @pytest.mark.unit
+    def test_approve_with_bidi_marks(self):
+        """סימני כיוון (LTR/RTL embedding) לא שוברים את הזיהוי"""
+        # \u202b = RTL embedding, \u202c = pop directional formatting
+        assert _match_approval_command("\u202bאשר 55\u202c") == ("approve", 55)
+
+
+# ============================================================================
+# פתרון כתובת שליחה למנהל (reply_to vs admin number from settings)
+# ============================================================================
+
+
+class TestResolveAdminSendTarget:
+    """בדיקות שהתגובה למנהל נשלחת למספר מההגדרות (שאנחנו יודעים שעובד)"""
+
+    @pytest.mark.unit
+    def test_resolve_to_settings_number(self, monkeypatch):
+        """כשה-sender_id תואם למספר מנהל בהגדרות — מחזיר את המספר מההגדרות"""
+        from app.core.config import settings
+        monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "0501234567")
+        result = _resolve_admin_send_target("972501234567@lid", "972501234567@lid")
+        assert result == "0501234567"
+
+    @pytest.mark.unit
+    def test_resolve_with_c_us_sender(self, monkeypatch):
+        """sender_id עם @c.us תואם למספר 972 בהגדרות"""
+        from app.core.config import settings
+        monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "972501234567")
+        result = _resolve_admin_send_target("972501234567@c.us", "972501234567@c.us")
+        assert result == "972501234567"
+
+    @pytest.mark.unit
+    def test_fallback_to_reply_to_when_no_match(self, monkeypatch):
+        """כשה-sender_id לא תואם לאף מנהל — מחזיר את reply_to המקורי"""
+        from app.core.config import settings
+        monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "972509999999")
+        result = _resolve_admin_send_target("972501234567@lid", "972501234567@c.us")
+        assert result == "972501234567@c.us"
+
+    @pytest.mark.unit
+    def test_resolve_multiple_admins(self, monkeypatch):
+        """מזהה את המנהל הנכון מתוך רשימה של כמה מנהלים"""
+        from app.core.config import settings
+        monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "0509999999,0501234567,0508888888")
+        result = _resolve_admin_send_target("972501234567@lid", "972501234567@lid")
+        assert result == "0501234567"
+
+    @pytest.mark.unit
+    def test_resolve_empty_sender(self, monkeypatch):
+        """sender_id ריק — מחזיר את reply_to"""
+        from app.core.config import settings
+        monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "0501234567")
+        result = _resolve_admin_send_target("", "fallback@c.us")
+        assert result == "fallback@c.us"
