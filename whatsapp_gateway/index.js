@@ -185,10 +185,8 @@ async function initializeClient() {
             }
             console.log('Final message text:', messageText);
 
-            // ניסיון לחלץ מספר טלפון אמיתי (אם מופיע במידע של השולח)
-            let realPhone = extractIsraeliPhoneFromCandidates(
-                message?.sender?.formattedName
-            );
+            // ניסיון לחלץ מספר טלפון אמיתי ממקורות מהימנים (לא שמות תצוגה)
+            let realPhone = null;
 
             // Get the correct ID to reply to
             let replyTo = message.from;
@@ -203,10 +201,7 @@ async function initializeClient() {
                     console.log('Contact info:', JSON.stringify(contact));
 
                     if (!realPhone) {
-                        realPhone = extractIsraeliPhoneFromCandidates(
-                            contact?.number,
-                            contact?.formattedName
-                        );
+                        realPhone = extractIsraeliPhoneFromCandidates(contact?.number);
                     }
 
                     if (contact && contact.id && contact.id._serialized && !contact.id._serialized.includes('@lid')) {
@@ -227,8 +222,7 @@ async function initializeClient() {
                         console.log('Chat info:', JSON.stringify(chat?.contact || chat?.id));
                         if (!realPhone) {
                             realPhone = extractIsraeliPhoneFromCandidates(
-                                chat?.contact?.number,
-                                chat?.contact?.formattedName
+                                chat?.contact?.number
                             );
                         }
                         if (chat && chat.contact && chat.contact.number) {
