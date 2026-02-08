@@ -91,11 +91,6 @@ class StationService:
         user = result.scalar_one_or_none()
 
         if not user:
-            # ניסיון חיפוש לפי placeholder של טלגרם
-            result = await self.db.execute(
-                select(User).where(User.phone_number.like(f"tg:%"))
-            )
-            # לא מצאנו
             return False, "משתמש לא נמצא עם מספר הטלפון הזה."
 
         # בדיקה שהמשתמש לא כבר סדרן בתחנה הזו
@@ -105,14 +100,19 @@ class StationService:
                 StationDispatcher.user_id == user.id,
             )
         )
-        if existing.scalar_one_or_none():
-            return False, "המשתמש כבר סדרן בתחנה הזו."
+        existing_dispatcher = existing.scalar_one_or_none()
+        if existing_dispatcher:
+            if existing_dispatcher.is_active:
+                return False, "המשתמש כבר סדרן בתחנה הזו."
+            # הפעלה מחדש של סדרן שהוסר בעבר
+            existing_dispatcher.is_active = True
+        else:
+            dispatcher = StationDispatcher(
+                station_id=station_id,
+                user_id=user.id,
+            )
+            self.db.add(dispatcher)
 
-        dispatcher = StationDispatcher(
-            station_id=station_id,
-            user_id=user.id,
-        )
-        self.db.add(dispatcher)
         await self.db.commit()
 
         logger.info(
@@ -162,12 +162,12 @@ class StationService:
         return list(result.scalars().all())
 
     async def get_dispatcher_station(self, user_id: int) -> Optional[Station]:
-        """קבלת התחנה שהסדרן משויך אליה"""
+        """קבלת התחנה שהסדרן משויך אליה (מחזיר את הראשונה אם יש כמה)"""
         result = await self.db.execute(
             select(StationDispatcher).where(
                 StationDispatcher.user_id == user_id,
                 StationDispatcher.is_active == True  # noqa: E712
-            )
+            ).limit(1)
         )
         dispatcher = result.scalar_one_or_none()
         if not dispatcher:
@@ -181,7 +181,7 @@ class StationService:
             select(StationDispatcher).where(
                 StationDispatcher.user_id == user_id,
                 StationDispatcher.is_active == True  # noqa: E712
-            )
+            ).limit(1)
         )
         return result.scalar_one_or_none() is not None
 

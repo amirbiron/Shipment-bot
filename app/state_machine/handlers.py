@@ -983,7 +983,7 @@ class CourierStateHandler:
             select(StationDispatcher).where(
                 StationDispatcher.user_id == user_id,
                 StationDispatcher.is_active == True  # noqa: E712
-            )
+            ).limit(1)
         )
         return result.scalar_one_or_none() is not None
 
