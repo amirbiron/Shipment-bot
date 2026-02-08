@@ -7,6 +7,12 @@ from app.db.models.courier_wallet import CourierWallet
 from app.db.models.wallet_ledger import WalletLedger
 from app.db.models.outbox_message import OutboxMessage
 from app.db.models.user import User
+from app.db.models.station import Station
+from app.db.models.station_dispatcher import StationDispatcher
+from app.db.models.station_wallet import StationWallet
+from app.db.models.station_ledger import StationLedger
+from app.db.models.manual_charge import ManualCharge
+from app.db.models.station_blacklist import StationBlacklist
 
 __all__ = [
     "Delivery",
@@ -14,5 +20,11 @@ __all__ = [
     "CourierWallet",
     "WalletLedger",
     "OutboxMessage",
-    "User"
+    "User",
+    "Station",
+    "StationDispatcher",
+    "StationWallet",
+    "StationLedger",
+    "ManualCharge",
+    "StationBlacklist",
 ]

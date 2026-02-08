@@ -1,5 +1,5 @@
 """
-State Definitions for Sender and Courier Flows
+State Definitions for Sender, Courier, Dispatcher and Station Owner Flows
 """
 from enum import Enum
 
@@ -173,4 +173,160 @@ COURIER_TRANSITIONS = {
     CourierState.CHANGE_AREA: [CourierState.MENU],
     CourierState.VIEW_HISTORY: [CourierState.MENU],
     CourierState.SUPPORT: [CourierState.MENU],
+}
+
+
+# ============================================================================
+# שלב 3 - תפריט סדרן היברידי (Dispatcher) [3.2]
+# ============================================================================
+
+
+class DispatcherState(str, Enum):
+    """
+    מצבי שיחה לסדרן (תפריט היברידי).
+
+    סדרן הוא נהג מאושר עם הרשאות ניהול ברמת תחנה.
+    הוא רואה את כל תפריט הנהג + תפריט סדרן ייעודי.
+    """
+
+    # תפריט סדרן ראשי
+    MENU = "DISPATCHER.MENU"
+
+    # הוספת משלוח - טופס הזנת פרטים
+    ADD_SHIPMENT_PICKUP_CITY = "DISPATCHER.ADD_SHIPMENT.PICKUP_CITY"
+    ADD_SHIPMENT_PICKUP_STREET = "DISPATCHER.ADD_SHIPMENT.PICKUP_STREET"
+    ADD_SHIPMENT_PICKUP_NUMBER = "DISPATCHER.ADD_SHIPMENT.PICKUP_NUMBER"
+    ADD_SHIPMENT_DROPOFF_CITY = "DISPATCHER.ADD_SHIPMENT.DROPOFF_CITY"
+    ADD_SHIPMENT_DROPOFF_STREET = "DISPATCHER.ADD_SHIPMENT.DROPOFF_STREET"
+    ADD_SHIPMENT_DROPOFF_NUMBER = "DISPATCHER.ADD_SHIPMENT.DROPOFF_NUMBER"
+    ADD_SHIPMENT_DESCRIPTION = "DISPATCHER.ADD_SHIPMENT.DESCRIPTION"
+    ADD_SHIPMENT_FEE = "DISPATCHER.ADD_SHIPMENT.FEE"
+    ADD_SHIPMENT_CONFIRM = "DISPATCHER.ADD_SHIPMENT.CONFIRM"
+
+    # צפייה במשלוחים פעילים של התחנה
+    VIEW_ACTIVE_SHIPMENTS = "DISPATCHER.VIEW_ACTIVE_SHIPMENTS"
+
+    # היסטוריית משלוחים של התחנה
+    VIEW_SHIPMENT_HISTORY = "DISPATCHER.VIEW_SHIPMENT_HISTORY"
+
+    # הוספת חיוב ידני
+    MANUAL_CHARGE_DRIVER_NAME = "DISPATCHER.MANUAL_CHARGE.DRIVER_NAME"
+    MANUAL_CHARGE_AMOUNT = "DISPATCHER.MANUAL_CHARGE.AMOUNT"
+    MANUAL_CHARGE_DESCRIPTION = "DISPATCHER.MANUAL_CHARGE.DESCRIPTION"
+    MANUAL_CHARGE_CONFIRM = "DISPATCHER.MANUAL_CHARGE.CONFIRM"
+
+
+DISPATCHER_TRANSITIONS = {
+    # תפריט סדרן ראשי
+    DispatcherState.MENU: [
+        DispatcherState.ADD_SHIPMENT_PICKUP_CITY,
+        DispatcherState.VIEW_ACTIVE_SHIPMENTS,
+        DispatcherState.VIEW_SHIPMENT_HISTORY,
+        DispatcherState.MANUAL_CHARGE_DRIVER_NAME,
+    ],
+
+    # זרימת הוספת משלוח
+    DispatcherState.ADD_SHIPMENT_PICKUP_CITY: [DispatcherState.ADD_SHIPMENT_PICKUP_STREET],
+    DispatcherState.ADD_SHIPMENT_PICKUP_STREET: [DispatcherState.ADD_SHIPMENT_PICKUP_NUMBER],
+    DispatcherState.ADD_SHIPMENT_PICKUP_NUMBER: [DispatcherState.ADD_SHIPMENT_DROPOFF_CITY],
+    DispatcherState.ADD_SHIPMENT_DROPOFF_CITY: [DispatcherState.ADD_SHIPMENT_DROPOFF_STREET],
+    DispatcherState.ADD_SHIPMENT_DROPOFF_STREET: [DispatcherState.ADD_SHIPMENT_DROPOFF_NUMBER],
+    DispatcherState.ADD_SHIPMENT_DROPOFF_NUMBER: [DispatcherState.ADD_SHIPMENT_DESCRIPTION],
+    DispatcherState.ADD_SHIPMENT_DESCRIPTION: [DispatcherState.ADD_SHIPMENT_FEE],
+    DispatcherState.ADD_SHIPMENT_FEE: [DispatcherState.ADD_SHIPMENT_CONFIRM],
+    DispatcherState.ADD_SHIPMENT_CONFIRM: [DispatcherState.MENU],
+
+    # צפייה במשלוחים
+    DispatcherState.VIEW_ACTIVE_SHIPMENTS: [DispatcherState.MENU],
+    DispatcherState.VIEW_SHIPMENT_HISTORY: [DispatcherState.MENU],
+
+    # זרימת חיוב ידני
+    DispatcherState.MANUAL_CHARGE_DRIVER_NAME: [DispatcherState.MANUAL_CHARGE_AMOUNT],
+    DispatcherState.MANUAL_CHARGE_AMOUNT: [DispatcherState.MANUAL_CHARGE_DESCRIPTION],
+    DispatcherState.MANUAL_CHARGE_DESCRIPTION: [DispatcherState.MANUAL_CHARGE_CONFIRM],
+    DispatcherState.MANUAL_CHARGE_CONFIRM: [DispatcherState.MENU],
+}
+
+
+# ============================================================================
+# שלב 3 - פאנל ניהול תחנה (Station Owner) [3.3]
+# ============================================================================
+
+
+class StationOwnerState(str, Enum):
+    """
+    מצבי שיחה לבעל תחנה.
+
+    בעל תחנה מנהל סדרנים, ארנק תחנה, דוחות גבייה ורשימה שחורה.
+    """
+
+    # תפריט ראשי
+    MENU = "STATION.MENU"
+
+    # ניהול סדרנים
+    MANAGE_DISPATCHERS = "STATION.MANAGE_DISPATCHERS"
+    ADD_DISPATCHER_PHONE = "STATION.ADD_DISPATCHER.PHONE"
+    REMOVE_DISPATCHER_SELECT = "STATION.REMOVE_DISPATCHER.SELECT"
+
+    # ארנק תחנה
+    VIEW_WALLET = "STATION.VIEW_WALLET"
+
+    # דוח גבייה
+    COLLECTION_REPORT = "STATION.COLLECTION_REPORT"
+
+    # רשימה שחורה
+    VIEW_BLACKLIST = "STATION.VIEW_BLACKLIST"
+    ADD_BLACKLIST_PHONE = "STATION.ADD_BLACKLIST.PHONE"
+    ADD_BLACKLIST_REASON = "STATION.ADD_BLACKLIST.REASON"
+    REMOVE_BLACKLIST_SELECT = "STATION.REMOVE_BLACKLIST.SELECT"
+
+
+STATION_OWNER_TRANSITIONS = {
+    # תפריט ראשי
+    StationOwnerState.MENU: [
+        StationOwnerState.MANAGE_DISPATCHERS,
+        StationOwnerState.VIEW_WALLET,
+        StationOwnerState.COLLECTION_REPORT,
+        StationOwnerState.VIEW_BLACKLIST,
+    ],
+
+    # ניהול סדרנים
+    StationOwnerState.MANAGE_DISPATCHERS: [
+        StationOwnerState.ADD_DISPATCHER_PHONE,
+        StationOwnerState.REMOVE_DISPATCHER_SELECT,
+        StationOwnerState.MENU,
+    ],
+    StationOwnerState.ADD_DISPATCHER_PHONE: [
+        StationOwnerState.MANAGE_DISPATCHERS,
+        StationOwnerState.MENU,
+    ],
+    StationOwnerState.REMOVE_DISPATCHER_SELECT: [
+        StationOwnerState.MANAGE_DISPATCHERS,
+        StationOwnerState.MENU,
+    ],
+
+    # ארנק תחנה
+    StationOwnerState.VIEW_WALLET: [StationOwnerState.MENU],
+
+    # דוח גבייה
+    StationOwnerState.COLLECTION_REPORT: [StationOwnerState.MENU],
+
+    # רשימה שחורה
+    StationOwnerState.VIEW_BLACKLIST: [
+        StationOwnerState.ADD_BLACKLIST_PHONE,
+        StationOwnerState.REMOVE_BLACKLIST_SELECT,
+        StationOwnerState.MENU,
+    ],
+    StationOwnerState.ADD_BLACKLIST_PHONE: [
+        StationOwnerState.ADD_BLACKLIST_REASON,
+        StationOwnerState.MENU,
+    ],
+    StationOwnerState.ADD_BLACKLIST_REASON: [
+        StationOwnerState.VIEW_BLACKLIST,
+        StationOwnerState.MENU,
+    ],
+    StationOwnerState.REMOVE_BLACKLIST_SELECT: [
+        StationOwnerState.VIEW_BLACKLIST,
+        StationOwnerState.MENU,
+    ],
 }

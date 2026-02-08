@@ -9,8 +9,12 @@ from app.db.models.conversation_session import ConversationSession
 from app.state_machine.states import (
     SenderState,
     CourierState,
+    DispatcherState,
+    StationOwnerState,
     SENDER_TRANSITIONS,
-    COURIER_TRANSITIONS
+    COURIER_TRANSITIONS,
+    DISPATCHER_TRANSITIONS,
+    STATION_OWNER_TRANSITIONS,
 )
 from app.core.logging import get_logger
 
@@ -134,22 +138,21 @@ class StateManager:
 
     def _is_valid_transition(self, current: str, target: str) -> bool:
         """Check if transition from current to target state is valid"""
-        # Check sender transitions
-        try:
-            current_sender = SenderState(current)
-            target_sender = SenderState(target)
-            if current_sender in SENDER_TRANSITIONS:
-                return target_sender in SENDER_TRANSITIONS[current_sender]
-        except ValueError:
-            pass
+        # רשימת כל סוגי ה-states והמעברים שלהם
+        state_maps = [
+            (SenderState, SENDER_TRANSITIONS),
+            (CourierState, COURIER_TRANSITIONS),
+            (DispatcherState, DISPATCHER_TRANSITIONS),
+            (StationOwnerState, STATION_OWNER_TRANSITIONS),
+        ]
 
-        # Check courier transitions
-        try:
-            current_courier = CourierState(current)
-            target_courier = CourierState(target)
-            if current_courier in COURIER_TRANSITIONS:
-                return target_courier in COURIER_TRANSITIONS[current_courier]
-        except ValueError:
-            pass
+        for state_enum, transitions in state_maps:
+            try:
+                current_state = state_enum(current)
+                target_state = state_enum(target)
+                if current_state in transitions:
+                    return target_state in transitions[current_state]
+            except ValueError:
+                continue
 
         return False

@@ -59,6 +59,9 @@ class Settings(BaseSettings):
     DEFAULT_CREDIT_LIMIT: float = -500.0  # Minimum balance allowed (500₪ credit)
     DELIVERY_FEE: float = 10.0  # Fee per delivery
 
+    # Station settings [שלב 3]
+    STATION_COMMISSION_RATE: float = 0.10  # 10% עמלה לתחנה מכל משלוח
+
     # Outbox retry/backoff
     # Base delay is multiplied by 2**retry_count (capped by OUTBOX_MAX_BACKOFF_SECONDS)
     OUTBOX_RETRY_BASE_SECONDS: int = 30

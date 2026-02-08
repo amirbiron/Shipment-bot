@@ -12,7 +12,9 @@ from sqlalchemy import select
 from app.db.database import get_db
 from app.db.models.user import User, UserRole, ApprovalStatus
 from app.state_machine.handlers import SenderStateHandler, CourierStateHandler
-from app.state_machine.states import CourierState
+from app.state_machine.states import CourierState, DispatcherState, StationOwnerState
+from app.state_machine.dispatcher_handler import DispatcherStateHandler
+from app.state_machine.station_owner_handler import StationOwnerStateHandler
 from app.state_machine.manager import StateManager
 from app.domain.services import AdminNotificationService
 from app.domain.services.courier_approval_service import CourierApprovalService
@@ -551,6 +553,111 @@ async def telegram_webhook(
             background_tasks.add_task(send_welcome_message, chat_id)
             return {"ok": True}
 
+    # ==================== ניתוב לפי תפקיד [שלב 3] ====================
+
+    # בדיקת מצב נוכחי - אם המשתמש באמצע זרימת סדרן או בעל תחנה
+    current_state = await state_manager.get_current_state(user.id, "telegram")
+
+    # ניתוב לבעל תחנה [שלב 3.3]
+    if user.role == UserRole.STATION_OWNER:
+        from app.domain.services.station_service import StationService
+        station_service = StationService(db)
+        station = await station_service.get_station_by_owner(user.id)
+
+        if station:
+            handler = StationOwnerStateHandler(db, station.id)
+            response, new_state = await handler.handle_message(user, text, photo_file_id)
+
+            background_tasks.add_task(
+                send_telegram_message,
+                chat_id,
+                response.text,
+                response.keyboard,
+                getattr(response, 'inline', False)
+            )
+            return {"ok": True, "new_state": new_state}
+
+    # ניתוב לתפריט סדרן (כפתור "תפריט סדרן" בתפריט נהג) [שלב 3.2]
+    if ("תפריט סדרן" in text or "🏪 תפריט סדרן" in text) and user.role == UserRole.COURIER:
+        from app.domain.services.station_service import StationService
+        station_service = StationService(db)
+        station = await station_service.get_dispatcher_station(user.id)
+
+        if station:
+            await state_manager.force_state(
+                user.id, "telegram",
+                DispatcherState.MENU.value,
+                context={}
+            )
+            handler = DispatcherStateHandler(db, station.id)
+            response, new_state = await handler.handle_message(user, "תפריט", None)
+
+            background_tasks.add_task(
+                send_telegram_message,
+                chat_id,
+                response.text,
+                response.keyboard,
+                getattr(response, 'inline', False)
+            )
+            return {"ok": True, "new_state": new_state}
+
+    # אם המשתמש באמצע זרימת סדרן - ממשיכים עם DispatcherStateHandler
+    if current_state and current_state.startswith("DISPATCHER."):
+        from app.domain.services.station_service import StationService
+        station_service = StationService(db)
+        station = await station_service.get_dispatcher_station(user.id)
+
+        if station:
+            # כפתור "חזרה לתפריט נהג" מחזיר לתפריט הנהג הרגיל
+            if "חזרה לתפריט נהג" in text or "חזרה לתפריט" in text:
+                await state_manager.force_state(
+                    user.id, "telegram",
+                    CourierState.MENU.value,
+                    context={}
+                )
+                handler = CourierStateHandler(db)
+                response, new_state = await handler.handle_message(user, "תפריט", None)
+
+                background_tasks.add_task(
+                    send_telegram_message,
+                    chat_id,
+                    response.text,
+                    response.keyboard,
+                    getattr(response, 'inline', False)
+                )
+                return {"ok": True, "new_state": new_state}
+
+            handler = DispatcherStateHandler(db, station.id)
+            response, new_state = await handler.handle_message(user, text, photo_file_id)
+
+            background_tasks.add_task(
+                send_telegram_message,
+                chat_id,
+                response.text,
+                response.keyboard,
+                getattr(response, 'inline', False)
+            )
+            return {"ok": True, "new_state": new_state}
+
+    # אם המשתמש באמצע זרימת בעל תחנה - ממשיכים
+    if current_state and current_state.startswith("STATION."):
+        from app.domain.services.station_service import StationService
+        station_service = StationService(db)
+        station = await station_service.get_station_by_owner(user.id)
+
+        if station:
+            handler = StationOwnerStateHandler(db, station.id)
+            response, new_state = await handler.handle_message(user, text, photo_file_id)
+
+            background_tasks.add_task(
+                send_telegram_message,
+                chat_id,
+                response.text,
+                response.keyboard,
+                getattr(response, 'inline', False)
+            )
+            return {"ok": True, "new_state": new_state}
+
     # Route based on user role
     if user.role == UserRole.COURIER:
         # שמירת המצב הקודם לפני הטיפול בהודעה
@@ -617,11 +724,13 @@ async def telegram_webhook(
         )
         return {"ok": True, "new_state": new_state}
 
-    # Check current state for senders
-    current_state = await state_manager.get_current_state(user.id, "telegram")
-
     # If user is in the middle of a sender flow, continue it
-    if current_state and not current_state.startswith("COURIER.") and current_state not in ["INITIAL", "SENDER.INITIAL"]:
+    # (current_state כבר חושב למעלה)
+    if (current_state
+        and not current_state.startswith("COURIER.")
+        and not current_state.startswith("DISPATCHER.")
+        and not current_state.startswith("STATION.")
+        and current_state not in ["INITIAL", "SENDER.INITIAL"]):
         handler = SenderStateHandler(db)
         response, new_state = await handler.handle_message(
             user_id=user.id,

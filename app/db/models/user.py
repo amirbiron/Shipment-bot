@@ -12,6 +12,7 @@ class UserRole(str, enum.Enum):
     SENDER = "sender"
     COURIER = "courier"
     ADMIN = "admin"
+    STATION_OWNER = "station_owner"
 
 
 class ApprovalStatus(str, enum.Enum):
