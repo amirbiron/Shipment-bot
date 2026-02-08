@@ -289,13 +289,14 @@ async def telegram_webhook(
 
         # טיפול בכפתורי אישור/דחיית שליח (מנהלים בלבד)
         courier_action = re.match(r'^(approve|reject)_courier_(\d+)$', callback.data or "")
-        if courier_action and chat_id:
-            # בדיקה שהשולח הוא מנהל מוכר
+        if courier_action:
+            # זיהוי מנהל לפי from_user.id (מי שלחץ) ולא לפי chat.id (איפה ההודעה)
+            clicker_id = str(callback.from_user.id) if callback.from_user else None
             admin_ids = {cid.strip() for cid in settings.TELEGRAM_ADMIN_CHAT_IDS.split(",") if cid.strip()}
             if settings.TELEGRAM_ADMIN_CHAT_ID:
                 admin_ids.add(settings.TELEGRAM_ADMIN_CHAT_ID)
 
-            if chat_id in admin_ids:
+            if clicker_id and clicker_id in admin_ids:
                 action = courier_action.group(1)
                 courier_id = int(courier_action.group(2))
                 admin_name = name or "מנהל"
@@ -306,7 +307,7 @@ async def telegram_webhook(
                 else:
                     result = await CourierApprovalService.reject(db, courier_id)
 
-                # שליחת תוצאה למנהל
+                # שליחת תוצאה למנהל (בצ'אט שבו לחץ)
                 background_tasks.add_task(send_telegram_message, chat_id, result.message)
 
                 # אם הפעולה הצליחה - הודעה לשליח וסיכום לקבוצה
@@ -320,6 +321,13 @@ async def telegram_webhook(
                     )
 
                 return {"ok": True, "admin_action": action, "courier_id": courier_id}
+
+            # משתמש שאינו מנהל לחץ על כפתור אישור - מתעלמים
+            logger.warning(
+                "Non-admin clicked approval button",
+                extra_data={"clicker_id": clicker_id, "chat_id": chat_id}
+            )
+            return {"ok": True}
 
     elif update.message:
         message = update.message
