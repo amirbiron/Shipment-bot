@@ -238,8 +238,8 @@ class StationService:
         )
         self.db.add(charge)
 
-        # עדכון ארנק התחנה - הוספת עמלה
-        wallet = await self._get_or_create_station_wallet(station_id)
+        # עדכון ארנק התחנה - נעילת שורה למניעת race condition
+        wallet = await self._get_or_create_station_wallet(station_id, for_update=True)
         wallet.balance += amount
         wallet.updated_at = datetime.utcnow()
 
@@ -269,14 +269,16 @@ class StationService:
     # ==================== ארנק תחנה [3.3] ====================
 
     async def _get_or_create_station_wallet(
-        self, station_id: int
+        self, station_id: int, for_update: bool = False
     ) -> StationWallet:
         """קבלה או יצירה של ארנק תחנה"""
-        result = await self.db.execute(
-            select(StationWallet).where(
-                StationWallet.station_id == station_id
-            )
+        query = select(StationWallet).where(
+            StationWallet.station_id == station_id
         )
+        if for_update:
+            query = query.with_for_update()
+
+        result = await self.db.execute(query)
         wallet = result.scalar_one_or_none()
 
         if not wallet:
@@ -299,7 +301,7 @@ class StationService:
         fee: float
     ) -> None:
         """זיכוי עמלת תחנה (10% מהמשלוח)"""
-        wallet = await self._get_or_create_station_wallet(station_id)
+        wallet = await self._get_or_create_station_wallet(station_id, for_update=True)
         commission = fee * wallet.commission_rate
         wallet.balance += commission
         wallet.updated_at = datetime.utcnow()

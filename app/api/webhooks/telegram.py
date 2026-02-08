@@ -429,6 +429,30 @@ async def telegram_webhook(
             await state_manager.force_state(user.id, "telegram", CourierState.MENU.value, context={})
             handler = CourierStateHandler(db)
             response, new_state = await handler.handle_message(user, "תפריט", None)
+        elif user.role == UserRole.STATION_OWNER:
+            # בעל תחנה - חזרה לפאנל בעל תחנה
+            from app.domain.services.station_service import StationService
+            station_service = StationService(db)
+            station = await station_service.get_station_by_owner(user.id)
+
+            if station:
+                await state_manager.force_state(
+                    user.id, "telegram",
+                    StationOwnerState.MENU.value,
+                    context={}
+                )
+                handler = StationOwnerStateHandler(db, station.id)
+                response, new_state = await handler.handle_message(user, "תפריט", None)
+            else:
+                # בעל תחנה ללא תחנה פעילה - ניתוב לשולח
+                from app.state_machine.states import SenderState
+                await state_manager.force_state(user.id, "telegram", SenderState.MENU.value, context={})
+                handler = SenderStateHandler(db)
+                response, new_state = await handler.handle_message(
+                    user_id=user.id,
+                    platform="telegram",
+                    message="תפריט"
+                )
         else:
             from app.state_machine.states import SenderState
             await state_manager.force_state(user.id, "telegram", SenderState.MENU.value, context={})
