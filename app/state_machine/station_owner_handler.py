@@ -84,22 +84,8 @@ class StationOwnerStateHandler:
 
     # ==================== תפריט ראשי ====================
 
-    async def _handle_menu(self, user: User, message: str, context: dict):
-        """תפריט ראשי של בעל תחנה"""
-        msg = message.strip()
-
-        if "סדרנים" in msg or "ניהול" in msg:
-            return await self._handle_manage_dispatchers(user, msg, context)
-
-        if "ארנק" in msg or "כספים" in msg:
-            return await self._handle_view_wallet(user, msg, context)
-
-        if "גבייה" in msg or "דוח" in msg:
-            return await self._handle_collection_report(user, msg, context)
-
-        if "רשימה שחורה" in msg or "חסימה" in msg or "שחורה" in msg:
-            return await self._handle_view_blacklist(user, msg, context)
-
+    async def _show_menu(self, user: User, context: dict):
+        """הצגת תפריט ראשי ללא ניתוב לפי תוכן הודעה"""
         station = await self.station_service.get_station(self.station_id)
         station_name = station.name if station else "תחנה"
 
@@ -117,32 +103,33 @@ class StationOwnerStateHandler:
         )
         return response, StationOwnerState.MENU.value, {}
 
+    async def _handle_menu(self, user: User, message: str, context: dict):
+        """תפריט ראשי של בעל תחנה"""
+        msg = message.strip()
+
+        if "סדרנים" in msg or "ניהול" in msg:
+            return await self._show_manage_dispatchers(user, context)
+
+        if "ארנק" in msg or "כספים" in msg:
+            return await self._show_wallet(user, context)
+
+        if "גבייה" in msg or "דוח" in msg:
+            return await self._show_collection_report(user, context)
+
+        if "רשימה שחורה" in msg or "חסימה" in msg or "שחורה" in msg:
+            return await self._show_blacklist(user, context)
+
+        return await self._show_menu(user, context)
+
     # ==================== ניהול סדרנים ====================
 
-    async def _handle_manage_dispatchers(
-        self, user: User, message: str, context: dict
-    ):
-        """תפריט ניהול סדרנים"""
-        if "חזרה" in message or "תפריט" in message:
-            return await self._handle_menu(user, "תפריט", context)
-
-        if "הוספה" in message or "הוסף" in message:
-            response = MessageResponse(
-                "👥 <b>הוספת סדרן</b>\n\n"
-                "הזן את מספר הטלפון של הסדרן:"
-            )
-            return response, StationOwnerState.ADD_DISPATCHER_PHONE.value, {}
-
-        if "הסרה" in message or "הסר" in message:
-            return await self._show_dispatcher_list_for_removal(user, context)
-
-        # הצגת רשימת סדרנים
+    async def _show_manage_dispatchers(self, user: User, context: dict):
+        """הצגת מסך ניהול סדרנים ללא ניתוב לפי תוכן הודעה"""
         dispatchers = await self.station_service.get_dispatchers(self.station_id)
 
         text = "👥 <b>ניהול סדרנים</b>\n\n"
         if dispatchers:
             for i, d in enumerate(dispatchers, 1):
-                # טעינת פרטי המשתמש
                 result = await self.db.execute(
                     select(User).where(User.id == d.user_id)
                 )
@@ -163,12 +150,31 @@ class StationOwnerStateHandler:
         )
         return response, StationOwnerState.MANAGE_DISPATCHERS.value, {}
 
+    async def _handle_manage_dispatchers(
+        self, user: User, message: str, context: dict
+    ):
+        """תפריט ניהול סדרנים"""
+        if "חזרה" in message:
+            return await self._show_menu(user, context)
+
+        if "הוספה" in message or "הוסף" in message:
+            response = MessageResponse(
+                "👥 <b>הוספת סדרן</b>\n\n"
+                "הזן את מספר הטלפון של הסדרן:"
+            )
+            return response, StationOwnerState.ADD_DISPATCHER_PHONE.value, {}
+
+        if "הסרה" in message or "הסר" in message:
+            return await self._show_dispatcher_list_for_removal(user, context)
+
+        return await self._show_manage_dispatchers(user, context)
+
     async def _handle_add_dispatcher(
         self, user: User, message: str, context: dict
     ):
         """הוספת סדרן לפי מספר טלפון"""
-        if "חזרה" in message or "תפריט" in message:
-            return await self._handle_manage_dispatchers(user, "תפריט", context)
+        if "חזרה" in message:
+            return await self._show_manage_dispatchers(user, context)
 
         phone = message.strip()
         success, msg = await self.station_service.add_dispatcher(
@@ -222,8 +228,8 @@ class StationOwnerStateHandler:
         self, user: User, message: str, context: dict
     ):
         """הסרת סדרן לפי בחירה מרשימה"""
-        if "חזרה" in message or "תפריט" in message:
-            return await self._handle_manage_dispatchers(user, "תפריט", context)
+        if "חזרה" in message:
+            return await self._show_manage_dispatchers(user, context)
 
         import re
         numbers = re.findall(r'\d+', message)
@@ -251,11 +257,8 @@ class StationOwnerStateHandler:
 
     # ==================== ארנק תחנה ====================
 
-    async def _handle_view_wallet(self, user: User, message: str, context: dict):
-        """צפייה בארנק התחנה - 10% עמלה מכל משלוח"""
-        if "חזרה" in message or "תפריט" in message:
-            return await self._handle_menu(user, "תפריט", context)
-
+    async def _show_wallet(self, user: User, context: dict):
+        """הצגת ארנק תחנה ללא ניתוב לפי תוכן הודעה"""
         wallet = await self.station_service.get_station_wallet(self.station_id)
         ledger = await self.station_service.get_station_ledger(self.station_id)
 
@@ -279,15 +282,17 @@ class StationOwnerStateHandler:
         )
         return response, StationOwnerState.VIEW_WALLET.value, {}
 
+    async def _handle_view_wallet(self, user: User, message: str, context: dict):
+        """צפייה בארנק התחנה - 10% עמלה מכל משלוח"""
+        if "חזרה" in message:
+            return await self._show_menu(user, context)
+
+        return await self._show_wallet(user, context)
+
     # ==================== דוח גבייה ====================
 
-    async def _handle_collection_report(
-        self, user: User, message: str, context: dict
-    ):
-        """דוח גבייה - ה-28 לכל חודש"""
-        if "חזרה" in message or "תפריט" in message:
-            return await self._handle_menu(user, "תפריט", context)
-
+    async def _show_collection_report(self, user: User, context: dict):
+        """הצגת דוח גבייה ללא ניתוב לפי תוכן הודעה"""
         report = await self.station_service.get_collection_report(self.station_id)
 
         text = "📊 <b>דוח גבייה</b>\n\n"
@@ -311,25 +316,19 @@ class StationOwnerStateHandler:
         )
         return response, StationOwnerState.COLLECTION_REPORT.value, {}
 
-    # ==================== רשימה שחורה ====================
-
-    async def _handle_view_blacklist(
+    async def _handle_collection_report(
         self, user: User, message: str, context: dict
     ):
-        """צפייה ברשימה השחורה"""
-        if "חזרה" in message or "תפריט" in message:
-            return await self._handle_menu(user, "תפריט", context)
+        """דוח גבייה - ה-28 לכל חודש"""
+        if "חזרה" in message:
+            return await self._show_menu(user, context)
 
-        if "הוספה" in message or "חסום" in message or "הוסף" in message:
-            response = MessageResponse(
-                "🚫 <b>הוספה לרשימה שחורה</b>\n\n"
-                "הזן את מספר הטלפון של הנהג:"
-            )
-            return response, StationOwnerState.ADD_BLACKLIST_PHONE.value, {}
+        return await self._show_collection_report(user, context)
 
-        if "הסרה" in message or "הסר" in message or "שחרר" in message:
-            return await self._show_blacklist_for_removal(user, context)
+    # ==================== רשימה שחורה ====================
 
+    async def _show_blacklist(self, user: User, context: dict):
+        """הצגת רשימה שחורה ללא ניתוב לפי תוכן הודעה"""
         blacklist = await self.station_service.get_blacklist(self.station_id)
 
         text = "🚫 <b>רשימה שחורה</b>\n\n"
@@ -356,12 +355,31 @@ class StationOwnerStateHandler:
         )
         return response, StationOwnerState.VIEW_BLACKLIST.value, {}
 
+    async def _handle_view_blacklist(
+        self, user: User, message: str, context: dict
+    ):
+        """צפייה ברשימה השחורה"""
+        if "חזרה" in message:
+            return await self._show_menu(user, context)
+
+        if "הוספה" in message or "חסום" in message or "הוסף" in message:
+            response = MessageResponse(
+                "🚫 <b>הוספה לרשימה שחורה</b>\n\n"
+                "הזן את מספר הטלפון של הנהג:"
+            )
+            return response, StationOwnerState.ADD_BLACKLIST_PHONE.value, {}
+
+        if "הסרה" in message or "הסר" in message or "שחרר" in message:
+            return await self._show_blacklist_for_removal(user, context)
+
+        return await self._show_blacklist(user, context)
+
     async def _handle_add_blacklist_phone(
         self, user: User, message: str, context: dict
     ):
         """הוספת נהג לרשימה שחורה - שלב מספר טלפון"""
-        if "חזרה" in message or "תפריט" in message:
-            return await self._handle_view_blacklist(user, "תפריט", context)
+        if "חזרה" in message:
+            return await self._show_blacklist(user, context)
 
         phone = message.strip()
         if not PhoneNumberValidator.validate(phone):
@@ -382,8 +400,8 @@ class StationOwnerStateHandler:
         self, user: User, message: str, context: dict
     ):
         """הוספת נהג לרשימה שחורה - שלב סיבה"""
-        if "חזרה" in message or "תפריט" in message:
-            return await self._handle_view_blacklist(user, "תפריט", context)
+        if "חזרה" in message:
+            return await self._show_blacklist(user, context)
 
         reason = message.strip()
         phone = context.get("blacklist_phone", "")
@@ -439,8 +457,8 @@ class StationOwnerStateHandler:
         self, user: User, message: str, context: dict
     ):
         """הסרת נהג מרשימה שחורה"""
-        if "חזרה" in message or "תפריט" in message:
-            return await self._handle_view_blacklist(user, "תפריט", context)
+        if "חזרה" in message:
+            return await self._show_blacklist(user, context)
 
         import re
         numbers = re.findall(r'\d+', message)

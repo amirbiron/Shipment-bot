@@ -96,32 +96,8 @@ class DispatcherStateHandler:
 
     # ==================== תפריט סדרן ====================
 
-    async def _handle_menu(self, user: User, message: str, context: dict):
-        """תפריט סדרן ראשי"""
-        msg = message.strip()
-
-        if "הוספת משלוח" in msg or "משלוח חדש" in msg or "➕" in msg:
-            response = MessageResponse(
-                "📦 <b>הוספת משלוח חדש</b>\n\n"
-                "📍 <b>כתובת איסוף</b>\n"
-                "מה העיר?"
-            )
-            return response, DispatcherState.ADD_SHIPMENT_PICKUP_CITY.value, {}
-
-        if "משלוחים פעילים" in msg or "פעילים" in msg:
-            return await self._handle_view_active(user, msg, context)
-
-        if "היסטוריה" in msg or "היסטוריית" in msg:
-            return await self._handle_view_history(user, msg, context)
-
-        if "חיוב ידני" in msg or "חיוב" in msg:
-            response = MessageResponse(
-                "💳 <b>הוספת חיוב ידני</b>\n\n"
-                "הזן את שם הנהג:"
-            )
-            return response, DispatcherState.MANUAL_CHARGE_DRIVER_NAME.value, {}
-
-        # תצוגת תפריט ברירת מחדל
+    async def _show_menu(self, user: User, context: dict):
+        """הצגת תפריט סדרן ללא ניתוב לפי תוכן הודעה"""
         station = await self.station_service.get_station(self.station_id)
         station_name = station.name if station else "תחנה"
 
@@ -135,6 +111,33 @@ class DispatcherStateHandler:
             ]
         )
         return response, DispatcherState.MENU.value, {}
+
+    async def _handle_menu(self, user: User, message: str, context: dict):
+        """תפריט סדרן ראשי"""
+        msg = message.strip()
+
+        if "הוספת משלוח" in msg or "משלוח חדש" in msg or "➕" in msg:
+            response = MessageResponse(
+                "📦 <b>הוספת משלוח חדש</b>\n\n"
+                "📍 <b>כתובת איסוף</b>\n"
+                "מה העיר?"
+            )
+            return response, DispatcherState.ADD_SHIPMENT_PICKUP_CITY.value, {}
+
+        if "משלוחים פעילים" in msg or "פעילים" in msg:
+            return await self._show_active(user, context)
+
+        if "היסטוריה" in msg or "היסטוריית" in msg:
+            return await self._show_history(user, context)
+
+        if "חיוב ידני" in msg or "חיוב" in msg:
+            response = MessageResponse(
+                "💳 <b>הוספת חיוב ידני</b>\n\n"
+                "הזן את שם הנהג:"
+            )
+            return response, DispatcherState.MANUAL_CHARGE_DRIVER_NAME.value, {}
+
+        return await self._show_menu(user, context)
 
     # ==================== הוספת משלוח ====================
 
@@ -267,12 +270,12 @@ class DispatcherStateHandler:
     ):
         """מחיר המשלוח"""
         import re
-        numbers = re.findall(r'\d+', message.strip())
+        numbers = re.findall(r'\d+\.?\d*', message.strip())
         if not numbers:
             response = MessageResponse("אנא הזן סכום תקין (מספר בלבד).")
             return response, DispatcherState.ADD_SHIPMENT_FEE.value, {}
 
-        fee = int(numbers[0])
+        fee = float(numbers[0])
         if fee <= 0:
             response = MessageResponse("הסכום חייב להיות חיובי.")
             return response, DispatcherState.ADD_SHIPMENT_FEE.value, {}
@@ -287,7 +290,7 @@ class DispatcherStateHandler:
             f"📍 איסוף: {escape(pickup)}\n"
             f"🎯 יעד: {escape(dropoff)}\n"
             f"📦 תיאור: {escape(description)}\n"
-            f"💰 מחיר: {fee} ₪\n\n"
+            f"💰 מחיר: {fee:.2f} ₪\n\n"
             "לאשר את המשלוח?"
         )
 
@@ -326,7 +329,7 @@ class DispatcherStateHandler:
                 "המשלוח נוצר בהצלחה! 🎉\n\n"
                 f"📍 מ: {escape(pickup)}\n"
                 f"🎯 אל: {escape(dropoff)}\n"
-                f"💰 מחיר: {fee} ₪\n\n"
+                f"💰 מחיר: {fee:.2f} ₪\n\n"
                 "המשלוח ישודר לנהגים.",
                 keyboard=[
                     ["➕ הוספת משלוח", "📦 משלוחים פעילים"],
@@ -359,11 +362,8 @@ class DispatcherStateHandler:
 
     # ==================== צפייה במשלוחים ====================
 
-    async def _handle_view_active(self, user: User, message: str, context: dict):
-        """משלוחים פעילים של התחנה"""
-        if "חזרה" in message or "תפריט" in message:
-            return await self._handle_menu(user, "תפריט", context)
-
+    async def _show_active(self, user: User, context: dict):
+        """הצגת משלוחים פעילים ללא ניתוב לפי תוכן הודעה"""
         deliveries = await self.station_service.get_station_active_deliveries(
             self.station_id
         )
@@ -376,7 +376,6 @@ class DispatcherStateHandler:
             )
             return response, DispatcherState.VIEW_ACTIVE_SHIPMENTS.value, {}
 
-        # בניית רשימת משלוחים
         status_map = {
             DeliveryStatus.OPEN: "🟡 פתוח",
             DeliveryStatus.CAPTURED: "🟠 נתפס",
@@ -384,7 +383,7 @@ class DispatcherStateHandler:
         }
 
         text = "📦 <b>משלוחים פעילים</b>\n\n"
-        for d in deliveries[:10]:  # הצגת 10 אחרונים
+        for d in deliveries[:10]:
             status_text = status_map.get(d.status, d.status.value)
             text += (
                 f"#{d.id} | {status_text}\n"
@@ -399,11 +398,15 @@ class DispatcherStateHandler:
         )
         return response, DispatcherState.VIEW_ACTIVE_SHIPMENTS.value, {}
 
-    async def _handle_view_history(self, user: User, message: str, context: dict):
-        """היסטוריית משלוחים של התחנה"""
-        if "חזרה" in message or "תפריט" in message:
-            return await self._handle_menu(user, "תפריט", context)
+    async def _handle_view_active(self, user: User, message: str, context: dict):
+        """משלוחים פעילים של התחנה"""
+        if "חזרה" in message:
+            return await self._show_menu(user, context)
 
+        return await self._show_active(user, context)
+
+    async def _show_history(self, user: User, context: dict):
+        """הצגת היסטוריית משלוחים ללא ניתוב לפי תוכן הודעה"""
         deliveries = await self.station_service.get_station_delivery_history(
             self.station_id
         )
@@ -437,14 +440,21 @@ class DispatcherStateHandler:
         )
         return response, DispatcherState.VIEW_SHIPMENT_HISTORY.value, {}
 
+    async def _handle_view_history(self, user: User, message: str, context: dict):
+        """היסטוריית משלוחים של התחנה"""
+        if "חזרה" in message:
+            return await self._show_menu(user, context)
+
+        return await self._show_history(user, context)
+
     # ==================== חיוב ידני ====================
 
     async def _handle_manual_charge_name(
         self, user: User, message: str, context: dict
     ):
         """שם הנהג לחיוב ידני"""
-        if "חזרה" in message or "תפריט" in message:
-            return await self._handle_menu(user, "תפריט", context)
+        if "חזרה" in message:
+            return await self._show_menu(user, context)
 
         name = message.strip()
         if len(name) < 2:
@@ -461,8 +471,8 @@ class DispatcherStateHandler:
         self, user: User, message: str, context: dict
     ):
         """סכום החיוב הידני"""
-        if "חזרה" in message or "תפריט" in message:
-            return await self._handle_menu(user, "תפריט", context)
+        if "חזרה" in message:
+            return await self._show_menu(user, context)
 
         import re
         numbers = re.findall(r'\d+\.?\d*', message.strip())
@@ -485,8 +495,8 @@ class DispatcherStateHandler:
         self, user: User, message: str, context: dict
     ):
         """תיאור החיוב הידני"""
-        if "חזרה" in message or "תפריט" in message:
-            return await self._handle_menu(user, "תפריט", context)
+        if "חזרה" in message:
+            return await self._show_menu(user, context)
 
         description = message.strip()
         driver_name = context.get("charge_driver_name", "")

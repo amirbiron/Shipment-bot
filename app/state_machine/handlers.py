@@ -952,7 +952,9 @@ class CourierStateHandler:
             return await self._handle_view_active(user, message, context, photo_file_id)
 
         # בדיקה אם הנהג הוא גם סדרן - הוספת כפתור תפריט סדרן [שלב 3.2]
-        is_dispatcher = await self._check_is_dispatcher(user.id)
+        from app.domain.services.station_service import StationService
+        station_service = StationService(self.db)
+        is_dispatcher = await station_service.is_dispatcher(user.id)
 
         # בניית מקלדת בסיסית
         keyboard = [
@@ -975,17 +977,6 @@ class CourierStateHandler:
             keyboard=keyboard
         )
         return response, CourierState.MENU.value, {}
-
-    async def _check_is_dispatcher(self, user_id: int) -> bool:
-        """בדיקה אם המשתמש הוא סדרן פעיל [שלב 3.2]"""
-        from app.db.models.station_dispatcher import StationDispatcher
-        result = await self.db.execute(
-            select(StationDispatcher).where(
-                StationDispatcher.user_id == user_id,
-                StationDispatcher.is_active == True  # noqa: E712
-            ).limit(1)
-        )
-        return result.scalar_one_or_none() is not None
 
     # ==================== Wallet Module [3] ====================
 
