@@ -240,10 +240,10 @@ DISPATCHER_TRANSITIONS = {
     DispatcherState.VIEW_ACTIVE_SHIPMENTS: [DispatcherState.MENU],
     DispatcherState.VIEW_SHIPMENT_HISTORY: [DispatcherState.MENU],
 
-    # זרימת חיוב ידני
-    DispatcherState.MANUAL_CHARGE_DRIVER_NAME: [DispatcherState.MANUAL_CHARGE_AMOUNT],
-    DispatcherState.MANUAL_CHARGE_AMOUNT: [DispatcherState.MANUAL_CHARGE_DESCRIPTION],
-    DispatcherState.MANUAL_CHARGE_DESCRIPTION: [DispatcherState.MANUAL_CHARGE_CONFIRM],
+    # זרימת חיוב ידני (כולל חזרה לתפריט מכל שלב)
+    DispatcherState.MANUAL_CHARGE_DRIVER_NAME: [DispatcherState.MANUAL_CHARGE_AMOUNT, DispatcherState.MENU],
+    DispatcherState.MANUAL_CHARGE_AMOUNT: [DispatcherState.MANUAL_CHARGE_DESCRIPTION, DispatcherState.MENU],
+    DispatcherState.MANUAL_CHARGE_DESCRIPTION: [DispatcherState.MANUAL_CHARGE_CONFIRM, DispatcherState.MENU],
     DispatcherState.MANUAL_CHARGE_CONFIRM: [DispatcherState.MENU],
 }
 
@@ -319,7 +319,7 @@ STATION_OWNER_TRANSITIONS = {
     ],
     StationOwnerState.ADD_BLACKLIST_PHONE: [
         StationOwnerState.ADD_BLACKLIST_REASON,
-        StationOwnerState.MENU,
+        StationOwnerState.VIEW_BLACKLIST,
     ],
     StationOwnerState.ADD_BLACKLIST_REASON: [
         StationOwnerState.VIEW_BLACKLIST,

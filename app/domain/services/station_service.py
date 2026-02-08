@@ -18,6 +18,7 @@ from app.db.models.delivery import Delivery, DeliveryStatus
 from app.db.models.user import User
 from app.core.logging import get_logger
 from app.core.validation import PhoneNumberValidator
+from html import escape
 
 logger = get_logger(__name__)
 
@@ -126,7 +127,7 @@ class StationService:
                 "phone": PhoneNumberValidator.mask(normalized),
             }
         )
-        return True, f"הסדרן {user.name or 'לא ידוע'} נוסף בהצלחה לתחנה."
+        return True, f"הסדרן {escape(user.name or 'לא ידוע')} נוסף בהצלחה לתחנה."
 
     async def remove_dispatcher(
         self,
@@ -380,7 +381,7 @@ class StationService:
                 "phone": PhoneNumberValidator.mask(normalized),
             }
         )
-        return True, f"הנהג {user.name or 'לא ידוע'} נוסף לרשימה השחורה."
+        return True, f"הנהג {escape(user.name or 'לא ידוע')} נוסף לרשימה השחורה."
 
     async def remove_from_blacklist(
         self,
