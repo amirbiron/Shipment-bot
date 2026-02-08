@@ -218,11 +218,11 @@ def _match_approval_command(text: str) -> tuple[str, int] | None:
     text = text.strip().replace("*", "")
     text = re.sub(r'\s+', ' ', text)
 
-    approve_match = re.match(r'^[✅✔️☑️\s]*אשר(?:\s+שליח)?\s+(\d+)\s*$', text)
+    approve_match = re.match(r'^[✅✔️☑️\s]*(?:אשר|אישור)(?:\s+שליח)?\s+(\d+)\s*$', text)
     if approve_match:
         return ("approve", int(approve_match.group(1)))
 
-    reject_match = re.match(r'^[❌✖️\s]*דחה(?:\s+שליח)?\s+(\d+)\s*$', text)
+    reject_match = re.match(r'^[❌✖️\s]*(?:דחה|דחייה|דחיה)(?:\s+שליח)?\s+(\d+)\s*$', text)
     if reject_match:
         return ("reject", int(reject_match.group(1)))
 
