@@ -203,9 +203,57 @@ async def test_whatsapp_admin_can_return_to_main_menu_from_courier_flow(
     assert data["processed"] == 1
     assert data["responses"][0]["response"].startswith("welcome")
 
-    # המשתמש צריך להפוך ל-ADMIN (כדי שלא ינותב שוב אוטומטית לתפריט שליח)
+    # חשוב: אסור לשנות role ב-DB רק בגלל שהמשתמש אדמין (לפי מספר).
     await db_session.refresh(admin_user)
-    assert admin_user.role == UserRole.ADMIN
+    assert admin_user.role == UserRole.COURIER
 
     # אימות שנשלחה הודעת welcome בפועל דרך ה-gateway (קריאה אחת לפחות)
+    assert mock_whatsapp_gateway.post.call_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_whatsapp_admin_station_owner_does_not_lose_role_on_main_menu_reset(
+    test_client: AsyncClient,
+    db_session,
+    user_factory,
+    mock_whatsapp_gateway,
+    monkeypatch,
+):
+    """
+    רגרסיה: אדמין שהוא גם בעל תחנה לא אמור לאבד את התפקיד STATION_OWNER
+    רק בגלל ששלח #/תפריט ראשי.
+    """
+    admin_sender_id = "972599999999@lid"
+    monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "972599999999")
+
+    station_owner_admin = await user_factory(
+        phone_number=admin_sender_id,
+        name="Station Owner Admin",
+        role=UserRole.STATION_OWNER,
+        platform="whatsapp",
+        approval_status=ApprovalStatus.APPROVED,
+    )
+
+    resp = await test_client.post(
+        "/api/webhooks/whatsapp/webhook",
+        json={
+            "messages": [
+                {
+                    "from_number": admin_sender_id,
+                    "sender_id": admin_sender_id,
+                    "reply_to": admin_sender_id,
+                    "message_id": "m-admin-station-1",
+                    "text": "תפריט ראשי",
+                    "timestamp": 1700000000,
+                }
+            ]
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["processed"] == 1
+    assert data["responses"][0]["response"].startswith("welcome")
+
+    await db_session.refresh(station_owner_admin)
+    assert station_owner_admin.role == UserRole.STATION_OWNER
     assert mock_whatsapp_gateway.post.call_count >= 1

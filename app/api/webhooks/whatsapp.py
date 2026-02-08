@@ -590,19 +590,17 @@ async def whatsapp_webhook(
                 },
             )
 
-            # אדמין: מאפשרים יציאה "קשיחה" מכל זרימה וחזרה לתפריט הראשי של כל אפשרויות הרישום.
-            # הסיבה: אדמין שנרשם כשליח עלול להינעל בתפריט שליח בלבד.
-            # הערה: הזיהוי של אדמין בווטסאפ מבוסס על WHATSAPP_ADMIN_NUMBERS (לא על role ב-DB).
+            # אדמין (לפי WHATSAPP_ADMIN_NUMBERS): מאפשרים יציאה "קשיחה" מכל זרימה וחזרה לתפריט הראשי
+            # של כל אפשרויות הרישום - בלי לשנות role ב-DB (כדי לא למחוק STATION_OWNER וכו').
             if _is_whatsapp_admin(sender_id):
                 from app.state_machine.states import SenderState
 
-                if user.role != UserRole.ADMIN:
-                    user.role = UserRole.ADMIN
-                    await db.commit()
-
                 # איפוס state כדי לאפשר עבודה עם תפריט ראשי גם אם האדמין היה באמצע זרימה רב-שלבית כשליח
                 await state_manager.force_state(
-                    user.id, "whatsapp", SenderState.MENU.value, context={}
+                    user.id,
+                    "whatsapp",
+                    SenderState.MENU.value,
+                    context={"admin_root_menu": True},
                 )
 
                 background_tasks.add_task(send_welcome_message, reply_to)
@@ -679,11 +677,15 @@ async def whatsapp_webhook(
             isinstance(_current_state_value, str)
             and _current_state_value.startswith(("DISPATCHER.", "STATION."))
         )
+        _context = await state_manager.get_context(user.id, "whatsapp")
+        _admin_root_menu = bool(_context.get("admin_root_menu")) and _is_whatsapp_admin(
+            sender_id
+        )
 
         if not _is_in_multi_step_flow:
-            if user.role in (UserRole.SENDER, UserRole.ADMIN) and (
-                "הצטרפות למנוי" in text or "שליח" in text
-            ):
+            if (
+                user.role in (UserRole.SENDER, UserRole.ADMIN) or _admin_root_menu
+            ) and ("הצטרפות למנוי" in text or "שליח" in text):
                 # ניתוב לתהליך הרישום כנהג/שליח
                 user.role = UserRole.COURIER
                 await db.commit()
@@ -709,9 +711,8 @@ async def whatsapp_webhook(
                 )
                 continue
 
-            if ("העלאת משלוח מהיר" in text or "משלוח מהיר" in text) and user.role in (
-                UserRole.SENDER,
-                UserRole.ADMIN,
+            if ("העלאת משלוח מהיר" in text or "משלוח מהיר" in text) and (
+                user.role in (UserRole.SENDER, UserRole.ADMIN) or _admin_root_menu
             ):
                 # קישור חיצוני לקבוצת WhatsApp
                 if settings.WHATSAPP_GROUP_LINK:
@@ -731,9 +732,8 @@ async def whatsapp_webhook(
                 )
                 continue
 
-            if ("הצטרפות כתחנה" in text or "תחנה" in text) and user.role in (
-                UserRole.SENDER,
-                UserRole.ADMIN,
+            if ("הצטרפות כתחנה" in text or "תחנה" in text) and (
+                user.role in (UserRole.SENDER, UserRole.ADMIN) or _admin_root_menu
             ):
                 # הודעה שיווקית עבור תחנות
                 station_text = (
@@ -753,9 +753,8 @@ async def whatsapp_webhook(
                 )
                 continue
 
-            if "פנייה לניהול" in text and user.role in (
-                UserRole.SENDER,
-                UserRole.ADMIN,
+            if "פנייה לניהול" in text and (
+                user.role in (UserRole.SENDER, UserRole.ADMIN) or _admin_root_menu
             ):
                 # קישור WhatsApp ישיר למנהל הראשי
                 if settings.ADMIN_WHATSAPP_NUMBER:
@@ -774,9 +773,9 @@ async def whatsapp_webhook(
                 )
                 continue
 
-            if "חזרה לתפריט" in text and user.role not in (
-                UserRole.COURIER,
-                UserRole.STATION_OWNER,
+            if "חזרה לתפריט" in text and (
+                user.role not in (UserRole.COURIER, UserRole.STATION_OWNER)
+                or _admin_root_menu
             ):
                 # כפתור "חזרה לתפריט" - שולחים רגילים חוזרים לתפריט הראשי
                 background_tasks.add_task(send_welcome_message, reply_to)
