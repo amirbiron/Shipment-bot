@@ -496,36 +496,29 @@ async def whatsapp_webhook(
                 }
             )
             # Reset state to menu
-            if user.role == UserRole.COURIER:
-                # בדיקה אם השליח לא מאושר (כולל None, PENDING, REJECTED, BLOCKED)
-                # אפשר לו לחזור להיות שולח רגיל
-                if user.approval_status != ApprovalStatus.APPROVED:
-                    # מחזירים אותו להיות שולח רגיל
-                    logger.info(
-                        "Non-approved courier pressed #, switching to sender",
-                        extra_data={
-                            "user_id": user.id,
-                            "phone": PhoneNumberValidator.mask(sender_id),
-                            "reply_to": PhoneNumberValidator.mask(reply_to)
-                        }
-                    )
-                    user.role = UserRole.SENDER
-                    await db.commit()
-                    # מאפסים את ה-state machine ומנקים context
-                    from app.state_machine.states import SenderState
-                    await state_manager.force_state(user.id, "whatsapp", SenderState.MENU.value, context={})
-                    # מציגים הודעת ברוכים הבאים מחדש
-                    background_tasks.add_task(send_welcome_message, reply_to)
-                    responses.append({
-                        "from": sender_id,
-                        "response": "welcome (switched from non-approved courier)",
-                        "new_state": SenderState.MENU.value
-                    })
-                    continue
+            if user.role == UserRole.COURIER and user.approval_status != ApprovalStatus.APPROVED:
+                # שליח לא מאושר - מחזירים אותו להיות שולח רגיל
+                logger.info(
+                    "Non-approved courier pressed #, switching to sender",
+                    extra_data={
+                        "user_id": user.id,
+                        "phone": PhoneNumberValidator.mask(sender_id),
+                        "reply_to": PhoneNumberValidator.mask(reply_to)
+                    }
+                )
+                user.role = UserRole.SENDER
+                await db.commit()
+                from app.state_machine.states import SenderState
+                await state_manager.force_state(user.id, "whatsapp", SenderState.MENU.value, context={})
+                background_tasks.add_task(send_welcome_message, reply_to)
+                responses.append({
+                    "from": sender_id,
+                    "response": "welcome (switched from non-approved courier)",
+                    "new_state": SenderState.MENU.value
+                })
+                continue
 
-                response, new_state = await _route_to_role_menu_wa(user, db, state_manager)
-            else:
-                response, new_state = await _route_to_role_menu_wa(user, db, state_manager)
+            response, new_state = await _route_to_role_menu_wa(user, db, state_manager)
 
             background_tasks.add_task(
                 send_whatsapp_message,
