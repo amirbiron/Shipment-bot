@@ -439,6 +439,7 @@ class AdminNotificationService:
         מנסה קודם sendPhoto; אם נכשל (למשל file_id ממסמך) — fallback ל-sendDocument.
         ניסיון sendPhoto נעשה בלי circuit breaker כי כשלון צפוי (file_id ממסמך)
         לא צריך להשפיע על ה-circuit breaker המשותף.
+        אם ה-CB כבר פתוח — מדלגים ישירות ל-sendDocument דרך ה-CB (fast-fail).
         """
         if not settings.TELEGRAM_BOT_TOKEN:
             logger.warning("Telegram bot token not configured for photo forwarding")
@@ -447,24 +448,26 @@ class AdminNotificationService:
         base_url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}"
         circuit_breaker = get_telegram_circuit_breaker()
 
-        # ניסיון ראשון: sendPhoto — בלי circuit breaker כי כשלון כאן צפוי
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{base_url}/sendPhoto",
-                    json={"chat_id": chat_id, "photo": file_id},
-                    timeout=30.0,
-                )
-                if response.status_code == 200:
-                    return True
-        except Exception:
-            pass
+        # ניסיון ראשון: sendPhoto — בלי circuit breaker כי כשלון כאן צפוי.
+        # אבל אם ה-CB פתוח (טלגרם למטה) — מדלגים כדי לא לחכות 30 שניות לחינם.
+        if await circuit_breaker.can_execute():
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(
+                        f"{base_url}/sendPhoto",
+                        json={"chat_id": chat_id, "photo": file_id},
+                        timeout=30.0,
+                    )
+                    if response.status_code == 200:
+                        return True
+            except Exception:
+                pass
 
-        # fallback: sendDocument — דרך circuit breaker כי כשלון כאן הוא אמיתי
-        logger.info(
-            "sendPhoto failed, retrying with sendDocument",
-            extra_data={"chat_id": chat_id}
-        )
+            # fallback: sendDocument — דרך circuit breaker כי כשלון כאן הוא אמיתי
+            logger.info(
+                "sendPhoto failed, retrying with sendDocument",
+                extra_data={"chat_id": chat_id}
+            )
 
         async def _send_as_document():
             async with httpx.AsyncClient() as client:
