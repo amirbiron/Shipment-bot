@@ -190,6 +190,22 @@ def _get_whatsapp_admin_numbers() -> set[str]:
     return {n.strip() for n in settings.WHATSAPP_ADMIN_NUMBERS.split(",") if n.strip()}
 
 
+def _is_whatsapp_admin(sender_id: str) -> bool:
+    """
+    בדיקה אם השולח הוא מנהל - תומך בפורמטים @lid ו-@c.us.
+    ה-sender_id מגיע בפורמט כמו '972501234567@lid' אבל ההגדרות
+    מכילות מספרים רגילים כמו '972501234567'. נרמול ע"י הסרת הסיומת.
+    """
+    wa_admin_numbers = _get_whatsapp_admin_numbers()
+    if not wa_admin_numbers:
+        return False
+    if sender_id in wa_admin_numbers:
+        return True
+    # הסרת סיומת WhatsApp (@lid, @c.us) והשוואה מחדש
+    sender_base = sender_id.split("@")[0]
+    return any(admin.split("@")[0] == sender_base for admin in wa_admin_numbers)
+
+
 def _match_approval_command(text: str) -> tuple[str, int] | None:
     """
     זיהוי פקודת אישור/דחייה בטקסט.
@@ -393,8 +409,7 @@ async def whatsapp_webhook(
         # טיפול בפקודות אישור/דחייה מהודעות פרטיות של מנהלים
         # חייב להיות לפני בדיקת is_new_user כדי שמנהל חדש שעוד לא ב-DB
         # יוכל לאשר/לדחות שליחים כבר מההודעה הראשונה שלו
-        wa_admin_numbers = _get_whatsapp_admin_numbers()
-        if sender_id in wa_admin_numbers and text:
+        if _is_whatsapp_admin(sender_id) and text:
             admin_response = await handle_admin_private_command(
                 db, text, admin_name=user.name or PhoneNumberValidator.mask(sender_id),
                 background_tasks=background_tasks,
