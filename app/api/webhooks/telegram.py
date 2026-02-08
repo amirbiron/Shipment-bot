@@ -83,6 +83,14 @@ class TelegramPhotoSize(BaseModel):
     height: int
 
 
+class TelegramDocument(BaseModel):
+    """מודל לקבצים/מסמכים שנשלחים בטלגרם (לא כתמונה דחוסה)"""
+    file_id: str
+    file_unique_id: str
+    file_name: Optional[str] = None
+    mime_type: Optional[str] = None
+
+
 class TelegramMessage(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -91,6 +99,7 @@ class TelegramMessage(BaseModel):
     chat: TelegramChat
     text: Optional[str] = None
     photo: Optional[List[TelegramPhotoSize]] = None
+    document: Optional[TelegramDocument] = None
     date: int
 
 
@@ -406,8 +415,11 @@ async def telegram_webhook(
         text = message.text or ""
         photo_file_id = None
         if message.photo:
-            # Get largest photo (last in list)
+            # תמונה דחוסה - לוקחים את הגודל הגדול ביותר
             photo_file_id = message.photo[-1].file_id
+        elif message.document and message.document.mime_type and message.document.mime_type.startswith("image/"):
+            # קובץ תמונה שנשלח כמסמך (לא דחוס) - תומך בשליחה מדסקטופ או "שלח כקובץ"
+            photo_file_id = message.document.file_id
 
         # Get user name if available
         name = None

@@ -793,6 +793,54 @@ class TestCourierApprovalService:
         assert result.success is False
         assert "כבר נדחה" in result.message
 
+    @pytest.mark.asyncio
+    async def test_approve_courier_who_reverted_to_sender_via_hash(self, db_session, user_factory):
+        """אישור שליח שלחץ # וחזר להיות SENDER - עדיין צריך לעבוד"""
+        user = await user_factory(
+            phone_number="tg:60007",
+            name="Reverted Courier",
+            role=UserRole.SENDER,  # חזר ל-SENDER אחרי לחיצה על #
+            platform="telegram",
+            telegram_chat_id="60007",
+            approval_status=ApprovalStatus.PENDING,  # עדיין PENDING מהרישום
+        )
+        result = await CourierApprovalService.approve(db_session, user.id)
+        assert result.success is True
+        assert "אושר" in result.message
+        assert result.user.approval_status == ApprovalStatus.APPROVED
+        assert result.user.role == UserRole.COURIER  # חזר ל-COURIER
+
+    @pytest.mark.asyncio
+    async def test_reject_courier_who_reverted_to_sender_via_hash(self, db_session, user_factory):
+        """דחיית שליח שלחץ # וחזר להיות SENDER - עדיין צריך לעבוד"""
+        user = await user_factory(
+            phone_number="tg:60008",
+            name="Reverted Courier 2",
+            role=UserRole.SENDER,  # חזר ל-SENDER אחרי לחיצה על #
+            platform="telegram",
+            telegram_chat_id="60008",
+            approval_status=ApprovalStatus.PENDING,
+        )
+        result = await CourierApprovalService.reject(db_session, user.id)
+        assert result.success is True
+        assert "נדחה" in result.message
+        assert result.user.approval_status == ApprovalStatus.REJECTED
+
+    @pytest.mark.asyncio
+    async def test_approve_sender_without_pending_still_fails(self, db_session, user_factory):
+        """אישור SENDER ללא סטטוס PENDING - עדיין צריך להיכשל"""
+        user = await user_factory(
+            phone_number="tg:60009",
+            name="Regular Sender",
+            role=UserRole.SENDER,
+            platform="telegram",
+            telegram_chat_id="60009",
+            # approval_status is None - שולח רגיל שלא עבר רישום
+        )
+        result = await CourierApprovalService.approve(db_session, user.id)
+        assert result.success is False
+        assert "אינו שליח" in result.message
+
 
 class TestTelegramApprovalButtons:
     """בדיקות לכפתורי אישור/דחייה בטלגרם"""
