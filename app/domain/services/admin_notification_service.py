@@ -86,12 +86,14 @@ class AdminNotificationService:
   - סלפי: {selfie_status}
   - תמונת רכב: {vehicle_status}"""
 
-            # כפתורים רק בצ'אט פרטי; בקבוצה - הנחיות טקסטואליות
-            if is_wa_fallback_to_group:
-                wa_message += f"""
+            # הנחיות טקסטואליות תמיד - הכפתורים לא תמיד מרונדרים ב-WhatsApp
+            wa_message += f"""
 
 ✅ לאישור: *אשר {user_id}*
 ❌ לדחייה: *דחה {user_id}*"""
+
+            # כפתורים רק בצ'אט פרטי (בקבוצה לא עובדים)
+            if is_wa_fallback_to_group:
                 wa_keyboard = None
             else:
                 wa_keyboard = [[f"✅ אשר {user_id}", f"❌ דחה {user_id}"]]
