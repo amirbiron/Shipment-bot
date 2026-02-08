@@ -659,6 +659,19 @@ async def telegram_webhook(
             )
             return {"ok": True, "new_state": new_state}
 
+        # סדרן הוסר או תחנה בוטלה - חזרה לתפריט נהג ללא כפתור סדרן
+        logger.warning(
+            "Dispatcher clicked station menu but station not found",
+            extra_data={"user_id": user.id}
+        )
+        response, new_state = await _route_to_role_menu(user, db, state_manager)
+        background_tasks.add_task(
+            send_telegram_message, chat_id,
+            response.text, response.keyboard,
+            getattr(response, 'inline', False)
+        )
+        return {"ok": True, "new_state": new_state}
+
     # אם המשתמש באמצע זרימת סדרן - ממשיכים עם DispatcherStateHandler
     if current_state and current_state.startswith("DISPATCHER."):
         from app.domain.services.station_service import StationService

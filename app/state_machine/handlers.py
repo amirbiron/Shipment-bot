@@ -952,13 +952,9 @@ class CourierStateHandler:
             return await self._handle_view_active(user, message, context, photo_file_id)
 
         # בדיקה אם הנהג הוא גם סדרן - הוספת כפתור תפריט סדרן [שלב 3.2]
-        # שמירה ב-context למניעת שאילתת DB חוזרת בכל כניסה לתפריט
-        if "_cached_is_dispatcher" in context:
-            is_dispatcher = context["_cached_is_dispatcher"]
-        else:
-            from app.domain.services.station_service import StationService
-            station_service = StationService(self.db)
-            is_dispatcher = await station_service.is_dispatcher(user.id)
+        from app.domain.services.station_service import StationService
+        station_service = StationService(self.db)
+        is_dispatcher = await station_service.is_dispatcher(user.id)
 
         # בניית מקלדת בסיסית
         keyboard = [
@@ -980,7 +976,7 @@ class CourierStateHandler:
             "בחר פעולה:",
             keyboard=keyboard
         )
-        return response, CourierState.MENU.value, {"_cached_is_dispatcher": is_dispatcher}
+        return response, CourierState.MENU.value, {}
 
     # ==================== Wallet Module [3] ====================
 
