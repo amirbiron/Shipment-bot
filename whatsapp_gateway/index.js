@@ -411,6 +411,13 @@ app.post('/send-media', async (req, res) => {
         });
     }
 
+    // ולידציה בסיסית לטלפון כדי למנוע שגיאה ב-includes
+    if (!phone || typeof phone !== 'string' || !phone.trim()) {
+        return res.status(400).json({
+            error: 'phone is required'
+        });
+    }
+
     try {
         let chatId = phone;
 
@@ -444,7 +451,17 @@ app.post('/send-media', async (req, res) => {
         const captionText = caption || '';
         let result;
 
-        if (mimeType && !mimeType.startsWith('image/') && media_type && !media_type.includes('image')) {
+        const isImage = (() => {
+            if (mimeType) {
+                return mimeType.startsWith('image/');
+            }
+            if (media_type) {
+                return media_type.includes('image');
+            }
+            return true; // ברירת מחדל: תמונה
+        })();
+
+        if (!isImage) {
             result = await client.sendFile(chatId, media_url, filename, captionText);
         } else {
             result = await client.sendImage(chatId, media_url, filename, captionText);
