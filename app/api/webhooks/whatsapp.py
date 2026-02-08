@@ -627,7 +627,9 @@ async def whatsapp_webhook(
                     context={"admin_root_menu": True},
                 )
 
-                background_tasks.add_task(send_welcome_message, reply_to)
+                # שליחה למספר המנהל מההגדרות (reply_to עלול להיות @lid)
+                admin_send_to = _resolve_admin_send_target(sender_id, reply_to)
+                background_tasks.add_task(send_welcome_message, admin_send_to)
                 responses.append(
                     {
                         "from": sender_id,
