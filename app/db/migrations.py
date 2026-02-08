@@ -50,7 +50,133 @@ async def run_migration_002(conn: AsyncConnection) -> None:
     """))
 
 
+async def run_migration_003(conn: AsyncConnection) -> None:
+    """מיגרציה 003 - טבלאות תחנות, סדרנים, ארנק תחנה, חיובים ידניים ורשימה שחורה [שלב 3]."""
+
+    # טבלת תחנות
+    await conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS stations (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(200) NOT NULL,
+            owner_id BIGINT NOT NULL REFERENCES users(id),
+            is_active BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW()
+        );
+    """))
+
+    # טבלת סדרנים - קישור סדרן לתחנה
+    await conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS station_dispatchers (
+            id SERIAL PRIMARY KEY,
+            station_id INTEGER NOT NULL REFERENCES stations(id),
+            user_id BIGINT NOT NULL REFERENCES users(id),
+            is_active BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMP DEFAULT NOW(),
+            CONSTRAINT uq_station_dispatcher UNIQUE (station_id, user_id)
+        );
+    """))
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_station_dispatchers_station ON station_dispatchers(station_id);
+    """))
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_station_dispatchers_user ON station_dispatchers(user_id);
+    """))
+
+    # ארנק תחנה
+    await conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS station_wallets (
+            id SERIAL PRIMARY KEY,
+            station_id INTEGER NOT NULL REFERENCES stations(id) UNIQUE,
+            balance FLOAT DEFAULT 0.0,
+            commission_rate FLOAT DEFAULT 0.10,
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW()
+        );
+    """))
+
+    # יצירת enum type לתנועות ארנק תחנה
+    await conn.execute(text("""
+        DO $$ BEGIN
+            CREATE TYPE station_ledger_entry_type AS ENUM ('commission_credit', 'manual_charge', 'withdrawal');
+        EXCEPTION
+            WHEN duplicate_object THEN null;
+        END $$;
+    """))
+
+    # היסטוריית תנועות ארנק תחנה
+    await conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS station_ledger (
+            id SERIAL PRIMARY KEY,
+            station_id INTEGER NOT NULL REFERENCES stations(id),
+            delivery_id INTEGER REFERENCES deliveries(id),
+            entry_type station_ledger_entry_type NOT NULL,
+            amount FLOAT NOT NULL,
+            balance_after FLOAT NOT NULL,
+            description VARCHAR(500),
+            created_at TIMESTAMP DEFAULT NOW()
+        );
+    """))
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_station_ledger_station ON station_ledger(station_id);
+    """))
+
+    # חיובים ידניים
+    await conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS manual_charges (
+            id SERIAL PRIMARY KEY,
+            station_id INTEGER NOT NULL REFERENCES stations(id),
+            dispatcher_id BIGINT NOT NULL REFERENCES users(id),
+            driver_name VARCHAR(200) NOT NULL,
+            amount FLOAT NOT NULL,
+            description TEXT,
+            created_at TIMESTAMP DEFAULT NOW()
+        );
+    """))
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_manual_charges_station ON manual_charges(station_id);
+    """))
+
+    # רשימה שחורה ברמת תחנה
+    await conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS station_blacklist (
+            id SERIAL PRIMARY KEY,
+            station_id INTEGER NOT NULL REFERENCES stations(id),
+            courier_id BIGINT NOT NULL REFERENCES users(id),
+            reason VARCHAR(500),
+            consecutive_unpaid_months INTEGER DEFAULT 2,
+            blocked_at TIMESTAMP DEFAULT NOW(),
+            CONSTRAINT uq_station_blacklist UNIQUE (station_id, courier_id)
+        );
+    """))
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_station_blacklist_station ON station_blacklist(station_id);
+    """))
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_station_blacklist_courier ON station_blacklist(courier_id);
+    """))
+
+    # הוספת עמודת station_id לטבלת deliveries
+    await conn.execute(text("""
+        ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS station_id INTEGER REFERENCES stations(id);
+    """))
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_deliveries_station ON deliveries(station_id);
+    """))
+
+    # עדכון enum של UserRole - הוספת station_owner
+    # הערה: ALTER TYPE ... ADD VALUE הוא idempotent ב-PG 12+
+    await conn.execute(text("""
+        DO $$ BEGIN
+            ALTER TYPE userrole ADD VALUE IF NOT EXISTS 'station_owner';
+        EXCEPTION
+            WHEN duplicate_object THEN null;
+        END $$;
+    """))
+
+
 async def run_all_migrations(conn: AsyncConnection) -> None:
     """הרצת כל המיגרציות ברצף."""
     await run_migration_001(conn)
     await run_migration_002(conn)
+    await run_migration_003(conn)

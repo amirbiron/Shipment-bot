@@ -52,6 +52,9 @@ class Delivery(Base):
     courier_id = Column(BigInteger, ForeignKey("users.id"), nullable=True)
     fee = Column(Float, default=10.0)
 
+    # תחנה שיצרה את המשלוח (nullable - משלוחים ישירים לא שייכים לתחנה)
+    station_id = Column(Integer, ForeignKey("stations.id"), nullable=True, index=True)
+
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
     captured_at = Column(DateTime, nullable=True)

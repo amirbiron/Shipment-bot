@@ -951,6 +951,22 @@ class CourierStateHandler:
         if "משלוח פעיל" in message or "משלוח נוכחי" in message:
             return await self._handle_view_active(user, message, context, photo_file_id)
 
+        # בדיקה אם הנהג הוא גם סדרן - הוספת כפתור תפריט סדרן [שלב 3.2]
+        from app.domain.services.station_service import StationService
+        station_service = StationService(self.db)
+        is_dispatcher = await station_service.is_dispatcher(user.id)
+
+        # בניית מקלדת בסיסית
+        keyboard = [
+            ["💰 מצב הארנק", "📍 הגדרות אזור"],
+            ["📦 היסטוריית עבודות", "📦 משלוח פעיל"],
+            ["💳 הפקדה", "❓ תמיכה"],
+        ]
+
+        # אם הנהג הוא סדרן - מוסיפים כפתור בולט לתפריט סדרן
+        if is_dispatcher:
+            keyboard.insert(0, ["🏪 תפריט סדרן"])
+
         # Default menu display
         response = MessageResponse(
             f"📋 <b>תפריט שליח</b>\n\n"
@@ -958,11 +974,7 @@ class CourierStateHandler:
             f"💰 <b>מצב הארנק:</b> 0.00 ₪\n"
             f"📍 <b>האזור שלך:</b> {user.service_area or 'לא הוגדר'}\n\n"
             "בחר פעולה:",
-            keyboard=[
-                ["💰 מצב הארנק", "📍 הגדרות אזור"],
-                ["📦 היסטוריית עבודות", "📦 משלוח פעיל"],
-                ["💳 הפקדה", "❓ תמיכה"],
-            ]
+            keyboard=keyboard
         )
         return response, CourierState.MENU.value, {}
 
