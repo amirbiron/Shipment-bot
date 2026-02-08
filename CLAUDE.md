@@ -242,6 +242,71 @@ correlation_id = set_correlation_id()  # מייצר אוטומטית אם לא �
 
 ---
 
+## כללי ניתוב Webhook (telegram.py)
+
+### ניתוב לפי תפקיד
+**כל `if role ==` חייב לטפל בכל התפקידים - אסור `else` גנרי:**
+
+```python
+# לא נכון - else תופס תפקידים לא צפויים
+if user.role == UserRole.COURIER:
+    ...
+else:
+    ...  # STATION_OWNER? ADMIN? מי יודע
+
+# נכון - מפורש לכל תפקיד, עם אזהרה ל-fallback
+if user.role == UserRole.COURIER:
+    ...
+elif user.role == UserRole.STATION_OWNER:
+    ...
+elif user.role == UserRole.SENDER:
+    ...
+else:
+    logger.warning("Unknown role", extra_data={"role": str(user.role)})
+```
+
+להשתמש ב-`_route_to_role_menu()` לכל ניתוב איפוס (שורש, #, /start).
+**כשמוסיפים תפקיד חדש - חובה לעדכן את `_route_to_role_menu()`.**
+
+### הגנה על זרימות רב-שלביות
+**אסור לבדוק `"keyword" in text` ללא guard על state:**
+
+```python
+# לא נכון - תופס כתובות כמו "תחנה מרכזית"
+if "תחנה" in text:
+    return marketing_response()
+
+# נכון - בודקים קודם אם המשתמש באמצע זרימה
+if not _is_in_multi_step_flow:
+    if "תחנה" in text:
+        return marketing_response()
+```
+
+ה-guard `_is_in_multi_step_flow` בודק prefixes: `"DISPATCHER."`, `"STATION."`, ו-states של רישום שליח.
+**כשמוסיפים prefix חדש ל-state machine - חובה לעדכן את ה-guard.**
+
+### אטומיות בפעולות DB
+- כל **read-modify-write על ארנק** חייב `with_for_update()` (נעילת שורה)
+- כל שדה שנכתב **חייב להיות באותה טרנזקציה** - לא לעשות commit ואז לעדכן שדה נוסף
+
+---
+
+## צ'קליסט לפיצ'רים דו-פלטפורמיים (Telegram + WhatsApp)
+
+1. **עקביות בין פלטפורמות** - כל לוגיקה חדשה חייבת לעבוד
+   זהה בשתי הפלטפורמות. לא לשכפל קוד - להוציא לשירות משותף.
+2. **fallback לקבוצה** - כפתורים לא עובדים בקבוצות.
+   בכל fallback לקבוצה: keyboard=None + הנחיות טקסטואליות.
+3. **auth בטלגרם** - תמיד לזהות לפי from_user.id (מי לחץ),
+   לעולם לא לפי chat.id (איפה ההודעה).
+4. **background tasks** - להשתמש ב-background_tasks.add_task()
+   לשליחת הודעות. לעולם לא asyncio.create_task (בולע exceptions).
+5. **סינון מספרי טלפון** - לסנן גם tg: (placeholder) וגם
+   @g.us (מזהה קבוצה) לפני שליחת הודעה אישית.
+6. **fallback שמות** - תמיד user.full_name or user.name or 'לא צוין'
+
+---
+
 ## אסור!
 
 1. **אסור להשתמש ב-`print()`** - להשתמש ב-`logger`
@@ -251,3 +316,6 @@ correlation_id = set_correlation_id()  # מייצר אוטומטית אם לא �
 5. **אסור לכתוב פונקציות בלי type hints**
 6. **אסור ליצור endpoints בלי תיעוד OpenAPI**
 7. **אסור לעשות commit בלי בדיקות לפיצ'רים חדשים**
+8. **אסור `else` גנרי בניתוב לפי תפקיד** - לטפל בכל `UserRole` במפורש
+9. **אסור `"keyword" in text` ללא guard** - לבדוק `_is_in_multi_step_flow` קודם
+10. **אסור read-modify-write על ארנק בלי `with_for_update()`**

@@ -254,6 +254,64 @@ async def send_welcome_message(chat_id: str):
     await send_telegram_message(chat_id, welcome_text, keyboard, inline=True)
 
 
+async def _route_to_role_menu(
+    user: User,
+    db: AsyncSession,
+    state_manager: StateManager,
+) -> tuple:
+    """
+    ניתוב לתפריט הנכון לפי תפקיד המשתמש.
+
+    חובה: כל תפקיד (UserRole) חייב להיות מטופל כאן במפורש.
+    אם מוסיפים תפקיד חדש - חובה להוסיף ענף כאן, אחרת ייפול ל-SENDER עם אזהרה בלוג.
+
+    Returns: (response, new_state)
+    """
+    from app.state_machine.states import SenderState
+
+    if user.role == UserRole.COURIER:
+        await state_manager.force_state(user.id, "telegram", CourierState.MENU.value, context={})
+        handler = CourierStateHandler(db)
+        return await handler.handle_message(user, "תפריט", None)
+
+    if user.role == UserRole.STATION_OWNER:
+        from app.domain.services.station_service import StationService
+        station_service = StationService(db)
+        station = await station_service.get_station_by_owner(user.id)
+
+        if station:
+            await state_manager.force_state(
+                user.id, "telegram",
+                StationOwnerState.MENU.value,
+                context={}
+            )
+            handler = StationOwnerStateHandler(db, station.id)
+            return await handler.handle_message(user, "תפריט", None)
+        # בעל תחנה ללא תחנה פעילה - fallback לשולח
+        logger.warning(
+            "Station owner without active station, falling back to sender menu",
+            extra_data={"user_id": user.id}
+        )
+
+    if user.role == UserRole.SENDER:
+        await state_manager.force_state(user.id, "telegram", SenderState.MENU.value, context={})
+        handler = SenderStateHandler(db)
+        return await handler.handle_message(
+            user_id=user.id, platform="telegram", message="תפריט"
+        )
+
+    # תפקיד לא מוכר - אזהרה בלוג ו-fallback לשולח
+    logger.warning(
+        "Unknown user role in menu routing, falling back to sender",
+        extra_data={"user_id": user.id, "role": str(user.role)}
+    )
+    await state_manager.force_state(user.id, "telegram", SenderState.MENU.value, context={})
+    handler = SenderStateHandler(db)
+    return await handler.handle_message(
+        user_id=user.id, platform="telegram", message="תפריט"
+    )
+
+
 @router.post(
     "/webhook",
     summary="Webhook - Telegram (קבלת עדכונים נכנסים)",
@@ -380,47 +438,15 @@ async def telegram_webhook(
     if update.message and text.strip().startswith("/start"):
         if user.role == UserRole.COURIER:
             await db.refresh(user)
-            if user.approval_status == ApprovalStatus.APPROVED:
-                await state_manager.force_state(user.id, "telegram", CourierState.MENU.value, context={})
-            else:
+            if user.approval_status != ApprovalStatus.APPROVED:
+                # שליח לא מאושר - מחזירים ל-INITIAL לא ל-MENU
                 await state_manager.force_state(user.id, "telegram", CourierState.INITIAL.value, context={})
-
-            handler = CourierStateHandler(db)
-            response, new_state = await handler.handle_message(user, "תפריט", None)
-        elif user.role == UserRole.STATION_OWNER:
-            # בעל תחנה - חזרה לפאנל בעל תחנה
-            from app.domain.services.station_service import StationService
-            station_service = StationService(db)
-            station = await station_service.get_station_by_owner(user.id)
-
-            if station:
-                await state_manager.force_state(
-                    user.id, "telegram",
-                    StationOwnerState.MENU.value,
-                    context={}
-                )
-                handler = StationOwnerStateHandler(db, station.id)
+                handler = CourierStateHandler(db)
                 response, new_state = await handler.handle_message(user, "תפריט", None)
             else:
-                # בעל תחנה ללא תחנה פעילה - ניתוב לשולח
-                from app.state_machine.states import SenderState
-                await state_manager.force_state(user.id, "telegram", SenderState.MENU.value, context={})
-                handler = SenderStateHandler(db)
-                response, new_state = await handler.handle_message(
-                    user_id=user.id,
-                    platform="telegram",
-                    message="תפריט"
-                )
+                response, new_state = await _route_to_role_menu(user, db, state_manager)
         else:
-            from app.state_machine.states import SenderState
-
-            await state_manager.force_state(user.id, "telegram", SenderState.MENU.value, context={})
-            handler = SenderStateHandler(db)
-            response, new_state = await handler.handle_message(
-                user_id=user.id,
-                platform="telegram",
-                message="תפריט"
-            )
+            response, new_state = await _route_to_role_menu(user, db, state_manager)
 
         background_tasks.add_task(
             send_telegram_message,
@@ -435,57 +461,17 @@ async def telegram_webhook(
     if text.strip() == "#":
         # רענון מהDB לפני בדיקת סטטוס - למניעת stale data אם האדמין אישר בינתיים
         await db.refresh(user)
-        # Reset state to menu
-        if user.role == UserRole.COURIER:
-            # בדיקה אם השליח לא מאושר (כולל None, PENDING, REJECTED, BLOCKED)
-            # אפשר לו לחזור להיות שולח רגיל
-            if user.approval_status != ApprovalStatus.APPROVED:
-                # מחזירים אותו להיות שולח רגיל
-                user.role = UserRole.SENDER
-                await db.commit()
-                # מאפסים את ה-state machine ומנקים context
-                from app.state_machine.states import SenderState
-                await state_manager.force_state(user.id, "telegram", SenderState.MENU.value, context={})
-                # מציגים הודעת ברוכים הבאים מחדש
-                background_tasks.add_task(send_welcome_message, chat_id)
-                return {"ok": True, "new_state": SenderState.MENU.value, "switched_from_non_approved_courier": True}
 
-            await state_manager.force_state(user.id, "telegram", CourierState.MENU.value, context={})
-            handler = CourierStateHandler(db)
-            response, new_state = await handler.handle_message(user, "תפריט", None)
-        elif user.role == UserRole.STATION_OWNER:
-            # בעל תחנה - חזרה לפאנל בעל תחנה
-            from app.domain.services.station_service import StationService
-            station_service = StationService(db)
-            station = await station_service.get_station_by_owner(user.id)
-
-            if station:
-                await state_manager.force_state(
-                    user.id, "telegram",
-                    StationOwnerState.MENU.value,
-                    context={}
-                )
-                handler = StationOwnerStateHandler(db, station.id)
-                response, new_state = await handler.handle_message(user, "תפריט", None)
-            else:
-                # בעל תחנה ללא תחנה פעילה - ניתוב לשולח
-                from app.state_machine.states import SenderState
-                await state_manager.force_state(user.id, "telegram", SenderState.MENU.value, context={})
-                handler = SenderStateHandler(db)
-                response, new_state = await handler.handle_message(
-                    user_id=user.id,
-                    platform="telegram",
-                    message="תפריט"
-                )
-        else:
+        if user.role == UserRole.COURIER and user.approval_status != ApprovalStatus.APPROVED:
+            # שליח לא מאושר - מחזירים אותו להיות שולח רגיל
+            user.role = UserRole.SENDER
+            await db.commit()
             from app.state_machine.states import SenderState
             await state_manager.force_state(user.id, "telegram", SenderState.MENU.value, context={})
-            handler = SenderStateHandler(db)
-            response, new_state = await handler.handle_message(
-                user_id=user.id,
-                platform="telegram",
-                message="תפריט"
-            )
+            background_tasks.add_task(send_welcome_message, chat_id)
+            return {"ok": True, "new_state": SenderState.MENU.value, "switched_from_non_approved_courier": True}
+
+        response, new_state = await _route_to_role_menu(user, db, state_manager)
 
         background_tasks.add_task(
             send_telegram_message,
@@ -513,7 +499,8 @@ async def telegram_webhook(
     )
     _is_in_multi_step_flow = (
         _is_courier_in_registration
-        or (isinstance(_current_state_value, str) and _current_state_value.startswith("DISPATCHER."))
+        or (isinstance(_current_state_value, str)
+            and _current_state_value.startswith(("DISPATCHER.", "STATION.")))
     )
 
     if not _is_in_multi_step_flow:
@@ -611,8 +598,8 @@ async def telegram_webhook(
 
     # ==================== ניתוב לפי תפקיד [שלב 3] ====================
 
-    # בדיקת מצב נוכחי - אם המשתמש באמצע זרימת סדרן או בעל תחנה
-    current_state = await state_manager.get_current_state(user.id, "telegram")
+    # שימוש חוזר ב-_current_state_value שכבר חושב למעלה (שורה 502)
+    current_state = _current_state_value
 
     # ניתוב לבעל תחנה [שלב 3.3]
     if user.role == UserRole.STATION_OWNER:
