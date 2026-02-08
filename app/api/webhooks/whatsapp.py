@@ -225,6 +225,23 @@ def _get_whatsapp_admin_numbers() -> set[str]:
     return normalized
 
 
+def _is_whatsapp_admin_any(*identifiers: str) -> bool:
+    """
+    בדיקה אם אחד המזהים שייך למנהל.
+    תומך בכמה מזהים במקביל (sender_id / reply_to / from_number).
+    """
+    wa_admin_numbers = _get_whatsapp_admin_numbers()
+    if not wa_admin_numbers:
+        return False
+
+    for identifier in identifiers:
+        normalized = _normalize_whatsapp_identifier(identifier)
+        if normalized and normalized in wa_admin_numbers:
+            return True
+
+    return False
+
+
 def _is_whatsapp_admin(sender_id: str) -> bool:
     """
     בדיקה אם השולח הוא מנהל - תומך בנרמול:
@@ -232,32 +249,35 @@ def _is_whatsapp_admin(sender_id: str) -> bool:
     - 050... לעומת 972...
     - +972 מול 972
     """
-    wa_admin_numbers = _get_whatsapp_admin_numbers()
-    if not wa_admin_numbers:
-        return False
-    normalized_sender = _normalize_whatsapp_identifier(sender_id)
-    if not normalized_sender:
-        return False
-    return normalized_sender in wa_admin_numbers
+    return _is_whatsapp_admin_any(sender_id)
 
 
-def _resolve_admin_send_target(sender_id: str, reply_to: str) -> str:
+def _resolve_admin_send_target(
+    sender_id: str, reply_to: str, from_number: str | None = None
+) -> str:
     """
     מציאת כתובת שליחה למנהל — מעדיף את המספר מההגדרות (שאנחנו יודעים שעובד).
 
     כרטיס הנהג נשלח למנהל דרך המספר שבהגדרות (WHATSAPP_ADMIN_NUMBERS) ומגיע בהצלחה.
     אבל כש-reply_to הוא @lid, הגטוויי עשוי לא להצליח לשלוח אליו.
-    לכן אם אנחנו מזהים שה-sender_id תואם למספר מנהל מההגדרות — נשלח למספר ההגדרות.
+    לכן אם אנחנו מזהים התאמה לפי sender_id / reply_to / from_number — נשלח למספר ההגדרות.
     """
-    normalized_sender = _normalize_whatsapp_identifier(sender_id)
-    if not normalized_sender:
+    normalized_candidates = {
+        _normalize_whatsapp_identifier(sender_id),
+        _normalize_whatsapp_identifier(reply_to),
+    }
+    if from_number:
+        normalized_candidates.add(_normalize_whatsapp_identifier(from_number))
+    normalized_candidates.discard("")
+
+    if not normalized_candidates:
         return reply_to
 
     for raw in settings.WHATSAPP_ADMIN_NUMBERS.split(","):
         raw = raw.strip()
         if not raw:
             continue
-        if _normalize_whatsapp_identifier(raw) == normalized_sender:
+        if _normalize_whatsapp_identifier(raw) in normalized_candidates:
             logger.debug(
                 "Using admin number from settings for reply",
                 extra_data={
@@ -489,6 +509,7 @@ async def whatsapp_webhook(
         text = message.text or ""
         sender_id = (message.sender_id or message.from_number or "").strip()
         reply_to = (message.reply_to or message.from_number or "").strip()
+        from_number = (message.from_number or "").strip()
         # תמונות רגילות (media_type מכיל 'image')
         # או מסמך שהוא בעצם תמונה (media_type=document + mime_type מתחיל ב-image/)
         if message.media_url and message.media_type:
@@ -567,7 +588,8 @@ async def whatsapp_webhook(
         # טיפול בפקודות אישור/דחייה מהודעות פרטיות של מנהלים
         # חייב להיות לפני בדיקת is_new_user כדי שמנהל חדש שעוד לא ב-DB
         # יוכל לאשר/לדחות שליחים כבר מההודעה הראשונה שלו
-        if _is_whatsapp_admin(sender_id) and text:
+        is_admin_sender = _is_whatsapp_admin_any(sender_id, reply_to, from_number)
+        if is_admin_sender and text:
             admin_response = await handle_admin_private_command(
                 db,
                 text,
@@ -577,7 +599,9 @@ async def whatsapp_webhook(
             if admin_response:
                 # שליחת התגובה למספר המנהל מההגדרות (שאנחנו יודעים שעובד)
                 # במקום ל-reply_to (שעלול להיות @lid שהגטוויי לא יודע לשלוח אליו)
-                admin_send_to = _resolve_admin_send_target(sender_id, reply_to)
+                admin_send_to = _resolve_admin_send_target(
+                    sender_id, reply_to, from_number
+                )
                 background_tasks.add_task(send_whatsapp_message, admin_send_to, admin_response)
                 responses.append({
                     "from": sender_id,
@@ -616,7 +640,7 @@ async def whatsapp_webhook(
 
             # אדמין (לפי WHATSAPP_ADMIN_NUMBERS): מאפשרים יציאה "קשיחה" מכל זרימה וחזרה לתפריט הראשי
             # של כל אפשרויות הרישום - בלי לשנות role ב-DB (כדי לא למחוק STATION_OWNER וכו').
-            if _is_whatsapp_admin(sender_id):
+            if is_admin_sender:
                 from app.state_machine.states import SenderState
 
                 # איפוס state כדי לאפשר עבודה עם תפריט ראשי גם אם האדמין היה באמצע זרימה רב-שלבית כשליח
@@ -628,7 +652,9 @@ async def whatsapp_webhook(
                 )
 
                 # שליחה למספר המנהל מההגדרות (reply_to עלול להיות @lid)
-                admin_send_to = _resolve_admin_send_target(sender_id, reply_to)
+                admin_send_to = _resolve_admin_send_target(
+                    sender_id, reply_to, from_number
+                )
                 background_tasks.add_task(send_welcome_message, admin_send_to)
                 responses.append(
                     {
@@ -704,9 +730,7 @@ async def whatsapp_webhook(
             and _current_state_value.startswith(("DISPATCHER.", "STATION."))
         )
         _context = await state_manager.get_context(user.id, "whatsapp")
-        _admin_root_menu = bool(_context.get("admin_root_menu")) and _is_whatsapp_admin(
-            sender_id
-        )
+        _admin_root_menu = bool(_context.get("admin_root_menu")) and is_admin_sender
 
         if not _is_in_multi_step_flow:
             if (
