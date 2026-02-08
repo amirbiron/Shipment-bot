@@ -292,6 +292,11 @@ async def _route_to_role_menu(
             "Station owner without active station, falling back to sender menu",
             extra_data={"user_id": user.id}
         )
+        await state_manager.force_state(user.id, "telegram", SenderState.MENU.value, context={})
+        handler = SenderStateHandler(db)
+        return await handler.handle_message(
+            user_id=user.id, platform="telegram", message="תפריט"
+        )
 
     if user.role == UserRole.SENDER:
         await state_manager.force_state(user.id, "telegram", SenderState.MENU.value, context={})
