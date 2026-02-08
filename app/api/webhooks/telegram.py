@@ -657,7 +657,7 @@ async def telegram_webhook(
 
         if station:
             # כפתור "חזרה לתפריט נהג" מחזיר לתפריט הנהג הרגיל
-            if "חזרה לתפריט נהג" in text or "חזרה לתפריט" in text:
+            if "חזרה לתפריט נהג" in text:
                 await state_manager.force_state(
                     user.id, "telegram",
                     CourierState.MENU.value,

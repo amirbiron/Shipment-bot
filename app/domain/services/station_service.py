@@ -57,12 +57,12 @@ class StationService:
         return result.scalar_one_or_none()
 
     async def get_station_by_owner(self, owner_id: int) -> Optional[Station]:
-        """קבלת תחנה לפי בעל התחנה"""
+        """קבלת תחנה לפי בעל התחנה (מחזיר את הראשונה אם יש יותר מאחת)"""
         result = await self.db.execute(
             select(Station).where(
                 Station.owner_id == owner_id,
                 Station.is_active == True  # noqa: E712
-            )
+            ).limit(1)
         )
         return result.scalar_one_or_none()
 
