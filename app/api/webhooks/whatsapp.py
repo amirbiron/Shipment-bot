@@ -187,25 +187,48 @@ async def send_whatsapp_message(phone_number: str, text: str, keyboard: list = N
         )
 
 
+def _normalize_whatsapp_identifier(value: str) -> str:
+    """נרמול מזהה וואטסאפ (מספר/מזהה) להשוואה עקבית"""
+    if not value:
+        return ""
+    base = value.strip()
+    if "@" in base:
+        base = base.split("@")[0]
+    digits = re.sub(r"\D", "", base)
+    if not digits:
+        return ""
+    if digits.startswith("0"):
+        digits = "972" + digits[1:]
+    return digits
+
+
 def _get_whatsapp_admin_numbers() -> set[str]:
-    """מחזיר סט מספרי מנהלים פרטיים לוואטסאפ"""
-    return {n.strip() for n in settings.WHATSAPP_ADMIN_NUMBERS.split(",") if n.strip()}
+    """מחזיר סט מספרי מנהלים פרטיים לוואטסאפ (מנורמלים)"""
+    normalized = set()
+    for raw in settings.WHATSAPP_ADMIN_NUMBERS.split(","):
+        raw = raw.strip()
+        if not raw:
+            continue
+        normalized_value = _normalize_whatsapp_identifier(raw)
+        if normalized_value:
+            normalized.add(normalized_value)
+    return normalized
 
 
 def _is_whatsapp_admin(sender_id: str) -> bool:
     """
-    בדיקה אם השולח הוא מנהל - תומך בפורמטים @lid ו-@c.us.
-    ה-sender_id מגיע בפורמט כמו '972501234567@lid' אבל ההגדרות
-    מכילות מספרים רגילים כמו '972501234567'. נרמול ע"י הסרת הסיומת.
+    בדיקה אם השולח הוא מנהל - תומך בנרמול:
+    - @lid / @c.us
+    - 050... לעומת 972...
+    - +972 מול 972
     """
     wa_admin_numbers = _get_whatsapp_admin_numbers()
     if not wa_admin_numbers:
         return False
-    if sender_id in wa_admin_numbers:
-        return True
-    # הסרת סיומת WhatsApp (@lid, @c.us) והשוואה מחדש
-    sender_base = sender_id.split("@")[0]
-    return any(admin.split("@")[0] == sender_base for admin in wa_admin_numbers)
+    normalized_sender = _normalize_whatsapp_identifier(sender_id)
+    if not normalized_sender:
+        return False
+    return normalized_sender in wa_admin_numbers
 
 
 def _match_approval_command(text: str) -> tuple[str, int] | None:
