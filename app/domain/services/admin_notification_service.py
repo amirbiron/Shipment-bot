@@ -149,13 +149,20 @@ class AdminNotificationService:
   - סלפי: {tg_selfie_status}
   - תמונת רכב: {tg_vehicle_status}"""
 
-            # כפתורי inline רק בצ'אט פרטי; בקבוצה - הודעה רגילה בלבד
+            # כפתורי inline רק בצ'אט פרטי; בקבוצה - הנחיות טקסטואליות
             # (כפתורי inline לא עובדים בקבוצה כי בדיקת ההרשאה
             #  מזהה לפי from_user.id שלא תואם ל-group ID)
-            inline_keyboard = None if is_tg_fallback_to_group else [[
-                {"text": "✅ אשר", "callback_data": f"approve_courier_{user_id}"},
-                {"text": "❌ דחה", "callback_data": f"reject_courier_{user_id}"},
-            ]]
+            if is_tg_fallback_to_group:
+                tg_message += f"""
+
+✅ לאישור: <code>אשר {user_id}</code>
+❌ לדחייה: <code>דחה {user_id}</code>"""
+                inline_keyboard = None
+            else:
+                inline_keyboard = [[
+                    {"text": "✅ אשר", "callback_data": f"approve_courier_{user_id}"},
+                    {"text": "❌ דחה", "callback_data": f"reject_courier_{user_id}"},
+                ]]
 
             for admin_id in tg_admin_ids:
                 if inline_keyboard:

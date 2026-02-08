@@ -212,13 +212,12 @@ async def _handle_whatsapp_approval(
     action: str,
     courier_id: int,
     admin_name: str,
+    background_tasks: BackgroundTasks = None,
 ) -> str:
     """
     ביצוע אישור/דחייה + שליחת הודעה לשליח + סיכום לקבוצה.
     משותף לפקודות מקבוצה ומפרטי.
     """
-    import asyncio
-
     if action == "approve":
         result = await CourierApprovalService.approve(db, courier_id)
     else:
@@ -229,20 +228,27 @@ async def _handle_whatsapp_approval(
 
     # הודעה לשליח וסיכום לקבוצה - ברקע כדי לא לחסום את ה-webhook
     from app.api.webhooks.telegram import send_telegram_message
-    asyncio.create_task(
-        CourierApprovalService.notify_after_decision(
+    if background_tasks:
+        background_tasks.add_task(
+            CourierApprovalService.notify_after_decision,
             result.user, action, admin_name,
             send_telegram_fn=send_telegram_message,
             send_whatsapp_fn=send_whatsapp_message,
         )
-    )
+    else:
+        await CourierApprovalService.notify_after_decision(
+            result.user, action, admin_name,
+            send_telegram_fn=send_telegram_message,
+            send_whatsapp_fn=send_whatsapp_message,
+        )
 
     return result.message
 
 
 async def handle_admin_group_command(
     db: AsyncSession,
-    text: str
+    text: str,
+    background_tasks: BackgroundTasks = None,
 ) -> Optional[str]:
     """
     טיפול בפקודות מנהל מקבוצת הוואטסאפ (תאימות לאחור).
@@ -253,13 +259,17 @@ async def handle_admin_group_command(
         return None
 
     action, user_id = parsed
-    return await _handle_whatsapp_approval(db, action, user_id, admin_name="מנהל (קבוצה)")
+    return await _handle_whatsapp_approval(
+        db, action, user_id, admin_name="מנהל (קבוצה)",
+        background_tasks=background_tasks,
+    )
 
 
 async def handle_admin_private_command(
     db: AsyncSession,
     text: str,
     admin_name: str,
+    background_tasks: BackgroundTasks = None,
 ) -> Optional[str]:
     """
     טיפול בפקודות אישור/דחייה מהודעות פרטיות של מנהלים.
@@ -269,7 +279,10 @@ async def handle_admin_private_command(
         return None
 
     action, user_id = parsed
-    return await _handle_whatsapp_approval(db, action, user_id, admin_name=admin_name)
+    return await _handle_whatsapp_approval(
+        db, action, user_id, admin_name=admin_name,
+        background_tasks=background_tasks,
+    )
 
 
 async def send_welcome_message(phone_number: str):
@@ -343,7 +356,7 @@ async def whatsapp_webhook(
                 )
 
                 # ניסיון לזהות פקודת מנהל
-                response_text = await handle_admin_group_command(db, text)
+                response_text = await handle_admin_group_command(db, text, background_tasks=background_tasks)
 
                 if response_text:
                     # שליחת תגובה לקבוצה
@@ -379,7 +392,8 @@ async def whatsapp_webhook(
         wa_admin_numbers = _get_whatsapp_admin_numbers()
         if sender_id in wa_admin_numbers and text:
             admin_response = await handle_admin_private_command(
-                db, text, admin_name=user.name or PhoneNumberValidator.mask(sender_id)
+                db, text, admin_name=user.name or PhoneNumberValidator.mask(sender_id),
+                background_tasks=background_tasks,
             )
             if admin_response:
                 background_tasks.add_task(send_whatsapp_message, reply_to, admin_response)
