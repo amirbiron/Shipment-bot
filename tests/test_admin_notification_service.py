@@ -100,6 +100,76 @@ async def test_notify_new_courier_registration_sends_whatsapp_and_sends_media(mo
 
 
 @pytest.mark.unit
+async def test_whatsapp_photos_sent_even_when_text_message_fails(monkeypatch):
+    """תמונות נשלחות גם אם שליחת ההודעה הטקסטית נכשלה"""
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", None)
+    monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_ID", None)
+    monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_IDS", "")
+    monkeypatch.setattr(settings, "WHATSAPP_ADMIN_GROUP_ID", "")
+    monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "admin1")
+    monkeypatch.setattr(settings, "WHATSAPP_GATEWAY_URL", "http://localhost:3000")
+
+    # הודעה טקסטית נכשלת - גם עם כפתורים וגם בלי (fallback)
+    send_mock = AsyncMock(return_value=False)
+    photo_mock = AsyncMock(return_value=True)
+
+    monkeypatch.setattr(AdminNotificationService, "_send_whatsapp_admin_message", send_mock)
+    monkeypatch.setattr(AdminNotificationService, "_send_whatsapp_admin_photo", photo_mock)
+
+    ok = await AdminNotificationService.notify_new_courier_registration(
+        user_id=10,
+        full_name="Photo Test",
+        service_area="חיפה",
+        phone_or_chat_id="972500000000@c.us",
+        document_file_id="https://example.com/doc.jpg",
+        selfie_file_id="https://example.com/selfie.jpg",
+        platform="whatsapp",
+    )
+
+    # התמונות נשלחו בהצלחה גם שהטקסט נכשל - success=True
+    assert ok is True
+    # send_mock נקרא 2 פעמים: פעם עם keyboard ופעם בלי (fallback)
+    assert send_mock.await_count == 2
+    # photo_mock נקרא 2 פעמים: document + selfie
+    assert photo_mock.await_count == 2
+
+
+@pytest.mark.unit
+async def test_whatsapp_keyboard_fallback_on_failure(monkeypatch):
+    """אם שליחת הודעה עם כפתורים נכשלת, ננסה בלי כפתורים"""
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", None)
+    monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_ID", None)
+    monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_IDS", "")
+    monkeypatch.setattr(settings, "WHATSAPP_ADMIN_GROUP_ID", "")
+    monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "admin1")
+    monkeypatch.setattr(settings, "WHATSAPP_GATEWAY_URL", "http://localhost:3000")
+
+    call_args_list = []
+
+    async def _track_send(target, text, keyboard=None):
+        call_args_list.append({"target": target, "keyboard": keyboard})
+        # נכשל עם keyboard, מצליח בלי
+        return keyboard is None
+
+    monkeypatch.setattr(AdminNotificationService, "_send_whatsapp_admin_message", _track_send)
+    monkeypatch.setattr(AdminNotificationService, "_send_whatsapp_admin_photo", AsyncMock(return_value=True))
+
+    ok = await AdminNotificationService.notify_new_courier_registration(
+        user_id=11,
+        full_name="Fallback Test",
+        service_area="באר שבע",
+        phone_or_chat_id="972500000001@c.us",
+        platform="whatsapp",
+    )
+
+    assert ok is True
+    # קריאה ראשונה עם keyboard, קריאה שנייה בלי
+    assert len(call_args_list) == 2
+    assert call_args_list[0]["keyboard"] is not None
+    assert call_args_list[1]["keyboard"] is None
+
+
+@pytest.mark.unit
 async def test_send_telegram_message_non_200_returns_false(monkeypatch):
     monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "test-token")
     monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_ID", "admin-chat")

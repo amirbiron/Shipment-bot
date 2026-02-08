@@ -44,6 +44,8 @@ class WhatsAppMessage(BaseModel):
     # Support for media messages
     media_url: Optional[str] = None
     media_type: Optional[str] = None
+    # סוג MIME של המדיה (למשל image/jpeg) - לזיהוי מסמכים שהם בעצם תמונות
+    mime_type: Optional[str] = None
 
 
 class WhatsAppWebhookPayload(BaseModel):
@@ -410,8 +412,18 @@ async def whatsapp_webhook(
         text = message.text or ""
         sender_id = (message.sender_id or message.from_number or "").strip()
         reply_to = (message.reply_to or message.from_number or "").strip()
-        # Accept image media (WPPConnect may return 'image' or have image in mimetype)
-        photo_file_id = message.media_url if message.media_type and 'image' in message.media_type.lower() else None
+        # תמונות רגילות (media_type מכיל 'image')
+        # או מסמך שהוא בעצם תמונה (media_type=document + mime_type מתחיל ב-image/)
+        if message.media_url and message.media_type:
+            mt = message.media_type.lower()
+            if 'image' in mt:
+                photo_file_id = message.media_url
+            elif 'document' in mt and message.mime_type and message.mime_type.startswith('image/'):
+                photo_file_id = message.media_url
+            else:
+                photo_file_id = None
+        else:
+            photo_file_id = None
 
         logger.debug(
             "WhatsApp message received",
