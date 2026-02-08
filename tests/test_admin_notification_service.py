@@ -272,6 +272,41 @@ async def test_forward_photo_no_double_can_execute(monkeypatch):
 
 
 @pytest.mark.unit
+async def test_forward_photo_fast_fails_when_cb_open(monkeypatch):
+    """כש-CB פתוח (טלגרם למטה) — fast-fail, לא מנסים לשלוח בכלל"""
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "test-token")
+
+    class _OpenCB:
+        async def can_execute(self):
+            return False
+
+        async def record_success(self):
+            pass
+
+        async def record_failure(self, e=None):
+            pass
+
+    monkeypatch.setattr(
+        "app.domain.services.admin_notification_service.get_telegram_circuit_breaker",
+        lambda: _OpenCB(),
+    )
+
+    # לא צריכים mock ל-httpx כי הקוד לא אמור להגיע אליו בכלל
+    with patch("app.domain.services.admin_notification_service.httpx.AsyncClient") as mock_client:
+        mock_instance = AsyncMock()
+        mock_instance.post = AsyncMock()
+        mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+        mock_instance.__aexit__ = AsyncMock(return_value=None)
+        mock_client.return_value = mock_instance
+
+        ok = await AdminNotificationService._forward_photo("chat-1", "file-123")
+
+    assert ok is False
+    # לא נעשתה שום קריאת HTTP
+    mock_instance.post.assert_not_awaited()
+
+
+@pytest.mark.unit
 async def test_send_telegram_message_non_200_returns_false(monkeypatch):
     monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "test-token")
     monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_ID", "admin-chat")

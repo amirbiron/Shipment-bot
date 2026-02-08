@@ -439,7 +439,7 @@ class AdminNotificationService:
         מנסה קודם sendPhoto; אם נכשל (למשל file_id ממסמך) — fallback ל-sendDocument.
         ניסיון sendPhoto נעשה בלי circuit breaker כי כשלון צפוי (file_id ממסמך)
         לא צריך להשפיע על ה-circuit breaker המשותף.
-        אם ה-CB כבר פתוח — מדלגים ישירות ל-sendDocument דרך ה-CB (fast-fail).
+        אם ה-CB כבר פתוח — fast-fail (מחזיר False מיד, לא מנסה בכלל).
         """
         if not settings.TELEGRAM_BOT_TOKEN:
             logger.warning("Telegram bot token not configured for photo forwarding")
@@ -452,29 +452,35 @@ class AdminNotificationService:
         # שומרים את התוצאה כדי לא לקרוא can_execute פעמיים (כל קריאה צורכת slot ב-HALF_OPEN).
         cb_allows = await circuit_breaker.can_execute()
 
-        # ניסיון ראשון: sendPhoto — בלי circuit breaker כי כשלון כאן צפוי
-        # (file_id ממסמך לא עובד עם sendPhoto).
-        # אם ה-CB פתוח (טלגרם למטה) — מדלגים כדי לא לחכות 30 שניות לחינם.
-        if cb_allows:
-            try:
-                async with httpx.AsyncClient() as client:
-                    response = await client.post(
-                        f"{base_url}/sendPhoto",
-                        json={"chat_id": chat_id, "photo": file_id},
-                        timeout=30.0,
-                    )
-                    if response.status_code == 200:
-                        # דיווח הצלחה ל-CB כדי שלא יישאר תקוע ב-HALF_OPEN
-                        await circuit_breaker.record_success()
-                        return True
-            except Exception:
-                pass
-
-            # fallback: sendDocument — ידנית (בלי cb.execute) כדי לא לצרוך slot נוסף
+        # אם ה-CB פתוח (טלגרם למטה) — fast-fail, לא מנסים בכלל
+        if not cb_allows:
             logger.info(
-                "sendPhoto failed, retrying with sendDocument",
+                "Circuit breaker open, skipping photo forward",
                 extra_data={"chat_id": chat_id}
             )
+            return False
+
+        # ניסיון ראשון: sendPhoto — בלי circuit breaker כי כשלון כאן צפוי
+        # (file_id ממסמך לא עובד עם sendPhoto).
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{base_url}/sendPhoto",
+                    json={"chat_id": chat_id, "photo": file_id},
+                    timeout=30.0,
+                )
+                if response.status_code == 200:
+                    # דיווח הצלחה ל-CB כדי שלא יישאר תקוע ב-HALF_OPEN
+                    await circuit_breaker.record_success()
+                    return True
+        except Exception:
+            pass
+
+        # fallback: sendDocument — ידנית (בלי cb.execute) כדי לא לצרוך slot נוסף
+        logger.info(
+            "sendPhoto failed, retrying with sendDocument",
+            extra_data={"chat_id": chat_id}
+        )
 
         try:
             async with httpx.AsyncClient() as client:
