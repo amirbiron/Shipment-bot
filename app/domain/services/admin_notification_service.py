@@ -79,6 +79,7 @@ class AdminNotificationService:
 • אזור: {service_area}
 • רכב: {vehicle_display}
 • פלטפורמה: {platform}
+• ליצירת קשר: {phone_or_chat_id}
 
 📎 מסמכים:
   - ת.ז./רישיון: {doc_status}
@@ -143,6 +144,7 @@ class AdminNotificationService:
 • אזור: {service_area}
 • רכב: {vehicle_display}
 • פלטפורמה: {platform}
+• ליצירת קשר: {phone_or_chat_id}
 
 📎 <b>מסמכים:</b>
   - ת.ז./רישיון: {tg_doc_status}
