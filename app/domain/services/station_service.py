@@ -18,6 +18,7 @@ from app.db.models.delivery import Delivery, DeliveryStatus
 from app.db.models.user import User
 from app.core.logging import get_logger
 from app.core.validation import PhoneNumberValidator
+from app.core.exceptions import ValidationException
 from html import escape
 
 logger = get_logger(__name__)
@@ -227,6 +228,12 @@ class StationService:
 
     # ==================== חיוב ידני [3.2] ====================
 
+    @staticmethod
+    def _normalize_driver_name(name: str) -> str:
+        """נרמול שם נהג - הסרת רווחים מיותרים לעקביות בדוח גבייה"""
+        import re as _re
+        return _re.sub(r"\s+", " ", name.strip())
+
     async def create_manual_charge(
         self,
         station_id: int,
@@ -236,10 +243,14 @@ class StationService:
         description: str = ""
     ) -> ManualCharge:
         """יצירת חיוב ידני ע"י סדרן"""
+        if amount <= 0:
+            raise ValidationException("סכום החיוב חייב להיות חיובי", field="amount")
+
+        normalized_name = self._normalize_driver_name(driver_name)
         charge = ManualCharge(
             station_id=station_id,
             dispatcher_id=dispatcher_id,
-            driver_name=driver_name,
+            driver_name=normalized_name,
             amount=amount,
             description=description,
         )
@@ -256,7 +267,7 @@ class StationService:
             entry_type=StationLedgerEntryType.MANUAL_CHARGE,
             amount=amount,
             balance_after=wallet.balance,
-            description=f"חיוב ידני: {driver_name} - {description}",
+            description=f"חיוב ידני: {normalized_name} - {description}",
         )
         self.db.add(ledger_entry)
 
@@ -308,6 +319,9 @@ class StationService:
         fee: float
     ) -> None:
         """זיכוי עמלת תחנה (10% מהמשלוח)"""
+        if fee <= 0:
+            raise ValidationException("עמלת משלוח חייבת להיות חיובית", field="fee")
+
         wallet = await self._get_or_create_station_wallet(station_id, for_update=True)
         commission = fee * wallet.commission_rate
         wallet.balance += commission
