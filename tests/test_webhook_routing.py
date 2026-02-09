@@ -315,6 +315,136 @@ class TestMultiStepFlowGuard:
         # לא צריך ליפול לתשובת שיווק - צריך להישאר בזרימת בעל תחנה
         assert "new_state" in data
 
+    @pytest.mark.asyncio
+    async def test_sender_mid_flow_address_with_station_keyword_not_intercepted(
+        self, test_client, db_session, user_factory
+    ):
+        """שולח באמצע הזנת כתובת עם 'תחנה' לא נתפס ע\"י כפתור שיווקי"""
+        from app.state_machine.manager import StateManager
+        from app.state_machine.states import SenderState
+
+        sender = await user_factory(
+            phone_number="+972501111008",
+            name="Sender Addr",
+            role=UserRole.SENDER,
+            platform="telegram",
+            telegram_chat_id="81008",
+        )
+
+        # הגדרת state לאמצע יצירת משלוח (עיר איסוף)
+        state_manager = StateManager(db_session)
+        await state_manager.force_state(
+            sender.id,
+            "telegram",
+            SenderState.PICKUP_CITY.value,
+            {"pickup_city": ""},
+        )
+
+        resp = await test_client.post(
+            "/api/telegram/webhook",
+            json={
+                "update_id": 105,
+                "message": {
+                    "message_id": 105,
+                    "chat": {"id": 81008, "type": "private"},
+                    "text": "תחנה מרכזית",
+                    "date": 1700000000,
+                    "from": {"id": 81008, "first_name": "Sender"},
+                },
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        # צריך לעבור ל-state הבא בזרימה (רחוב), ולא לקבל הודעה שיווקית
+        assert data.get("new_state") == SenderState.PICKUP_STREET.value
+
+
+class TestStaleStateRoleMismatchReset:
+    """מוודא ש-state תקוע שלא תואם role מאופס כדי למנוע לולאות welcome"""
+
+    @pytest.mark.asyncio
+    async def test_sender_with_stale_station_state_is_reset(
+        self, test_client, db_session, user_factory
+    ):
+        from app.state_machine.manager import StateManager
+        from app.state_machine.states import StationOwnerState, SenderState
+
+        sender = await user_factory(
+            phone_number="+972501111009",
+            name="Sender Stale Station",
+            role=UserRole.SENDER,
+            platform="telegram",
+            telegram_chat_id="81009",
+        )
+
+        sm = StateManager(db_session)
+        await sm.force_state(
+            sender.id,
+            "telegram",
+            StationOwnerState.ADD_BLACKLIST_REASON.value,
+            {"blacklist_phone": "+972501234567"},
+        )
+
+        resp = await test_client.post(
+            "/api/telegram/webhook",
+            json={
+                "update_id": 106,
+                "message": {
+                    "message_id": 106,
+                    "chat": {"id": 81009, "type": "private"},
+                    "text": "שלום",
+                    "date": 1700000000,
+                    "from": {"id": 81009, "first_name": "Sender"},
+                },
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert data.get("new_state") == SenderState.MENU.value
+
+    @pytest.mark.asyncio
+    async def test_sender_with_stale_dispatcher_state_is_reset(
+        self, test_client, db_session, user_factory
+    ):
+        from app.state_machine.manager import StateManager
+        from app.state_machine.states import DispatcherState, SenderState
+
+        sender = await user_factory(
+            phone_number="+972501111010",
+            name="Sender Stale Dispatcher",
+            role=UserRole.SENDER,
+            platform="telegram",
+            telegram_chat_id="81010",
+        )
+
+        sm = StateManager(db_session)
+        await sm.force_state(
+            sender.id,
+            "telegram",
+            DispatcherState.ADD_SHIPMENT_PICKUP_CITY.value,
+            {"pickup_city": ""},
+        )
+
+        resp = await test_client.post(
+            "/api/telegram/webhook",
+            json={
+                "update_id": 107,
+                "message": {
+                    "message_id": 107,
+                    "chat": {"id": 81010, "type": "private"},
+                    "text": "שלום",
+                    "date": 1700000000,
+                    "from": {"id": 81010, "first_name": "Sender"},
+                },
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert data.get("new_state") == SenderState.MENU.value
+
 
 # ============================================================================
 # נרמול מזהי וואטסאפ וזיהוי מנהלים
