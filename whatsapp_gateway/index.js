@@ -79,6 +79,26 @@ function normalizeMediaPayload(mediaUrl, mediaType) {
     return { dataUrl, base64, mimeType };
 }
 
+function _formatMediaError(err) {
+    const message = err?.message || String(err || 'unknown');
+    const name = err?.name || typeof err;
+    const stack = err?.stack || null;
+    let raw = null;
+    try {
+        raw = JSON.stringify(err);
+    } catch (e) {
+        raw = null;
+    }
+    return { name, message, stack, raw };
+}
+
+function _logMediaFailure(label, err, meta = {}) {
+    console.log(label, {
+        ...meta,
+        error: _formatMediaError(err),
+    });
+}
+
 async function sendFileAuto(client, chatId, mediaUrl, rawBase64, filename, caption) {
     let lastError = null;
 
@@ -87,8 +107,12 @@ async function sendFileAuto(client, chatId, mediaUrl, rawBase64, filename, capti
             return await client.sendFileFromBase64(chatId, rawBase64, filename, caption);
         } catch (err) {
             lastError = err;
-            const errMsg = err?.message || String(err || 'unknown');
-            console.log('sendFileFromBase64 failed, retrying with sendFile:', errMsg);
+            _logMediaFailure('sendFileFromBase64 failed, retrying with sendFile', err, {
+                chatId,
+                filename,
+                hasBase64: true,
+                base64Length: rawBase64 ? rawBase64.length : 0,
+            });
         }
     }
 
@@ -96,9 +120,12 @@ async function sendFileAuto(client, chatId, mediaUrl, rawBase64, filename, capti
         return await client.sendFile(chatId, mediaUrl, filename, caption);
     } catch (err) {
         lastError = err;
-        const errMsg = err?.message || String(err || 'unknown');
         if (rawBase64) {
-            console.log('sendFile failed, trying temp file fallback:', errMsg);
+            _logMediaFailure('sendFile failed, trying temp file fallback', err, {
+                chatId,
+                filename,
+                mediaUrlPreview: String(mediaUrl || '').slice(0, 40),
+            });
             const tmpName = `wa_media_${Date.now()}_${Math.random().toString(16).slice(2)}_${filename}`;
             const tmpPath = path.join('/tmp', tmpName);
             try {
@@ -108,7 +135,7 @@ async function sendFileAuto(client, chatId, mediaUrl, rawBase64, filename, capti
                 try {
                     await fs.promises.unlink(tmpPath);
                 } catch (cleanupError) {
-                    console.log('Failed to cleanup temp media file:', cleanupError?.message || String(cleanupError));
+                    _logMediaFailure('Failed to cleanup temp media file', cleanupError, { tmpPath });
                 }
             }
         }
@@ -850,8 +877,11 @@ app.post('/send-media', async (req, res) => {
             try {
                 result = await client.sendImage(chatId, mediaUrlForSend, filename, captionText);
             } catch (imgError) {
-                const errMsg = imgError?.message || String(imgError || 'unknown');
-                console.log('sendImage failed, trying sendFile fallback:', errMsg);
+                _logMediaFailure('sendImage failed, trying sendFile fallback', imgError, {
+                    chatId,
+                    filename,
+                    mediaUrlPreview: String(mediaUrlForSend || '').slice(0, 40),
+                });
                 result = await sendFileAuto(client, chatId, mediaUrlForSend, rawBase64, filename, captionText);
             }
         }
@@ -874,6 +904,11 @@ app.post('/send-media', async (req, res) => {
                     try {
                         retryResult = await client.sendImage(lidChatId, mediaUrlForSend, filename, retryCaption);
                     } catch (imgErr) {
+                        _logMediaFailure('sendImage failed on @lid retry, trying sendFile fallback', imgErr, {
+                            chatId: lidChatId,
+                            filename,
+                            mediaUrlPreview: String(mediaUrlForSend || '').slice(0, 40),
+                        });
                         retryResult = await sendFileAuto(
                             client, lidChatId, mediaUrlForSend, rawBase64, filename, retryCaption
                         );
