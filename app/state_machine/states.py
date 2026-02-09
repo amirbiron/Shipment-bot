@@ -280,6 +280,11 @@ class StationOwnerState(str, Enum):
     ADD_BLACKLIST_REASON = "STATION.ADD_BLACKLIST.REASON"
     REMOVE_BLACKLIST_SELECT = "STATION.REMOVE_BLACKLIST.SELECT"
 
+    # שלב 4: הגדרות קבוצות תחנה
+    GROUP_SETTINGS = "STATION.GROUP_SETTINGS"
+    SET_PUBLIC_GROUP = "STATION.SET_PUBLIC_GROUP"
+    SET_PRIVATE_GROUP = "STATION.SET_PRIVATE_GROUP"
+
 
 STATION_OWNER_TRANSITIONS = {
     # תפריט ראשי
@@ -288,6 +293,7 @@ STATION_OWNER_TRANSITIONS = {
         StationOwnerState.VIEW_WALLET,
         StationOwnerState.COLLECTION_REPORT,
         StationOwnerState.VIEW_BLACKLIST,
+        StationOwnerState.GROUP_SETTINGS,
     ],
 
     # ניהול סדרנים
@@ -327,6 +333,21 @@ STATION_OWNER_TRANSITIONS = {
     ],
     StationOwnerState.REMOVE_BLACKLIST_SELECT: [
         StationOwnerState.VIEW_BLACKLIST,
+        StationOwnerState.MENU,
+    ],
+
+    # שלב 4: הגדרות קבוצות
+    StationOwnerState.GROUP_SETTINGS: [
+        StationOwnerState.SET_PUBLIC_GROUP,
+        StationOwnerState.SET_PRIVATE_GROUP,
+        StationOwnerState.MENU,
+    ],
+    StationOwnerState.SET_PUBLIC_GROUP: [
+        StationOwnerState.GROUP_SETTINGS,
+        StationOwnerState.MENU,
+    ],
+    StationOwnerState.SET_PRIVATE_GROUP: [
+        StationOwnerState.GROUP_SETTINGS,
         StationOwnerState.MENU,
     ],
 }

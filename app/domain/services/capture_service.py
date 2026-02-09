@@ -48,7 +48,7 @@ class CaptureService:
 
         This is the preferred method as it prevents ID guessing attacks.
         """
-        # First, get the delivery by token
+        # שליפת משלוח לפי טוקן
         result = await self.db.execute(
             select(Delivery).where(Delivery.token == token)
         )
@@ -57,7 +57,13 @@ class CaptureService:
         if not delivery:
             return False, "המשלוח לא נמצא (קישור לא תקין)", None
 
-        # Delegate to the ID-based capture
+        # שלב 4: משלוח של תחנה עובר דרך זרימת אישור
+        if delivery.station_id:
+            from app.domain.services.shipment_workflow_service import ShipmentWorkflowService
+            workflow = ShipmentWorkflowService(self.db)
+            return await workflow.request_delivery(delivery.id, courier_id)
+
+        # משלוח ישיר (ללא תחנה) - תפיסה ישירה
         return await self.capture_delivery(delivery.id, courier_id)
 
     async def capture_delivery(
@@ -84,8 +90,10 @@ class CaptureService:
             if not delivery:
                 return False, "המשלוח לא נמצא", None
 
-            # 2. Verify status is OPEN
-            if delivery.status != DeliveryStatus.OPEN:
+            # 2. Verify status is OPEN or PENDING_APPROVAL (שלב 4: אחרי אישור סדרן)
+            if delivery.status not in (
+                DeliveryStatus.OPEN, DeliveryStatus.PENDING_APPROVAL
+            ):
                 return False, "המשלוח כבר נתפס על ידי שליח אחר", None
 
             # 3. Lock courier wallet

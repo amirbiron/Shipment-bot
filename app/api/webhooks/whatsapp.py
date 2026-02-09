@@ -570,6 +570,56 @@ def _resolve_admin_send_target(
     return reply_to
 
 
+def _match_delivery_approval_command(text: str) -> tuple[str, int] | None:
+    """
+    שלב 4: זיהוי פקודת אישור/דחיית משלוח בטקסט.
+    מחזיר (action, delivery_id) או None.
+    תומך ב: "אשר משלוח 123", "דחה משלוח 123"
+    """
+    text = text.strip().replace("*", "")
+    text = re.sub(r'[\u200b\u200c\u200d\u200e\u200f\u202a-\u202e\ufeff]', '', text)
+    text = re.sub(r'\s+', ' ', text)
+
+    approve_match = re.match(
+        r'^[✅✔️☑️\s]*(?:אשר|אישור)\s+משלוח\s+(\d+)\s*$', text
+    )
+    if approve_match:
+        return ("approve", int(approve_match.group(1)))
+
+    reject_match = re.match(
+        r'^[❌✖️\s]*(?:דחה|דחייה|דחיה)\s+משלוח\s+(\d+)\s*$', text
+    )
+    if reject_match:
+        return ("reject", int(reject_match.group(1)))
+
+    return None
+
+
+async def _handle_whatsapp_delivery_approval(
+    db: AsyncSession,
+    action: str,
+    delivery_id: int,
+    dispatcher_name: str,
+    dispatcher_id: int,
+    background_tasks: BackgroundTasks = None,
+) -> str:
+    """שלב 4: ביצוע אישור/דחיית משלוח + הודעות"""
+    from app.domain.services.shipment_workflow_service import ShipmentWorkflowService
+
+    workflow = ShipmentWorkflowService(db)
+
+    if action == "approve":
+        success, msg, delivery = await workflow.approve_delivery(
+            delivery_id, dispatcher_id
+        )
+    else:
+        success, msg, delivery = await workflow.reject_delivery(
+            delivery_id, dispatcher_id
+        )
+
+    return msg
+
+
 def _match_approval_command(text: str) -> tuple[str, int] | None:
     """
     זיהוי פקודת אישור/דחייה בטקסט.
@@ -928,7 +978,33 @@ async def whatsapp_webhook(
                         "admin_command": True
                     })
                     continue
-    
+
+            # שלב 4: טיפול בפקודות אישור/דחיית משלוח (סדרנים)
+            if text and not is_new_user:
+                delivery_approval = _match_delivery_approval_command(text)
+                if delivery_approval:
+                    from app.domain.services.station_service import StationService
+                    station_service = StationService(db)
+                    is_disp = await station_service.is_dispatcher(user.id)
+
+                    if is_disp:
+                        action, delivery_id = delivery_approval
+                        approval_msg = await _handle_whatsapp_delivery_approval(
+                            db, action, delivery_id,
+                            dispatcher_name=user.name or "סדרן",
+                            dispatcher_id=user.id,
+                            background_tasks=background_tasks,
+                        )
+                        background_tasks.add_task(
+                            send_whatsapp_message, reply_to, approval_msg
+                        )
+                        responses.append({
+                            "from": sender_id,
+                            "response": approval_msg,
+                            "delivery_approval": True,
+                        })
+                        continue
+
             # Initialize state manager
             state_manager = StateManager(db)
     

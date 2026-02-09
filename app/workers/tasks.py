@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from app.workers.celery_app import celery_app
 from app.db.database import get_task_session
 from app.db.models.outbox_message import OutboxMessage, MessagePlatform, MessageStatus
-from app.db.models.user import User, UserRole
+from app.db.models.user import User, UserRole, ApprovalStatus
 from app.domain.services.outbox_service import OutboxService
 from app.core.logging import get_logger, set_correlation_id
 from app.core.circuit_breaker import get_telegram_circuit_breaker, get_whatsapp_circuit_breaker
@@ -141,13 +141,79 @@ async def _send_telegram_message(chat_id: str, content: dict) -> bool:
         return False
 
 
+async def _send_telegram_message_with_buttons(
+    chat_id: str, content: dict
+) -> bool:
+    """שלב 4: שליחת הודעת טלגרם עם כפתורי inline (אישור/דחייה)"""
+    import httpx
+    from app.core.config import settings
+
+    if not settings.TELEGRAM_BOT_TOKEN:
+        logger.warning("Telegram bot token not configured")
+        return False
+
+    circuit_breaker = get_telegram_circuit_breaker()
+
+    async def _send():
+        url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": chat_id,
+            "text": content.get("message_text", ""),
+            "parse_mode": "HTML",
+        }
+        # הוספת inline keyboard אם קיים בתוכן
+        if content.get("inline_keyboard"):
+            payload["reply_markup"] = {
+                "inline_keyboard": content["inline_keyboard"]
+            }
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, json=payload, timeout=30.0)
+            if response.status_code != 200:
+                raise TelegramError.from_response(
+                    "sendMessage",
+                    response,
+                    message=f"sendMessage returned status {response.status_code}",
+                )
+            return True
+
+    try:
+        return await circuit_breaker.execute(_send)
+    except Exception as e:
+        logger.error(
+            "Telegram send with buttons error",
+            extra_data={"chat_id": chat_id, "error": str(e)},
+            exc_info=True,
+        )
+        return False
+
+
 async def _get_courier_recipients(db, platform: MessagePlatform) -> list:
-    """Get all active couriers for the given platform"""
+    """שליפת שליחים מאושרים ופעילים לפלטפורמה נתונה"""
     result = await db.execute(
         select(User).where(
             User.role == UserRole.COURIER,
             User.is_active == True,
-            User.platform == platform.value
+            User.platform == platform.value,
+            User.approval_status == ApprovalStatus.APPROVED,  # שלב 4: רק שליחים מאושרים
+        )
+    )
+    return list(result.scalars().all())
+
+
+async def _get_dispatcher_recipients(
+    db, station_id: int, platform: MessagePlatform
+) -> list:
+    """שלב 4: שליפת סדרנים פעילים של תחנה לפלטפורמה נתונה"""
+    from app.db.models.station_dispatcher import StationDispatcher
+
+    result = await db.execute(
+        select(User).join(
+            StationDispatcher, StationDispatcher.user_id == User.id
+        ).where(
+            StationDispatcher.station_id == station_id,
+            StationDispatcher.is_active == True,
+            User.is_active == True,
+            User.platform == platform.value,
         )
     )
     return list(result.scalars().all())
@@ -224,6 +290,61 @@ async def _process_single_message(message: OutboxMessage) -> tuple:
                 else:
                     await outbox_service.mark_as_failed(message.id, "All recipients failed")
                     return False, "Broadcast failed"
+
+            # שלב 4: שידור לסדרני תחנה
+            elif message.recipient_id.startswith("BROADCAST_DISPATCHERS_"):
+                station_id = int(message.recipient_id.split("_")[-1])
+                recipients = await _get_dispatcher_recipients(
+                    db, station_id, message.platform
+                )
+
+                if not recipients:
+                    logger.warning(
+                        "Dispatcher broadcast has no recipients",
+                        extra_data={
+                            "message_id": message.id,
+                            "station_id": station_id,
+                            "platform": message.platform.value,
+                        }
+                    )
+                    await outbox_service.mark_as_failed(
+                        message.id,
+                        "No dispatchers available for station"
+                    )
+                    return False, "No dispatchers available"
+
+                if message.platform == MessagePlatform.WHATSAPP:
+                    tasks = [
+                        _send_whatsapp_message(r.phone_number, content)
+                        for r in recipients
+                    ]
+                else:
+                    # לטלגרם: שליחה עם inline keyboard אם יש בתוכן
+                    tasks = [
+                        _send_telegram_message_with_buttons(
+                            r.telegram_chat_id, content
+                        )
+                        for r in recipients if r.telegram_chat_id
+                    ]
+
+                if not tasks:
+                    await outbox_service.mark_as_failed(
+                        message.id,
+                        f"No valid dispatcher recipients for {message.platform.value}"
+                    )
+                    return False, "No valid dispatcher recipients"
+
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                success_count = sum(1 for r in results if r is True)
+
+                if success_count > 0:
+                    await outbox_service.mark_as_sent(message.id)
+                    return True, f"Sent to {success_count}/{len(results)} dispatchers"
+                else:
+                    await outbox_service.mark_as_failed(
+                        message.id, "All dispatchers failed"
+                    )
+                    return False, "Dispatcher broadcast failed"
 
             # Handle direct messages
             else:

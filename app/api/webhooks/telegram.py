@@ -718,6 +718,48 @@ async def telegram_webhook(
             )
             return {"ok": True}
 
+    # שלב 4: טיפול בכפתורי אישור/דחיית משלוח (סדרנים בלבד)
+    if event.is_callback:
+        delivery_action = re.match(r"^(approve|reject)_delivery_(\d+)$", text)
+        if delivery_action:
+            action = delivery_action.group(1)
+            delivery_id = int(delivery_action.group(2))
+
+            # זיהוי הלוחץ
+            user, _ = await get_or_create_user(db, telegram_user_id, name)
+
+            # בדיקה שהמשתמש הוא סדרן
+            from app.domain.services.station_service import StationService
+            station_service = StationService(db)
+            is_disp = await station_service.is_dispatcher(user.id)
+
+            if not is_disp:
+                background_tasks.add_task(
+                    send_telegram_message, send_chat_id,
+                    "❌ אין לך הרשאה לאשר/לדחות משלוחים."
+                )
+                return {"ok": True}
+
+            from app.domain.services.shipment_workflow_service import ShipmentWorkflowService
+            workflow = ShipmentWorkflowService(db)
+
+            if action == "approve":
+                success, msg, delivery = await workflow.approve_delivery(
+                    delivery_id, user.id
+                )
+            else:
+                success, msg, delivery = await workflow.reject_delivery(
+                    delivery_id, user.id
+                )
+
+            background_tasks.add_task(send_telegram_message, send_chat_id, msg)
+            return {
+                "ok": True,
+                "delivery_action": action,
+                "delivery_id": delivery_id,
+                "success": success,
+            }
+
     # Get or create user (מזהה לפי from_user.id כשאפשר)
     user, is_new_user = await get_or_create_user(db, telegram_user_id, name)
 
