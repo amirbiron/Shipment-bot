@@ -391,29 +391,32 @@ async def test_whatsapp_admin_returns_to_main_menu_after_courier_entry_via_conte
     רגרסיה: אדמין שנכנס לזרימת שליח ואז לוחץ # חוזר לתפריט ראשי —
     גם אם זיהוי אדמין לפי מספר נכשל (LID ששונה מהמספר בהגדרות).
     דגל entered_as_admin בקונטקסט משמש כ-fallback.
+
+    סימולציה: בשלב 1 הגטוויי שולח from_number אמיתי ואדמין מזוהה.
+    בשלב 2 הגטוויי שולח רק LID — זיהוי אדמין נכשל, fallback בקונטקסט עובד.
     """
-    # sender_id הוא LID שאי-אפשר לנרמל למספר אדמין
-    unknown_lid = "9999888877776666@lid"
+    # LID שמשמש כ-sender_id יציב (כמו בפרודקשן)
+    admin_lid = "9999888877776666@lid"
     admin_phone = "972501234567"
     monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", admin_phone)
 
-    # יצירת משתמש עם מספר שמתאים לאדמין — כדי שהכניסה לזרימת שליח תתעד entered_as_admin
+    # יצירת משתמש עם ה-LID כ-phone_number (כמו שנוצר בפרודקשן)
     admin_user = await user_factory(
-        phone_number=admin_phone,
+        phone_number=admin_lid,
         name="Admin Fallback",
         role=UserRole.SENDER,
         platform="whatsapp",
     )
 
-    # שלב 1: אדמין מוזהה (from_number=מספר אמיתי), נכנס לזרימת שליח
+    # שלב 1: הגטוויי שולח sender_id=LID אבל from_number=מספר אמיתי → אדמין מזוהה
     resp1 = await test_client.post(
         "/api/webhooks/whatsapp/webhook",
         json={
             "messages": [
                 {
                     "from_number": admin_phone,
-                    "sender_id": admin_phone,
-                    "reply_to": admin_phone,
+                    "sender_id": admin_lid,
+                    "reply_to": admin_lid,
                     "message_id": "m-enter-courier-1",
                     "text": "שליח",
                     "timestamp": 1700000000,
@@ -425,16 +428,16 @@ async def test_whatsapp_admin_returns_to_main_menu_after_courier_entry_via_conte
     await db_session.refresh(admin_user)
     assert admin_user.role == UserRole.COURIER
 
-    # שלב 2: אדמין שולח # אבל הפעם sender_id הוא LID לא מוכר (זיהוי אדמין נכשל)
+    # שלב 2: הגטוויי שולח רק LID בכל השדות → זיהוי אדמין נכשל
     # הקוד צריך לזהות entered_as_admin מהקונטקסט ולהחזיר לתפריט ראשי
     resp2 = await test_client.post(
         "/api/webhooks/whatsapp/webhook",
         json={
             "messages": [
                 {
-                    "from_number": admin_phone,
-                    "sender_id": admin_phone,
-                    "reply_to": admin_phone,
+                    "from_number": admin_lid,
+                    "sender_id": admin_lid,
+                    "reply_to": admin_lid,
                     "message_id": "m-hash-back-1",
                     "text": "#",
                     "timestamp": 1700000001,
@@ -445,6 +448,7 @@ async def test_whatsapp_admin_returns_to_main_menu_after_courier_entry_via_conte
     assert resp2.status_code == 200
     data = resp2.json()
     assert data["processed"] == 1
+    # הפעם הנתיב הוא fallback ולא admin_main_menu
     assert data["responses"][0]["response"].startswith("welcome")
 
     # אדמין חזר להיות שולח

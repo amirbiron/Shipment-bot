@@ -40,6 +40,9 @@ class WhatsAppMessage(BaseModel):
     sender_id: Optional[str] = None
     # יעד תשובה בפועל (יכול להיות phone@c.us או @lid). אם לא נשלח, ניפול ל-from_number.
     reply_to: Optional[str] = None
+    # מספר טלפון אמיתי שהגטוויי הצליח לחלץ מ-LID (למשל מ-formattedName או contact info).
+    # אופציונלי — אם קיים, משמש לזיהוי אדמין גם כשכל שאר המזהים הם LID.
+    resolved_phone: Optional[str] = None
     message_id: str
     text: str = ""
     timestamp: int
@@ -253,14 +256,18 @@ def _is_whatsapp_admin(sender_id: str) -> bool:
 
 
 def _resolve_admin_send_target(
-    sender_id: str, reply_to: str, from_number: str | None = None
+    sender_id: str,
+    reply_to: str,
+    from_number: str | None = None,
+    *extra_identifiers: str,
 ) -> str:
     """
     מציאת כתובת שליחה למנהל — מעדיף את המספר מההגדרות (שאנחנו יודעים שעובד).
 
     כרטיס הנהג נשלח למנהל דרך המספר שבהגדרות (WHATSAPP_ADMIN_NUMBERS) ומגיע בהצלחה.
     אבל כש-reply_to הוא @lid, הגטוויי עשוי לא להצליח לשלוח אליו.
-    לכן אם אנחנו מזהים התאמה לפי sender_id / reply_to / from_number — נשלח למספר ההגדרות.
+    לכן אם אנחנו מזהים התאמה לפי sender_id / reply_to / from_number / resolved_phone
+    — נשלח למספר ההגדרות.
     """
     normalized_candidates = {
         _normalize_whatsapp_identifier(sender_id),
@@ -268,6 +275,9 @@ def _resolve_admin_send_target(
     }
     if from_number:
         normalized_candidates.add(_normalize_whatsapp_identifier(from_number))
+    for ident in extra_identifiers:
+        if ident:
+            normalized_candidates.add(_normalize_whatsapp_identifier(ident))
     normalized_candidates.discard("")
 
     if not normalized_candidates:
@@ -510,6 +520,7 @@ async def whatsapp_webhook(
         sender_id = (message.sender_id or message.from_number or "").strip()
         reply_to = (message.reply_to or message.from_number or "").strip()
         from_number = (message.from_number or "").strip()
+        resolved_phone = (message.resolved_phone or "").strip()
         # תמונות רגילות (media_type מכיל 'image')
         # או מסמך שהוא בעצם תמונה (media_type=document + mime_type מתחיל ב-image/)
         if message.media_url and message.media_type:
@@ -587,8 +598,12 @@ async def whatsapp_webhook(
 
         # טיפול בפקודות אישור/דחייה מהודעות פרטיות של מנהלים
         # חייב להיות לפני בדיקת is_new_user כדי שמנהל חדש שעוד לא ב-DB
-        # יוכל לאשר/לדחות שליחים כבר מההודעה הראשונה שלו
-        is_admin_sender = _is_whatsapp_admin_any(sender_id, reply_to, from_number)
+        # יוכל לאשר/לדחות שליחים כבר מההודעה הראשונה שלו.
+        # בודקים גם resolved_phone (טלפון שהגטוויי חילץ מ-LID) וגם phone_number מה-DB
+        # (במקרה שהמשתמש נוצר לפני שהגטוויי עבר ל-LID).
+        is_admin_sender = _is_whatsapp_admin_any(
+            sender_id, reply_to, from_number, resolved_phone, user.phone_number
+        )
         if is_admin_sender and text:
             admin_response = await handle_admin_private_command(
                 db,
@@ -600,7 +615,7 @@ async def whatsapp_webhook(
                 # שליחת התגובה למספר המנהל מההגדרות (שאנחנו יודעים שעובד)
                 # במקום ל-reply_to (שעלול להיות @lid שהגטוויי לא יודע לשלוח אליו)
                 admin_send_to = _resolve_admin_send_target(
-                    sender_id, reply_to, from_number
+                    sender_id, reply_to, from_number, resolved_phone
                 )
                 background_tasks.add_task(send_whatsapp_message, admin_send_to, admin_response)
                 responses.append({
@@ -658,7 +673,7 @@ async def whatsapp_webhook(
 
                 # שליחה למספר המנהל מההגדרות (reply_to עלול להיות @lid)
                 admin_send_to = _resolve_admin_send_target(
-                    sender_id, reply_to, from_number
+                    sender_id, reply_to, from_number, resolved_phone
                 )
                 background_tasks.add_task(send_welcome_message, admin_send_to)
                 responses.append(
@@ -699,7 +714,15 @@ async def whatsapp_webhook(
                     await state_manager.force_state(
                         user.id, "whatsapp", SenderState.MENU.value, context={}
                     )
-                    background_tasks.add_task(send_welcome_message, reply_to)
+                    # אם נכנס כאדמין, שליחה ליעד מנהל (reply_to עלול להיות LID)
+                    _send_to = (
+                        _resolve_admin_send_target(
+                            sender_id, reply_to, from_number, resolved_phone
+                        )
+                        if _entered_as_admin
+                        else reply_to
+                    )
+                    background_tasks.add_task(send_welcome_message, _send_to)
                     responses.append(
                         {
                             "from": sender_id,
