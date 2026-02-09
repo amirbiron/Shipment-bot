@@ -40,6 +40,9 @@ class WhatsAppMessage(BaseModel):
     sender_id: Optional[str] = None
     # יעד תשובה בפועל (יכול להיות phone@c.us או @lid). אם לא נשלח, ניפול ל-from_number.
     reply_to: Optional[str] = None
+    # מספר טלפון אמיתי שהגטוויי הצליח לחלץ מ-LID (למשל מ-formattedName או contact info).
+    # אופציונלי — אם קיים, משמש לזיהוי אדמין גם כשכל שאר המזהים הם LID.
+    resolved_phone: Optional[str] = None
     message_id: str
     text: str = ""
     timestamp: int
@@ -253,14 +256,18 @@ def _is_whatsapp_admin(sender_id: str) -> bool:
 
 
 def _resolve_admin_send_target(
-    sender_id: str, reply_to: str, from_number: str | None = None
+    sender_id: str,
+    reply_to: str,
+    from_number: str | None = None,
+    *extra_identifiers: str,
 ) -> str:
     """
     מציאת כתובת שליחה למנהל — מעדיף את המספר מההגדרות (שאנחנו יודעים שעובד).
 
     כרטיס הנהג נשלח למנהל דרך המספר שבהגדרות (WHATSAPP_ADMIN_NUMBERS) ומגיע בהצלחה.
     אבל כש-reply_to הוא @lid, הגטוויי עשוי לא להצליח לשלוח אליו.
-    לכן אם אנחנו מזהים התאמה לפי sender_id / reply_to / from_number — נשלח למספר ההגדרות.
+    לכן אם אנחנו מזהים התאמה לפי sender_id / reply_to / from_number / resolved_phone
+    — נשלח למספר ההגדרות.
     """
     normalized_candidates = {
         _normalize_whatsapp_identifier(sender_id),
@@ -268,6 +275,9 @@ def _resolve_admin_send_target(
     }
     if from_number:
         normalized_candidates.add(_normalize_whatsapp_identifier(from_number))
+    for ident in extra_identifiers:
+        if ident:
+            normalized_candidates.add(_normalize_whatsapp_identifier(ident))
     normalized_candidates.discard("")
 
     if not normalized_candidates:
@@ -510,6 +520,7 @@ async def whatsapp_webhook(
         sender_id = (message.sender_id or message.from_number or "").strip()
         reply_to = (message.reply_to or message.from_number or "").strip()
         from_number = (message.from_number or "").strip()
+        resolved_phone = (message.resolved_phone or "").strip()
         # תמונות רגילות (media_type מכיל 'image')
         # או מסמך שהוא בעצם תמונה (media_type=document + mime_type מתחיל ב-image/)
         if message.media_url and message.media_type:
@@ -587,8 +598,12 @@ async def whatsapp_webhook(
 
         # טיפול בפקודות אישור/דחייה מהודעות פרטיות של מנהלים
         # חייב להיות לפני בדיקת is_new_user כדי שמנהל חדש שעוד לא ב-DB
-        # יוכל לאשר/לדחות שליחים כבר מההודעה הראשונה שלו
-        is_admin_sender = _is_whatsapp_admin_any(sender_id, reply_to, from_number)
+        # יוכל לאשר/לדחות שליחים כבר מההודעה הראשונה שלו.
+        # בודקים גם resolved_phone (טלפון שהגטוויי חילץ מ-LID) וגם phone_number מה-DB
+        # (במקרה שהמשתמש נוצר לפני שהגטוויי עבר ל-LID).
+        is_admin_sender = _is_whatsapp_admin_any(
+            sender_id, reply_to, from_number, resolved_phone, user.phone_number
+        )
         if is_admin_sender and text:
             admin_response = await handle_admin_private_command(
                 db,
@@ -600,7 +615,7 @@ async def whatsapp_webhook(
                 # שליחת התגובה למספר המנהל מההגדרות (שאנחנו יודעים שעובד)
                 # במקום ל-reply_to (שעלול להיות @lid שהגטוויי לא יודע לשלוח אליו)
                 admin_send_to = _resolve_admin_send_target(
-                    sender_id, reply_to, from_number
+                    sender_id, reply_to, from_number, resolved_phone
                 )
                 background_tasks.add_task(send_whatsapp_message, admin_send_to, admin_response)
                 responses.append({
@@ -639,9 +654,14 @@ async def whatsapp_webhook(
             )
 
             # אדמין (לפי WHATSAPP_ADMIN_NUMBERS): מאפשרים יציאה "קשיחה" מכל זרימה וחזרה לתפריט הראשי
-            # של כל אפשרויות הרישום - בלי לשנות role ב-DB (כדי לא למחוק STATION_OWNER וכו').
+            # של כל אפשרויות הרישום.
             if is_admin_sender:
                 from app.state_machine.states import SenderState
+
+                # שחזור תפקיד לשולח כדי שהודעות הבאות לא יגיעו ל-CourierStateHandler
+                if user.role == UserRole.COURIER:
+                    user.role = UserRole.SENDER
+                    await db.commit()
 
                 # איפוס state כדי לאפשר עבודה עם תפריט ראשי גם אם האדמין היה באמצע זרימה רב-שלבית כשליח
                 await state_manager.force_state(
@@ -653,7 +673,7 @@ async def whatsapp_webhook(
 
                 # שליחה למספר המנהל מההגדרות (reply_to עלול להיות @lid)
                 admin_send_to = _resolve_admin_send_target(
-                    sender_id, reply_to, from_number
+                    sender_id, reply_to, from_number, resolved_phone
                 )
                 background_tasks.add_task(send_welcome_message, admin_send_to)
                 responses.append(
@@ -667,35 +687,50 @@ async def whatsapp_webhook(
                 continue
 
             # Reset state to menu
-            if (
-                user.role == UserRole.COURIER
-                and user.approval_status != ApprovalStatus.APPROVED
-            ):
-                # שליח לא מאושר - מחזירים אותו להיות שולח רגיל
-                logger.info(
-                    "Non-approved courier pressed #, switching to sender",
-                    extra_data={
-                        "user_id": user.id,
-                        "phone": PhoneNumberValidator.mask(sender_id),
-                        "reply_to": PhoneNumberValidator.mask(reply_to),
-                    },
-                )
-                user.role = UserRole.SENDER
-                await db.commit()
-                from app.state_machine.states import SenderState
+            if user.role == UserRole.COURIER:
+                # בדיקה אם המשתמש נכנס לזרימת שליח מתפריט אדמין
+                # (fallback למקרה שזיהוי אדמין לפי מספר טלפון נכשל, למשל בגלל LID)
+                _hash_ctx = await state_manager.get_context(user.id, "whatsapp")
+                _entered_as_admin = _hash_ctx.get("entered_as_admin", False)
 
-                await state_manager.force_state(
-                    user.id, "whatsapp", SenderState.MENU.value, context={}
-                )
-                background_tasks.add_task(send_welcome_message, reply_to)
-                responses.append(
-                    {
-                        "from": sender_id,
-                        "response": "welcome (switched from non-approved courier)",
-                        "new_state": SenderState.MENU.value,
-                    }
-                )
-                continue
+                if user.approval_status != ApprovalStatus.APPROVED or _entered_as_admin:
+                    # שליח לא מאושר / אדמין שנכנס לזרימת שליח - מחזירים לתפריט ראשי
+                    logger.info(
+                        "Courier pressed #, switching to sender",
+                        extra_data={
+                            "user_id": user.id,
+                            "phone": PhoneNumberValidator.mask(sender_id),
+                            "reply_to": PhoneNumberValidator.mask(reply_to),
+                            "entered_as_admin": _entered_as_admin,
+                            "approval_status": (
+                                user.approval_status.value if user.approval_status else None
+                            ),
+                        },
+                    )
+                    user.role = UserRole.SENDER
+                    await db.commit()
+                    from app.state_machine.states import SenderState
+
+                    await state_manager.force_state(
+                        user.id, "whatsapp", SenderState.MENU.value, context={}
+                    )
+                    # אם נכנס כאדמין, שליחה ליעד מנהל (reply_to עלול להיות LID)
+                    _send_to = (
+                        _resolve_admin_send_target(
+                            sender_id, reply_to, from_number, resolved_phone
+                        )
+                        if _entered_as_admin
+                        else reply_to
+                    )
+                    background_tasks.add_task(send_welcome_message, _send_to)
+                    responses.append(
+                        {
+                            "from": sender_id,
+                            "response": "welcome (switched from courier to sender)",
+                            "new_state": SenderState.MENU.value,
+                        }
+                    )
+                    continue
 
             response, new_state = await _route_to_role_menu_wa(user, db, state_manager)
 
@@ -740,8 +775,13 @@ async def whatsapp_webhook(
                 user.role = UserRole.COURIER
                 await db.commit()
 
+                # שמירת דגל אדמין בקונטקסט כדי לאפשר חזרה לתפריט ראשי גם אם זיהוי אדמין נכשל
+                courier_context = {}
+                if _admin_root_menu or is_admin_sender:
+                    courier_context["entered_as_admin"] = True
+
                 await state_manager.force_state(
-                    user.id, "whatsapp", CourierState.INITIAL.value, context={}
+                    user.id, "whatsapp", CourierState.INITIAL.value, context=courier_context
                 )
 
                 handler = CourierStateHandler(db, platform="whatsapp")
