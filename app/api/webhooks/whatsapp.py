@@ -273,7 +273,8 @@ def _resolve_admin_send_target(
     — כי הגטוויי צריך את הסיומת הנכונה כדי לשלוח.
     """
     # מיפוי: ספרות מנורמלות → מזהה מקורי (עם סיומת)
-    all_identifiers = [sender_id, reply_to]
+    # reply_to ראשון כי הגטוויי שלח אותו — first-wins guard נותן לו עדיפות
+    all_identifiers = [reply_to, sender_id]
     if from_number:
         all_identifiers.append(from_number)
     for ident in extra_identifiers:
@@ -281,7 +282,6 @@ def _resolve_admin_send_target(
             all_identifiers.append(ident)
 
     normalized_candidates: set[str] = set()
-    # מזהה מקורי עם סיומת לפי ספרות מנורמלות (עדיפות ל-reply_to כי הגטוויי שלח אותו)
     normalized_to_suffixed: dict[str, str] = {}
     for ident in all_identifiers:
         norm = _normalize_whatsapp_identifier(ident)

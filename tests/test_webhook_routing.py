@@ -432,6 +432,15 @@ class TestResolveAdminSendTarget:
         assert result == "6661762744366@lid"
 
     @pytest.mark.unit
+    def test_resolve_prefers_reply_to_suffix_over_sender_id(self, monkeypatch):
+        """כש-reply_to ו-sender_id שונים בסיומת — מעדיף reply_to"""
+        from app.core.config import settings
+        monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "972501234567")
+        # sender_id עם @c.us אבל reply_to עם @lid — reply_to מנצח
+        result = _resolve_admin_send_target("972501234567@c.us", "972501234567@lid")
+        assert result == "972501234567@lid"
+
+    @pytest.mark.unit
     def test_resolve_empty_sender(self, monkeypatch):
         """sender_id ריק — מחזיר את reply_to"""
         from app.core.config import settings
