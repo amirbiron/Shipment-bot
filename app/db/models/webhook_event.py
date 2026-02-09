@@ -19,7 +19,7 @@ class WebhookEvent(Base):
     message_id = Column(String(200), primary_key=True)
     platform = Column(String(20), nullable=False)
     status = Column(String(20), nullable=False, default="processing")
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
         Index("ix_webhook_events_status_created", "status", "created_at"),
