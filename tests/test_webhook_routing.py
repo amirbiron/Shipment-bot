@@ -362,23 +362,49 @@ class TestApprovalCommandMatching:
 
 
 class TestResolveAdminSendTarget:
-    """בדיקות שהתגובה למנהל נשלחת למספר מההגדרות (שאנחנו יודעים שעובד)"""
+    """בדיקות שהתגובה למנהל נשלחת לכתובת עם סיומת נכונה"""
 
     @pytest.mark.unit
-    def test_resolve_to_settings_number(self, monkeypatch):
-        """כשה-sender_id תואם למספר מנהל בהגדרות — מחזיר את המספר מההגדרות"""
+    def test_resolve_settings_with_suffix(self, monkeypatch):
+        """כשהערך בהגדרות כולל סיומת — מחזיר אותו כמות שהוא"""
+        from app.core.config import settings
+        monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "972501234567@c.us")
+        result = _resolve_admin_send_target("972501234567@lid", "972501234567@lid")
+        assert result == "972501234567@c.us"
+
+    @pytest.mark.unit
+    def test_resolve_settings_with_lid_suffix(self, monkeypatch):
+        """כשהערך בהגדרות כולל @lid — מחזיר אותו כמות שהוא"""
+        from app.core.config import settings
+        monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "6661762744366@lid")
+        result = _resolve_admin_send_target("6661762744366@lid", "6661762744366@lid")
+        assert result == "6661762744366@lid"
+
+    @pytest.mark.unit
+    def test_resolve_settings_no_suffix_prefers_suffixed_identifier(self, monkeypatch):
+        """כשהערך בהגדרות חסר סיומת — מעדיף מזהה מקורי עם סיומת"""
         from app.core.config import settings
         monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "0501234567")
         result = _resolve_admin_send_target("972501234567@lid", "972501234567@lid")
-        assert result == "0501234567"
+        # מעדיף sender_id שכולל @lid על פני הערך הגולמי מההגדרות
+        assert result == "972501234567@lid"
 
     @pytest.mark.unit
-    def test_resolve_with_c_us_sender(self, monkeypatch):
-        """sender_id עם @c.us תואם למספר 972 בהגדרות"""
+    def test_resolve_settings_no_suffix_c_us_identifier(self, monkeypatch):
+        """כשהערך בהגדרות חסר סיומת אבל sender_id כולל @c.us — מעדיף אותו"""
         from app.core.config import settings
         monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "972501234567")
         result = _resolve_admin_send_target("972501234567@c.us", "972501234567@c.us")
-        assert result == "972501234567"
+        assert result == "972501234567@c.us"
+
+    @pytest.mark.unit
+    def test_resolve_settings_no_suffix_no_suffixed_identifier(self, monkeypatch):
+        """כשגם הערך בהגדרות וגם המזהים חסרי סיומת — מחזיר את הערך מההגדרות"""
+        from app.core.config import settings
+        monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "0501234567")
+        # שני המזהים ללא סיומת (תרחיש נדיר אבל אפשרי)
+        result = _resolve_admin_send_target("972501234567", "972501234567")
+        assert result == "0501234567"
 
     @pytest.mark.unit
     def test_fallback_to_reply_to_when_no_match(self, monkeypatch):
@@ -390,11 +416,29 @@ class TestResolveAdminSendTarget:
 
     @pytest.mark.unit
     def test_resolve_multiple_admins(self, monkeypatch):
-        """מזהה את המנהל הנכון מתוך רשימה של כמה מנהלים"""
+        """מזהה את המנהל הנכון מתוך רשימה — מעדיף מזהה עם סיומת"""
         from app.core.config import settings
         monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "0509999999,0501234567,0508888888")
         result = _resolve_admin_send_target("972501234567@lid", "972501234567@lid")
-        assert result == "0501234567"
+        # הערך בהגדרות הוא 0501234567 (ללא סיומת) — מעדיף את 972501234567@lid
+        assert result == "972501234567@lid"
+
+    @pytest.mark.unit
+    def test_resolve_multiple_admins_with_suffix_in_settings(self, monkeypatch):
+        """כשלמנהל בהגדרות יש סיומת — מחזיר אותה"""
+        from app.core.config import settings
+        monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "0509999999@c.us,6661762744366@lid")
+        result = _resolve_admin_send_target("6661762744366@lid", "6661762744366@lid")
+        assert result == "6661762744366@lid"
+
+    @pytest.mark.unit
+    def test_resolve_prefers_reply_to_suffix_over_sender_id(self, monkeypatch):
+        """כש-reply_to ו-sender_id שונים בסיומת — מעדיף reply_to"""
+        from app.core.config import settings
+        monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "972501234567")
+        # sender_id עם @c.us אבל reply_to עם @lid — reply_to מנצח
+        result = _resolve_admin_send_target("972501234567@c.us", "972501234567@lid")
+        assert result == "972501234567@lid"
 
     @pytest.mark.unit
     def test_resolve_empty_sender(self, monkeypatch):

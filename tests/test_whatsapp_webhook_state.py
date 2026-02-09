@@ -261,12 +261,13 @@ async def test_whatsapp_admin_root_menu_works_with_cross_format_normalization(
     await db_session.refresh(admin_user)
     assert admin_user.role == UserRole.SENDER
 
-    # הודעת welcome נשלחה למספר מההגדרות (0501234567), לא ל-@lid
+    # הודעת welcome נשלחה — כשהערך בהגדרות חסר סיומת, מעדיפים מזהה עם סיומת (sender_id/@lid)
     assert mock_whatsapp_gateway.post.call_count >= 1
     last_call = mock_whatsapp_gateway.post.call_args
     sent_payload = last_call[1].get("json", {}) if last_call[1] else last_call[0][1] if len(last_call[0]) > 1 else {}
     if "phone" in sent_payload:
-        assert "@lid" not in sent_payload["phone"]
+        # הערך בהגדרות הוא 0501234567 (ללא סיומת) — הקוד מעדיף את המזהה המקורי עם סיומת
+        assert sent_payload["phone"] == admin_sender_id
 
 
 @pytest.mark.asyncio
