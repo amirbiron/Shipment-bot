@@ -234,23 +234,14 @@ async def add_enum_values(engine: AsyncEngine) -> None:
     ALTER TYPE ... ADD VALUE לא יכול לרוץ בתוך טרנזקציה (PG < 12)
     ולא בתוך בלוק PL/pgSQL (כל הגרסאות).
     לכן מריצים בחיבור נפרד עם AUTOCOMMIT.
+    IF NOT EXISTS נתמך מ-PG 9.3 ומונע race condition בין מספר instances.
     """
     async with engine.connect() as conn:
         await conn.execution_options(isolation_level="AUTOCOMMIT")
-
-        # בדיקה אם הערך כבר קיים (תואם לכל גרסאות PG)
-        result = await conn.execute(text("""
-            SELECT 1 FROM pg_enum
-            WHERE enumtypid = 'userrole'::regtype
-              AND enumlabel = 'station_owner'
-        """))
-        if result.scalar() is None:
-            await conn.execute(text(
-                "ALTER TYPE userrole ADD VALUE 'station_owner'"
-            ))
-            logger.info("Added 'station_owner' to userrole enum")
-        else:
-            logger.info("userrole enum already contains 'station_owner'")
+        await conn.execute(text(
+            "ALTER TYPE userrole ADD VALUE IF NOT EXISTS 'station_owner'"
+        ))
+        logger.info("Ensured 'station_owner' exists in userrole enum")
 
 
 async def run_all_migrations(conn: AsyncConnection) -> None:
