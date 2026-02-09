@@ -305,7 +305,7 @@ def _normalize_whatsapp_command_text(text: str) -> str:
         cleaned,
     )
     cleaned = re.sub(r"\s+", " ", cleaned)
-    return cleaned
+    return cleaned.strip()
 
 
 def _match_approval_command(text: str) -> tuple[str, int] | None:
