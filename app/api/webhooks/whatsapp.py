@@ -268,17 +268,27 @@ def _resolve_admin_send_target(
     אבל כש-reply_to הוא @lid, הגטוויי עשוי לא להצליח לשלוח אליו.
     לכן אם אנחנו מזהים התאמה לפי sender_id / reply_to / from_number / resolved_phone
     — נשלח למספר ההגדרות.
+
+    אם הערך בהגדרות חסר סיומת (@c.us / @lid), נעדיף מזהה מקורי שכולל סיומת
+    — כי הגטוויי צריך את הסיומת הנכונה כדי לשלוח.
     """
-    normalized_candidates = {
-        _normalize_whatsapp_identifier(sender_id),
-        _normalize_whatsapp_identifier(reply_to),
-    }
+    # מיפוי: ספרות מנורמלות → מזהה מקורי (עם סיומת)
+    all_identifiers = [sender_id, reply_to]
     if from_number:
-        normalized_candidates.add(_normalize_whatsapp_identifier(from_number))
+        all_identifiers.append(from_number)
     for ident in extra_identifiers:
         if ident:
-            normalized_candidates.add(_normalize_whatsapp_identifier(ident))
-    normalized_candidates.discard("")
+            all_identifiers.append(ident)
+
+    normalized_candidates: set[str] = set()
+    # מזהה מקורי עם סיומת לפי ספרות מנורמלות (עדיפות ל-reply_to כי הגטוויי שלח אותו)
+    normalized_to_suffixed: dict[str, str] = {}
+    for ident in all_identifiers:
+        norm = _normalize_whatsapp_identifier(ident)
+        if norm:
+            normalized_candidates.add(norm)
+            if "@" in ident and norm not in normalized_to_suffixed:
+                normalized_to_suffixed[norm] = ident.strip()
 
     if not normalized_candidates:
         return reply_to
@@ -287,9 +297,32 @@ def _resolve_admin_send_target(
         raw = raw.strip()
         if not raw:
             continue
-        if _normalize_whatsapp_identifier(raw) in normalized_candidates:
+        norm_raw = _normalize_whatsapp_identifier(raw)
+        if norm_raw in normalized_candidates:
+            # אם הערך בהגדרות כולל סיומת — משתמשים בו כמות שהוא
+            if "@" in raw:
+                logger.debug(
+                    "שליחה למנהל לפי מספר מההגדרות (עם סיומת)",
+                    extra_data={
+                        "original_reply_to": PhoneNumberValidator.mask(reply_to),
+                        "resolved_to": PhoneNumberValidator.mask(raw),
+                    }
+                )
+                return raw
+            # אם הערך בהגדרות חסר סיומת — נעדיף מזהה מקורי שכולל סיומת
+            suffixed = normalized_to_suffixed.get(norm_raw)
+            if suffixed:
+                logger.debug(
+                    "הערך בהגדרות חסר סיומת, משתמשים במזהה מקורי עם סיומת",
+                    extra_data={
+                        "settings_value": PhoneNumberValidator.mask(raw),
+                        "using_identifier": PhoneNumberValidator.mask(suffixed),
+                    }
+                )
+                return suffixed
+            # אין מזהה עם סיומת — משתמשים בערך מההגדרות (fallback)
             logger.debug(
-                "Using admin number from settings for reply",
+                "שליחה למנהל לפי מספר מההגדרות (ללא סיומת)",
                 extra_data={
                     "original_reply_to": PhoneNumberValidator.mask(reply_to),
                     "resolved_to": PhoneNumberValidator.mask(raw),
