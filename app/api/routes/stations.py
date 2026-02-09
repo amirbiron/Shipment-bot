@@ -89,18 +89,31 @@ async def create_station(
     station_service = StationService(db)
     existing = await station_service.get_station_by_owner(user.id)
     if existing:
+        # תיקון תפקיד המשתמש אם נדרש (למקרה שהתחנה נוצרה אבל הרול לא עודכן)
+        if user.role != UserRole.STATION_OWNER:
+            user.role = UserRole.STATION_OWNER
+            await db.commit()
+            logger.info(
+                "Fixed user role to STATION_OWNER for existing station",
+                extra_data={
+                    "station_id": existing.id,
+                    "owner_id": user.id,
+                    "phone": PhoneNumberValidator.mask(station_data.owner_phone),
+                }
+            )
         raise HTTPException(status_code=400, detail="למשתמש כבר יש תחנה פעילה")
 
-    # יצירת התחנה
+    # יצירת התחנה + עדכון תפקיד באותה טרנזקציה
     station = await station_service.create_station(
         name=station_data.name,
         owner_id=user.id,
     )
 
-    # עדכון תפקיד המשתמש ל-STATION_OWNER
     if user.role != UserRole.STATION_OWNER:
         user.role = UserRole.STATION_OWNER
-        await db.commit()
+
+    await db.commit()
+    await db.refresh(station)
 
     logger.info(
         "Station created via API",

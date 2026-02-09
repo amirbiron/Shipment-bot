@@ -33,7 +33,12 @@ class StationService:
     # ==================== ניהול תחנה ====================
 
     async def create_station(self, name: str, owner_id: int) -> Station:
-        """יצירת תחנה חדשה עם ארנק"""
+        """
+        יצירת תחנה חדשה עם ארנק.
+
+        שימוש ב-flush בלבד — הקוראים אחראים על commit
+        כדי לאפשר אטומיות עם פעולות נוספות (למשל עדכון תפקיד).
+        """
         station = Station(name=name, owner_id=owner_id)
         self.db.add(station)
         await self.db.flush()
@@ -41,9 +46,7 @@ class StationService:
         # יצירת ארנק לתחנה
         wallet = StationWallet(station_id=station.id)
         self.db.add(wallet)
-
-        await self.db.commit()
-        await self.db.refresh(station)
+        await self.db.flush()
 
         logger.info(
             "Station created",
