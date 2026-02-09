@@ -213,9 +213,27 @@ async def run_migration_004(conn: AsyncConnection) -> None:
     """))
 
 
+async def run_migration_005(conn: AsyncConnection) -> None:
+    """מיגרציה 005 - טבלת idempotency למניעת עיבוד כפול של הודעות webhook."""
+    await conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS webhook_events (
+            message_id VARCHAR(200) PRIMARY KEY,
+            platform VARCHAR(20) NOT NULL,
+            status VARCHAR(20) NOT NULL DEFAULT 'processing',
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+    """))
+
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS ix_webhook_events_status_created
+        ON webhook_events(status, created_at);
+    """))
+
+
 async def run_all_migrations(conn: AsyncConnection) -> None:
     """הרצת כל המיגרציות ברצף."""
     await run_migration_001(conn)
     await run_migration_002(conn)
     await run_migration_003(conn)
     await run_migration_004(conn)
+    await run_migration_005(conn)

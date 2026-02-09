@@ -6,7 +6,7 @@ Processes pending messages from the outbox table and sends them
 via WhatsApp or Telegram.
 """
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from contextlib import contextmanager
 
 from app.workers.celery_app import celery_app
@@ -397,7 +397,7 @@ def cleanup_old_webhook_events(days: int = 7):
 
     async def _cleanup():
         async with get_task_session() as db:
-            cutoff = datetime.utcnow() - timedelta(days=days)
+            cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
             result = await db.execute(
                 sa_delete(WebhookEvent).where(
