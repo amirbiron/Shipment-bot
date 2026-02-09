@@ -599,9 +599,7 @@ async def _handle_whatsapp_delivery_approval(
     db: AsyncSession,
     action: str,
     delivery_id: int,
-    dispatcher_name: str,
     dispatcher_id: int,
-    background_tasks: BackgroundTasks = None,
 ) -> str:
     """שלב 4: ביצוע אישור/דחיית משלוח + הודעות"""
     from app.domain.services.shipment_workflow_service import ShipmentWorkflowService
@@ -1034,9 +1032,7 @@ async def whatsapp_webhook(
 
                     approval_msg = await _handle_whatsapp_delivery_approval(
                         db, action, delivery_id,
-                        dispatcher_name=user.name or "סדרן",
                         dispatcher_id=user.id,
-                        background_tasks=background_tasks,
                     )
                     background_tasks.add_task(
                         send_whatsapp_message, reply_to, approval_msg

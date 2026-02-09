@@ -335,7 +335,7 @@ class ShipmentWorkflowService:
         if delivery.pickup_contact_name:
             message_text += f"👤 איש קשר: {escape(delivery.pickup_contact_name)}\n"
         if delivery.pickup_contact_phone:
-            message_text += f"📞 טלפון: {delivery.pickup_contact_phone}\n"
+            message_text += f"📞 טלפון: {escape(delivery.pickup_contact_phone)}\n"
         if delivery.pickup_notes:
             message_text += f"📝 הערות: {escape(delivery.pickup_notes)}\n"
 
@@ -343,7 +343,7 @@ class ShipmentWorkflowService:
         if delivery.dropoff_contact_name:
             message_text += f"👤 איש קשר: {escape(delivery.dropoff_contact_name)}\n"
         if delivery.dropoff_contact_phone:
-            message_text += f"📞 טלפון: {delivery.dropoff_contact_phone}\n"
+            message_text += f"📞 טלפון: {escape(delivery.dropoff_contact_phone)}\n"
         if delivery.dropoff_notes:
             message_text += f"📝 הערות: {escape(delivery.dropoff_notes)}\n"
 
