@@ -772,6 +772,52 @@ async def telegram_webhook(
 
     # שליפת state פעם אחת לכל ההמשך
     current_state = await state_manager.get_current_state(user.id, "telegram")
+
+    # "חזרה לתפריט" מתנהג כמו לחיצה על # (כולל איפוס state) — גם אם המשתמש הגיע עם state תקוע
+    if "חזרה לתפריט" in text and user.role not in (UserRole.COURIER, UserRole.STATION_OWNER):
+        response, new_state = await _route_to_role_menu(user, db, state_manager)
+        _queue_response_send(background_tasks, send_chat_id, response)
+        return {"ok": True, "new_state": new_state, "reset": True}
+
+    # הגנה מפני state תקוע שלא תואם role (למשל role שונה חיצונית בזמן זרימה)
+    # בלי זה, המשתמש יכול להיתקע בלולאה של הודעת welcome ללא reset אמיתי.
+    if isinstance(current_state, str):
+        if current_state.startswith("STATION.") and user.role != UserRole.STATION_OWNER:
+            logger.warning(
+                "Stale station-owner state for role-mismatched user; resetting to role menu",
+                extra_data={"user_id": user.id, "role": str(user.role), "state": current_state},
+            )
+            response, new_state = await _route_to_role_menu(user, db, state_manager)
+            _queue_response_send(background_tasks, send_chat_id, response)
+            return {"ok": True, "new_state": new_state, "reset": True}
+
+        if current_state.startswith("DISPATCHER.") and user.role != UserRole.COURIER:
+            logger.warning(
+                "Stale dispatcher state for role-mismatched user; resetting to role menu",
+                extra_data={"user_id": user.id, "role": str(user.role), "state": current_state},
+            )
+            response, new_state = await _route_to_role_menu(user, db, state_manager)
+            _queue_response_send(background_tasks, send_chat_id, response)
+            return {"ok": True, "new_state": new_state, "reset": True}
+
+        if current_state.startswith("COURIER.") and user.role != UserRole.COURIER:
+            logger.warning(
+                "Stale courier state for role-mismatched user; resetting to role menu",
+                extra_data={"user_id": user.id, "role": str(user.role), "state": current_state},
+            )
+            response, new_state = await _route_to_role_menu(user, db, state_manager)
+            _queue_response_send(background_tasks, send_chat_id, response)
+            return {"ok": True, "new_state": new_state, "reset": True}
+
+        if current_state.startswith("SENDER.") and user.role not in (UserRole.SENDER, UserRole.ADMIN):
+            logger.warning(
+                "Stale sender state for role-mismatched user; resetting to role menu",
+                extra_data={"user_id": user.id, "role": str(user.role), "state": current_state},
+            )
+            response, new_state = await _route_to_role_menu(user, db, state_manager)
+            _queue_response_send(background_tasks, send_chat_id, response)
+            return {"ok": True, "new_state": new_state, "reset": True}
+
     is_in_multi_step_flow = _is_in_multi_step_flow(user, current_state)
 
     # כפתורי תפריט ראשי/שיווק - guard אחד
@@ -787,13 +833,6 @@ async def telegram_webhook(
                     if new_state:
                         payload["new_state"] = new_state
                     return payload
-
-        if (
-            "חזרה לתפריט" in text
-            and user.role not in (UserRole.COURIER, UserRole.STATION_OWNER)
-        ):
-            background_tasks.add_task(send_welcome_message, send_chat_id)
-            return {"ok": True}
 
     # ==================== ניתוב לפי תפקיד (handler לכל role) ====================
 
