@@ -48,6 +48,24 @@ function extractIsraeliPhoneFromCandidates(...candidates) {
     return null;
 }
 
+// נרמול מספר/מזהה ל-chatId תקין עם סיומת (@c.us/@lid/@g.us)
+function normalizeToChatId(raw) {
+    if (!raw || typeof raw !== 'string') return null;
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    // אם יש סיומת תקינה — משתמשים כמות שהוא
+    if (trimmed.includes('@c.us') || trimmed.includes('@g.us') || trimmed.includes('@lid')) {
+        return trimmed;
+    }
+    // אחרת — ספרות + נרמול 0→972 + @c.us
+    let digits = trimmed.replace(/\D/g, '');
+    if (!digits) return null;
+    if (digits.startsWith('0')) {
+        digits = '972' + digits.substring(1);
+    }
+    return `${digits}@c.us`;
+}
+
 /**
  * Clean up stale Chrome lock files that prevent browser from starting.
  * This happens when the container restarts but the persistent disk keeps the lock.
@@ -360,82 +378,59 @@ app.post('/send', async (req, res) => {
         });
     }
 
+    if (!phone || typeof phone !== 'string' || !phone.trim()) {
+        return res.status(400).json({ error: 'phone is required' });
+    }
+
     try {
-        let chatId = phone;
-
-        // If it already has a valid suffix (@c.us, @g.us, @lid), use as-is
-        const hasValidSuffix = chatId.includes('@c.us') ||
-                               chatId.includes('@g.us') ||
-                               chatId.includes('@lid');
-
-        if (!hasValidSuffix) {
-            // Format phone number - ensure country code and @c.us suffix
-            let cleanPhone = phone.replace(/\D/g, '');  // Remove non-digits
-
-            // Add Israel country code if missing (starts with 0)
-            if (cleanPhone.startsWith('0')) {
-                cleanPhone = '972' + cleanPhone.substring(1);
-            }
-
-            chatId = `${cleanPhone}@c.us`;
+        const chatId = normalizeToChatId(phone);
+        if (!chatId) {
+            return res.status(400).json({ error: 'Invalid phone format' });
         }
 
         console.log('Sending to:', chatId);
 
         let result;
 
-        // הודעות אינטראקטיביות (list/buttons) לא עובדות עם כתובות @lid —
-        // sendListMessage מחזיר הצלחה אבל ההודעה לא מגיעה בפועל.
-        // לכן עבור @lid שולחים טקסט רגיל עם אפשרויות.
-        const isLid = chatId.includes('@lid');
-
         // Try to send with interactive list if keyboard is provided
         if (keyboard && Array.isArray(keyboard) && keyboard.length > 0) {
             // Flatten keyboard array
             const options = keyboard.flat();
 
-            if (isLid) {
-                // @lid — הודעות אינטראקטיביות לא נתמכות, שולחים כטקסט
-                const optionsText = options.map((text, i) => `${i + 1}. ${text}`).join('\n');
-                const fullMessage = `${message}\n\n${optionsText}`;
-                result = await client.sendText(chatId, fullMessage);
-                console.log('Message sent as text (LID fallback) to:', chatId);
-            } else {
-                // Method 1: Try sendButtons with WPPConnect 1.x format
-                try {
-                    const buttons = options.map((text, index) => ({
-                        buttonText: { displayText: text },
-                        buttonId: text  // Use text as buttonId for easier handling
-                    }));
-                    result = await client.sendButtons(chatId, 'בחרו אפשרות:', buttons, message);
-                    console.log('Message sent with buttons (v1 format) to:', chatId);
-                } catch (btnError) {
-                    console.log('sendButtons v1 failed:', btnError.message);
+            // Method 1: Try sendButtons with WPPConnect 1.x format
+            try {
+                const buttons = options.map((text, index) => ({
+                    buttonText: { displayText: text },
+                    buttonId: text  // Use text as buttonId for easier handling
+                }));
+                result = await client.sendButtons(chatId, 'בחרו אפשרות:', buttons, message);
+                console.log('Message sent with buttons (v1 format) to:', chatId);
+            } catch (btnError) {
+                console.log('sendButtons v1 failed:', btnError.message);
 
-                    // Method 2: Try sendListMessage
-                    try {
-                        result = await client.sendListMessage(chatId, {
-                            buttonText: 'בחרו 👆',
-                            description: message,
-                            title: '',
-                            footer: '',
-                            sections: [{
-                                title: 'אפשרויות',
-                                // Use text as rowId so selection returns the correct text
-                                rows: options.map((text) => ({
-                                    rowId: text,
-                                    title: text,
-                                    description: ''
-                                }))
-                            }]
-                        });
-                        console.log('Message sent with list to:', chatId);
-                    } catch (listError) {
-                        console.log('sendListMessage failed:', listError.message);
-                        // Fallback: send as plain text
-                        result = await client.sendText(chatId, message);
-                        console.log('Message sent as text (fallback) to:', chatId);
-                    }
+                // Method 2: Try sendListMessage
+                try {
+                    result = await client.sendListMessage(chatId, {
+                        buttonText: 'בחרו 👆',
+                        description: message,
+                        title: '',
+                        footer: '',
+                        sections: [{
+                            title: 'אפשרויות',
+                            // Use text as rowId so selection returns the correct text
+                            rows: options.map((text) => ({
+                                rowId: text,
+                                title: text,
+                                description: ''
+                            }))
+                        }]
+                    });
+                    console.log('Message sent with list to:', chatId);
+                } catch (listError) {
+                    console.log('sendListMessage failed:', listError.message);
+                    // Fallback: send as plain text
+                    result = await client.sendText(chatId, message);
+                    console.log('Message sent as text (fallback) to:', chatId);
                 }
             }
         } else {
@@ -447,10 +442,52 @@ app.post('/send', async (req, res) => {
         res.json({ success: true, messageId: result?.id });
 
     } catch (error) {
-        console.error('Error sending message:', error.message);
+        const errorMsg = error?.message || String(error || 'unknown error');
+        // אם השליחה ל-@c.us נכשלה עם "No LID for user" — המשתמש הוא LID.
+        // ננסה שוב עם @lid (קורה כשמספר מנהל בהגדרות חסר סיומת).
+        if (errorMsg.includes('No LID for user') && typeof phone === 'string' && !phone.includes('@lid')) {
+            let digits = phone.replace(/\D/g, '');
+            if (digits.startsWith('0')) digits = '972' + digits.substring(1);
+            const lidChatId = digits + '@lid';
+            console.log('Retrying with @lid suffix:', lidChatId);
+            try {
+                let retryResult;
+                if (keyboard && Array.isArray(keyboard) && keyboard.length > 0) {
+                    const options = keyboard.flat();
+                    // מנסים sendListMessage — עובד עם @lid
+                    try {
+                        retryResult = await client.sendListMessage(lidChatId, {
+                            buttonText: 'בחרו 👆',
+                            description: message,
+                            title: '',
+                            footer: '',
+                            sections: [{
+                                title: 'אפשרויות',
+                                rows: options.map((text) => ({
+                                    rowId: text,
+                                    title: text,
+                                    description: ''
+                                }))
+                            }]
+                        });
+                    } catch (listErr) {
+                        // fallback — טקסט עם אפשרויות כדי שהמשתמש ידע מה לבחור
+                        const optionsText = options.map((text) => `▫️ ${text}`).join('\n');
+                        retryResult = await client.sendText(lidChatId, `${message}\n\n${optionsText}`);
+                    }
+                } else {
+                    retryResult = await client.sendText(lidChatId, message);
+                }
+                console.log('Message sent with @lid retry to:', lidChatId);
+                return res.json({ success: true, messageId: retryResult?.id });
+            } catch (lidError) {
+                console.error('LID retry also failed:', lidError?.message || String(lidError));
+            }
+        }
+        console.error('Error sending message:', errorMsg);
         res.status(500).json({
             error: 'Failed to send message',
-            details: error.message
+            details: errorMsg
         });
     }
 });
@@ -480,61 +517,87 @@ app.post('/send-media', async (req, res) => {
         });
     }
 
+    // חישוב סוג מדיה ושם קובץ מחוץ ל-try — נגישים גם ב-catch (retry)
+    let filename = 'media';
+    let mimeType = null;
+    const dataUrlMatch = /^data:([^;]+);base64,/.exec(media_url);
+    if (dataUrlMatch && dataUrlMatch[1]) {
+        mimeType = dataUrlMatch[1];
+    }
+
+    if (mimeType && mimeType.includes('/')) {
+        const extRaw = mimeType.split('/')[1] || 'jpg';
+        const ext = extRaw === 'jpeg' ? 'jpg' : extRaw;
+        filename = `media.${ext}`;
+    } else if (media_type && media_type.includes('image')) {
+        filename = 'image.jpg';
+    }
+
+    const isImage = (() => {
+        if (mimeType) {
+            return mimeType.startsWith('image/');
+        }
+        if (media_type) {
+            return media_type.includes('image');
+        }
+        return true; // ברירת מחדל: תמונה
+    })();
+
     try {
-        let chatId = phone;
-
-        const hasValidSuffix = chatId.includes('@c.us') ||
-                               chatId.includes('@g.us') ||
-                               chatId.includes('@lid');
-
-        if (!hasValidSuffix) {
-            let cleanPhone = phone.replace(/\D/g, '');
-            if (cleanPhone.startsWith('0')) {
-                cleanPhone = '972' + cleanPhone.substring(1);
-            }
-            chatId = `${cleanPhone}@c.us`;
-        }
-
-        let filename = 'media';
-        let mimeType = null;
-        const dataUrlMatch = /^data:([^;]+);base64,/.exec(media_url);
-        if (dataUrlMatch && dataUrlMatch[1]) {
-            mimeType = dataUrlMatch[1];
-        }
-
-        if (mimeType && mimeType.includes('/')) {
-            const extRaw = mimeType.split('/')[1] || 'jpg';
-            const ext = extRaw === 'jpeg' ? 'jpg' : extRaw;
-            filename = `media.${ext}`;
-        } else if (media_type && media_type.includes('image')) {
-            filename = 'image.jpg';
+        const chatId = normalizeToChatId(phone);
+        if (!chatId) {
+            return res.status(400).json({ error: 'Invalid phone format' });
         }
 
         const captionText = caption || '';
         let result;
 
-        const isImage = (() => {
-            if (mimeType) {
-                return mimeType.startsWith('image/');
-            }
-            if (media_type) {
-                return media_type.includes('image');
-            }
-            return true; // ברירת מחדל: תמונה
-        })();
-
         if (!isImage) {
             result = await client.sendFile(chatId, media_url, filename, captionText);
         } else {
-            result = await client.sendImage(chatId, media_url, filename, captionText);
+            // sendImage עשוי לזרוק שגיאה לא סטנדרטית (ללא message) — תופסים ומנסים sendFile
+            try {
+                result = await client.sendImage(chatId, media_url, filename, captionText);
+            } catch (imgError) {
+                const errMsg = imgError?.message || String(imgError || 'unknown');
+                console.log('sendImage failed, trying sendFile fallback:', errMsg);
+                result = await client.sendFile(chatId, media_url, filename, captionText);
+            }
         }
 
+        console.log('Media sent to:', chatId);
         res.json({ success: true, messageId: result?.id });
     } catch (error) {
-        console.error('Error sending media:', error.message);
+        const errorMsg = error?.message || String(error || 'unknown error');
+        // ניסיון חוזר עם @lid אם @c.us נכשל עם "No LID for user"
+        if (errorMsg.includes('No LID for user') && typeof phone === 'string' && !phone.includes('@lid')) {
+            let digits = phone.replace(/\D/g, '');
+            if (digits.startsWith('0')) digits = '972' + digits.substring(1);
+            const lidChatId = digits + '@lid';
+            console.log('Retrying media send with @lid suffix:', lidChatId);
+            try {
+                const retryCaption = caption || '';
+                // שומרים על סוג המדיה המקורי (image/file) — לא תמיד תמונה
+                let retryResult;
+                if (isImage) {
+                    try {
+                        retryResult = await client.sendImage(lidChatId, media_url, filename, retryCaption);
+                    } catch (imgErr) {
+                        retryResult = await client.sendFile(lidChatId, media_url, filename, retryCaption);
+                    }
+                } else {
+                    retryResult = await client.sendFile(lidChatId, media_url, filename, retryCaption);
+                }
+                console.log('Media sent with @lid retry to:', lidChatId);
+                return res.json({ success: true, messageId: retryResult?.id });
+            } catch (lidError) {
+                console.error('LID media retry also failed:', lidError?.message || String(lidError));
+            }
+        }
+        console.error('Error sending media:', errorMsg);
         res.status(500).json({
             error: 'Failed to send media',
-            details: error.message
+            details: errorMsg
         });
     }
 });
@@ -550,17 +613,9 @@ app.post('/send-buttons', async (req, res) => {
     }
 
     try {
-        let chatId = phone;
-        const hasValidSuffix = chatId.includes('@c.us') ||
-                               chatId.includes('@g.us') ||
-                               chatId.includes('@lid');
-
-        if (!hasValidSuffix) {
-            let cleanPhone = phone.replace(/\D/g, '');
-            if (cleanPhone.startsWith('0')) {
-                cleanPhone = '972' + cleanPhone.substring(1);
-            }
-            chatId = `${cleanPhone}@c.us`;
+        const chatId = normalizeToChatId(phone);
+        if (!chatId) {
+            return res.status(400).json({ error: 'Invalid phone format' });
         }
 
         const result = await client.sendText(chatId, message);

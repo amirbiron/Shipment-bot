@@ -300,9 +300,24 @@ def get_telegram_circuit_breaker() -> CircuitBreaker:
 
 
 def get_whatsapp_circuit_breaker() -> CircuitBreaker:
-    """Get circuit breaker for WhatsApp API"""
+    """Get circuit breaker for WhatsApp API — שליחת הודעות למשתמשים"""
     return CircuitBreaker.get_instance(
         "whatsapp",
+        CircuitBreakerConfig(
+            failure_threshold=5,
+            success_threshold=2,
+            timeout_seconds=30.0
+        )
+    )
+
+
+def get_whatsapp_admin_circuit_breaker() -> CircuitBreaker:
+    """
+    Circuit breaker נפרד להודעות admin — מונע מצב שכשלונות
+    admin notifications (כמו send-media שבור) חוסמים תגובות למשתמשים.
+    """
+    return CircuitBreaker.get_instance(
+        "whatsapp_admin",
         CircuitBreakerConfig(
             failure_threshold=5,
             success_threshold=2,
