@@ -10,6 +10,7 @@ const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const wppconnect = require('@wppconnect-team/wppconnect');
+const waVersion = require('@wppconnect/wa-version');
 
 const app = express();
 app.use(cors());
@@ -112,6 +113,43 @@ let isConnected = false;
 let currentQR = null;
 let qrTimestamp = null;
 
+function resolveWhatsappWebVersion() {
+    // מאפשר override ידני (למשל rollout/rollback מהיר דרך Render)
+    const envVersion = typeof process.env.WHATSAPP_WEB_VERSION === 'string'
+        ? process.env.WHATSAPP_WEB_VERSION.trim()
+        : '';
+
+    const candidates = [];
+    if (envVersion) {
+        candidates.push(envVersion);
+    }
+
+    // ברירת מחדל: בוחרים את הגרסה האחרונה שזמינה בתוך @wppconnect/wa-version
+    // זה מונע את הלוג: "Version not available for X, using latest as fallback"
+    try {
+        const latestLocal = waVersion.getLatestVersion('*', true);
+        if (latestLocal) {
+            candidates.push(latestLocal);
+        }
+    } catch (e) {
+        // לא חוסמים את העלייה – ניפול ל-null (ללא forced version)
+    }
+
+    for (const candidate of candidates) {
+        try {
+            const html = waVersion.getPageContent(candidate);
+            if (html) {
+                return candidate;
+            }
+        } catch (e) {
+            // נסה את המועמד הבא
+        }
+    }
+
+    // חשוב: null מכבה forced version, אחרת WPPConnect ייפול ל-default (שעשוי להיות לא קיים)
+    return null;
+}
+
 // Initialize WPPConnect client
 async function initializeClient() {
     try {
@@ -121,11 +159,19 @@ async function initializeClient() {
         // Clean up stale lock files from previous runs
         cleanupStaleLocks();
 
+        const resolvedWhatsappVersion = resolveWhatsappWebVersion();
+        console.log('Resolved WhatsApp WEB version:', resolvedWhatsappVersion || '(no forced version)');
+
         client = await wppconnect.create({
             session: SESSION_NAME,
             autoClose: 0, // Disable auto-close (0 = never)
+            // הערה:
+            // WPPConnect מנסה כברירת מחדל להזריק WhatsApp WEB מגרסה ספציפית.
+            // אם הגרסה לא קיימת ב-@wppconnect/wa-version מתקבל:
+            // "Version not available for X, using latest as fallback"
+            // אנחנו פותרים זאת ע"י הגדרת whatsappVersion לגרסה קיימת (או null).
+            whatsappVersion: resolvedWhatsappVersion,
             // ביטול cache של גרסת WhatsApp Web — תמיד טוען את הגרסה העדכנית ביותר
-            // מונע שגיאת "Version not available for X, using latest as fallback"
             webVersionCache: { type: 'none' },
             tokenStore: 'file',
             folderNameToken: SESSION_FOLDER,  // Use absolute path to match disk mount
