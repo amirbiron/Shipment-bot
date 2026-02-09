@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.database import get_db
-from app.db.migrations import run_migration_001, run_migration_002
+from app.db.migrations import run_migration_001, run_migration_002, run_migration_003
 
 router = APIRouter()
 
@@ -37,7 +37,7 @@ async def run_courier_fields_migration(
         await db.rollback()
         return {
             "success": False,
-            "error": str(e)
+            "error": str(e),
         }
 
 
@@ -67,5 +67,43 @@ async def run_kyc_fields_migration(
         await db.rollback()
         return {
             "success": False,
-            "error": str(e)
+            "error": str(e),
+        }
+
+
+@router.post(
+    "/run-migration-003",
+    summary="הרצת מיגרציה 003 (טבלאות תחנות + enum station_owner)",
+    description=(
+        "יוצר טבלאות תחנות, סדרנים, ארנק תחנה, חיובים ידניים ורשימה שחורה. "
+        "מוסיף את הערך station_owner ל-enum של userrole. "
+        "בטוח להריץ מספר פעמים."
+    ),
+    tags=["Migrations"],
+)
+async def run_station_tables_migration(
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, object]:
+    """
+    יצירת טבלאות תחנות והוספת station_owner ל-enum [שלב 3].
+    בטוח להריץ מספר פעמים (משתמש ב-IF NOT EXISTS / ADD VALUE IF NOT EXISTS).
+    """
+    try:
+        conn = await db.connection()
+        await run_migration_003(conn)
+        await db.commit()
+
+        return {
+            "success": True,
+            "message": (
+                "Migration 003 completed successfully - "
+                "station tables created, station_owner enum value added"
+            ),
+        }
+
+    except Exception as e:
+        await db.rollback()
+        return {
+            "success": False,
+            "error": str(e),
         }

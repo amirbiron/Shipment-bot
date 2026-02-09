@@ -165,14 +165,11 @@ async def run_migration_003(conn: AsyncConnection) -> None:
     """))
 
     # עדכון enum של UserRole - הוספת station_owner
-    # הערה: ALTER TYPE ... ADD VALUE הוא idempotent ב-PG 12+
-    await conn.execute(text("""
-        DO $$ BEGIN
-            ALTER TYPE userrole ADD VALUE IF NOT EXISTS 'station_owner';
-        EXCEPTION
-            WHEN duplicate_object THEN null;
-        END $$;
-    """))
+    # הערה: ALTER TYPE ... ADD VALUE לא ניתן להרצה בתוך בלוק DO/PL/pgSQL,
+    # לכן מריצים כ-statement רגיל. IF NOT EXISTS דורש PG 12+.
+    await conn.execute(text(
+        "ALTER TYPE userrole ADD VALUE IF NOT EXISTS 'station_owner'"
+    ))
 
 
 async def run_migration_004(conn: AsyncConnection) -> None:
