@@ -999,6 +999,10 @@ class CourierStateHandler:
 
     async def _handle_view_wallet(self, user: User, message: str, context: dict, photo_file_id: str):
         """Handle wallet view [3.1]"""
+        # כפתור חזרה לתפריט - מחזיר לתפריט הראשי
+        if "חזרה" in message or "תפריט" in message:
+            return await self._handle_menu(user, "תפריט", context, None)
+
         from app.core.config import settings
 
         response = MessageResponse(
