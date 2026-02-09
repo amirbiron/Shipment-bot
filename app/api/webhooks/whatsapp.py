@@ -878,6 +878,13 @@ async def whatsapp_webhook(
     
                 continue  # לא ממשיכים לטיפול רגיל בהודעות מקבוצות
     
+            # חישוב טלפון מנורמל פעם אחת — משמש גם ללוג observability
+            _normalized_phone = (
+                _extract_real_phone(resolved_phone)
+                or _extract_real_phone(from_number)
+                or _extract_real_phone(reply_to)
+            )
+
             # Get or create user
             user, is_new_user = await get_or_create_user(
                 db,
@@ -888,18 +895,13 @@ async def whatsapp_webhook(
             )
 
             # לוג זיהוי משתמש — observability למעקב אחר חיפוש/יצירה
-            _resolved_phone = (
-                _extract_real_phone(resolved_phone)
-                or _extract_real_phone(from_number)
-                or _extract_real_phone(reply_to)
-            )
             logger.info(
                 "User resolved",
                 extra_data={
                     "resolved_user_id": user.id,
                     "lookup_by": "whatsapp",
                     "sender_id": PhoneNumberValidator.mask(sender_id) if sender_id else None,
-                    "normalized_phone": PhoneNumberValidator.mask(_resolved_phone) if _resolved_phone else None,
+                    "normalized_phone": PhoneNumberValidator.mask(_normalized_phone) if _normalized_phone else None,
                     "is_new": is_new_user,
                     "role": user.role.value if user.role else None,
                 },
