@@ -81,7 +81,12 @@ function normalizeMediaPayload(mediaUrl, mediaType) {
 
 async function sendFileAuto(client, chatId, mediaUrl, rawBase64, filename, caption) {
     if (rawBase64 && typeof client.sendFileFromBase64 === 'function') {
-        return await client.sendFileFromBase64(chatId, mediaUrl, filename, caption);
+        try {
+            return await client.sendFileFromBase64(chatId, rawBase64, filename, caption);
+        } catch (err) {
+            const errMsg = err?.message || String(err || 'unknown');
+            console.log('sendFileFromBase64 failed, retrying with sendFile:', errMsg);
+        }
     }
     return await client.sendFile(chatId, mediaUrl, filename, caption);
 }
