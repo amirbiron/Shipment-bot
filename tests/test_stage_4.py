@@ -750,3 +750,116 @@ class TestDispatcherScoping:
 
         assert success is False
         assert "הרשאה" in msg
+
+
+# ============================================================================
+# TestMultiStationDispatcher (תיקון ריוויו #4)
+# ============================================================================
+
+class TestMultiStationDispatcher:
+    """בדיקות סדרן מרובה-תחנות — is_dispatcher_of_station במקום get_dispatcher_station"""
+
+    @pytest.mark.asyncio
+    async def test_multi_station_dispatcher_approve_correct_station(
+        self, db_session, user_factory, delivery_factory, station_factory,
+        dispatcher_factory, wallet_factory
+    ):
+        """סדרן המשויך לשתי תחנות יכול לאשר משלוח בתחנה השנייה"""
+        owner = await user_factory(
+            phone_number="+972500000050", name="בעלים50", role=UserRole.STATION_OWNER
+        )
+        station_a = await station_factory(name="תחנה A3", owner_id=owner.id)
+        station_b = await station_factory(name="תחנה B3", owner_id=owner.id)
+        disp_user = await user_factory(
+            phone_number="+972500000051", name="סדרן51",
+            role=UserRole.COURIER, approval_status=ApprovalStatus.APPROVED,
+        )
+        # סדרן בשתי התחנות
+        await dispatcher_factory(station_a.id, disp_user.id)
+        await dispatcher_factory(station_b.id, disp_user.id)
+
+        courier = await user_factory(
+            phone_number="+972500000052", name="שליח52",
+            role=UserRole.COURIER, approval_status=ApprovalStatus.APPROVED,
+        )
+        await wallet_factory(courier_id=courier.id, balance=100.0)
+        sender = await user_factory(
+            phone_number="+972501111150", name="שולח50"
+        )
+        # משלוח בתחנה B (לא הראשונה שתחזור מ-limit(1))
+        delivery = await delivery_factory(sender_id=sender.id, fee=10.0)
+        delivery.station_id = station_b.id
+        delivery.status = DeliveryStatus.PENDING_APPROVAL
+        delivery.requesting_courier_id = courier.id
+        delivery.requested_at = datetime.now(timezone.utc)
+        await db_session.commit()
+
+        workflow = ShipmentWorkflowService(db_session)
+        success, msg, result = await workflow.approve_delivery(
+            delivery.id, disp_user.id
+        )
+
+        assert success is True
+        assert result.status == DeliveryStatus.CAPTURED
+
+    @pytest.mark.asyncio
+    async def test_multi_station_dispatcher_reject_correct_station(
+        self, db_session, user_factory, delivery_factory, station_factory,
+        dispatcher_factory
+    ):
+        """סדרן המשויך לשתי תחנות יכול לדחות משלוח בתחנה השנייה"""
+        owner = await user_factory(
+            phone_number="+972500000053", name="בעלים53", role=UserRole.STATION_OWNER
+        )
+        station_a = await station_factory(name="תחנה A4", owner_id=owner.id)
+        station_b = await station_factory(name="תחנה B4", owner_id=owner.id)
+        disp_user = await user_factory(
+            phone_number="+972500000054", name="סדרן54",
+            role=UserRole.COURIER, approval_status=ApprovalStatus.APPROVED,
+        )
+        await dispatcher_factory(station_a.id, disp_user.id)
+        await dispatcher_factory(station_b.id, disp_user.id)
+
+        courier = await user_factory(
+            phone_number="+972500000055", name="שליח55",
+            role=UserRole.COURIER, approval_status=ApprovalStatus.APPROVED,
+        )
+        sender = await user_factory(
+            phone_number="+972501111151", name="שולח51"
+        )
+        delivery = await delivery_factory(sender_id=sender.id)
+        delivery.station_id = station_b.id
+        delivery.status = DeliveryStatus.PENDING_APPROVAL
+        delivery.requesting_courier_id = courier.id
+        delivery.requested_at = datetime.now(timezone.utc)
+        await db_session.commit()
+
+        workflow = ShipmentWorkflowService(db_session)
+        success, msg, result = await workflow.reject_delivery(
+            delivery.id, disp_user.id
+        )
+
+        assert success is True
+        assert result.status == DeliveryStatus.OPEN
+
+
+# ============================================================================
+# TestWhatsAppDeliveryApprovalFeedback (תיקון ריוויו #4)
+# ============================================================================
+
+class TestWhatsAppDeliveryApprovalFeedback:
+    """בדיקות הודעות שגיאה בוואטסאפ לפקודות אישור משלוח"""
+
+    def test_match_delivery_approval_nonexistent_delivery(self):
+        """פקודת אישור עם מספר משלוח מזוהה כפקודה"""
+        from app.api.webhooks.whatsapp import _match_delivery_approval_command
+
+        result = _match_delivery_approval_command("אשר משלוח 99999")
+        assert result == ("approve", 99999)
+
+    def test_match_delivery_rejection_command(self):
+        """פקודת דחייה מזוהה כפקודה"""
+        from app.api.webhooks.whatsapp import _match_delivery_approval_command
+
+        result = _match_delivery_approval_command("דחה משלוח 456")
+        assert result == ("reject", 456)

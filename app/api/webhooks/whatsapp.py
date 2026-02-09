@@ -1003,30 +1003,50 @@ async def whatsapp_webhook(
                     )
                     target_delivery = delivery_result.scalar_one_or_none()
 
-                    # בדיקה שהסדרן שייך לתחנה של המשלוח הספציפי
-                    if target_delivery and target_delivery.station_id:
-                        is_disp = await station_service.is_dispatcher_of_station(
-                            user.id, target_delivery.station_id
-                        )
-                    else:
-                        is_disp = False
-
-                    if is_disp:
-                        approval_msg = await _handle_whatsapp_delivery_approval(
-                            db, action, delivery_id,
-                            dispatcher_name=user.name or "סדרן",
-                            dispatcher_id=user.id,
-                            background_tasks=background_tasks,
-                        )
+                    # בדיקה שהמשלוח קיים ושייך לתחנה
+                    if not target_delivery or not target_delivery.station_id:
                         background_tasks.add_task(
-                            send_whatsapp_message, reply_to, approval_msg
+                            send_whatsapp_message, reply_to,
+                            "❌ המשלוח לא נמצא."
                         )
                         responses.append({
                             "from": sender_id,
-                            "response": approval_msg,
+                            "response": "❌ המשלוח לא נמצא.",
                             "delivery_approval": True,
                         })
                         continue
+
+                    # בדיקה שהסדרן שייך לתחנה של המשלוח הספציפי
+                    is_disp = await station_service.is_dispatcher_of_station(
+                        user.id, target_delivery.station_id
+                    )
+                    if not is_disp:
+                        background_tasks.add_task(
+                            send_whatsapp_message, reply_to,
+                            "❌ אין לך הרשאה לאשר/לדחות משלוחים בתחנה זו."
+                        )
+                        responses.append({
+                            "from": sender_id,
+                            "response": "❌ אין לך הרשאה לאשר/לדחות משלוחים בתחנה זו.",
+                            "delivery_approval": True,
+                        })
+                        continue
+
+                    approval_msg = await _handle_whatsapp_delivery_approval(
+                        db, action, delivery_id,
+                        dispatcher_name=user.name or "סדרן",
+                        dispatcher_id=user.id,
+                        background_tasks=background_tasks,
+                    )
+                    background_tasks.add_task(
+                        send_whatsapp_message, reply_to, approval_msg
+                    )
+                    responses.append({
+                        "from": sender_id,
+                        "response": approval_msg,
+                        "delivery_approval": True,
+                    })
+                    continue
 
             # Initialize state manager
             state_manager = StateManager(db)

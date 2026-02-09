@@ -144,12 +144,12 @@ class ShipmentWorkflowService:
         if not delivery.requesting_courier_id:
             return False, "אין שליח מבקש למשלוח זה.", None
 
-        # אימות שהסדרן שייך לתחנה הנכונה
+        # אימות שהסדרן שייך לתחנה הנכונה (is_dispatcher_of_station תומך בסדרן מרובה-תחנות)
         if delivery.station_id:
-            dispatcher_station = await self.station_service.get_dispatcher_station(
-                dispatcher_id
+            is_disp = await self.station_service.is_dispatcher_of_station(
+                dispatcher_id, delivery.station_id
             )
-            if not dispatcher_station or dispatcher_station.id != delivery.station_id:
+            if not is_disp:
                 return False, "אין לך הרשאה לאשר משלוחים בתחנה זו.", None
 
         # ביצוע תפיסה אטומית דרך CaptureService (חיוב ארנק וכו')
@@ -218,12 +218,12 @@ class ShipmentWorkflowService:
         if delivery.status != DeliveryStatus.PENDING_APPROVAL:
             return False, "המשלוח לא ממתין לאישור.", None
 
-        # אימות שהסדרן שייך לתחנה
+        # אימות שהסדרן שייך לתחנה (is_dispatcher_of_station תומך בסדרן מרובה-תחנות)
         if delivery.station_id:
-            dispatcher_station = await self.station_service.get_dispatcher_station(
-                dispatcher_id
+            is_disp = await self.station_service.is_dispatcher_of_station(
+                dispatcher_id, delivery.station_id
             )
-            if not dispatcher_station or dispatcher_station.id != delivery.station_id:
+            if not is_disp:
                 return False, "אין לך הרשאה לדחות משלוחים בתחנה זו.", None
 
         # שמירת מזהה השליח לפני ניקוי
