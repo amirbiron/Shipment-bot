@@ -56,6 +56,15 @@ function tryDecodeListRowId(rowId) {
     }
 }
 
+function truncateByCodepoints(text, maxLen, suffix = '…') {
+    const value = String(text || '');
+    const chars = Array.from(value);
+    if (chars.length <= maxLen) return value;
+    if (maxLen <= 0) return '';
+    if (maxLen === 1) return suffix;
+    return chars.slice(0, maxLen - 1).join('') + suffix;
+}
+
 // Get API webhook URL from environment variable
 const API_WEBHOOK_URL = process.env.API_WEBHOOK_URL || 'http://localhost:8000/api/webhooks/whatsapp/webhook';
 
@@ -292,13 +301,18 @@ async function initializeClient() {
             if (message.listResponse) {
                 console.log('ListResponse detected:', JSON.stringify(message.listResponse));
                 const listReply = message.listResponse.singleSelectReply || message.listResponse;
-                if (listReply && listReply.title) {
+                // חשוב: לפעמים WhatsApp מחזיר title מקוצר/שונה. אנחנו מעדיפים לשחזר מה-rowId אם אפשר.
+                const selectedRowId = listReply?.selectedRowId;
+                const decoded = selectedRowId ? tryDecodeListRowId(selectedRowId) : null;
+                if (decoded) {
+                    messageText = decoded;
+                    console.log('Using listResponse decoded rowId:', selectedRowId);
+                } else if (listReply && listReply.title) {
                     messageText = listReply.title;
                     console.log('Using listResponse title:', messageText);
-                } else if (listReply && listReply.selectedRowId) {
-                    const decoded = tryDecodeListRowId(listReply.selectedRowId);
-                    messageText = decoded || listReply.selectedRowId;
-                    console.log('Using listResponse rowId:', listReply.selectedRowId, 'decoded:', decoded || '(none)');
+                } else if (selectedRowId) {
+                    messageText = selectedRowId;
+                    console.log('Using listResponse rowId (raw):', selectedRowId);
                 }
             } else if (message.selectedButtonId) {
                 // תגובה ללחיצת כפתור (sendButtons) — הטקסט בשדה selectedButtonId
@@ -596,18 +610,25 @@ app.post('/send', async (req, res) => {
                         console.log('checkNumberStatus failed:', statusError?.message || String(statusError));
                     }
 
+                    // הגבלות WhatsApp (בפועל עשויות להשתנות/להיות קשיחות יותר בגרסאות חדשות):
+                    // - buttonText עד ~20 תווים
+                    // - title עד ~24 תווים
+                    // - description עד ~72 תווים
+                    // - row title עד ~24 תווים
+                    const safeButtonText = truncateByCodepoints('בחרו 👆', 20);
+                    const safeTitle = truncateByCodepoints("משלוח בצ'יק", 24);
+                    const safeDescription = truncateByCodepoints(message, 72);
+
                     result = await client.sendListMessage(listChatId, {
-                        buttonText: 'בחרו 👆',
-                        description: message,
-                        title: '',
-                        footer: '',
+                        buttonText: safeButtonText,
+                        title: safeTitle,
+                        description: safeDescription,
                         sections: [{
-                            title: 'אפשרויות',
-                            // rowId חייב להיות ID "בטוח" (ASCII בלבד) — אחרת בגרסאות מסוימות ההודעה לא נשלחת בפועל.
-                            // אבל חייבים גם לשמר תאימות לקליטת תשובה: לכן אנחנו מקודדים את הטקסט ל-base64url בתוך rowId.
+                            title: truncateByCodepoints('אפשרויות', 24),
+                            // rowId "בטוח" + ניתן לשחזור לטקסט מלא, וה-title מוצג מקוצר כדי לעמוד במגבלות
                             rows: options.map((text, index) => ({
                                 rowId: encodeListRowId(text, index),
-                                title: text,
+                                title: truncateByCodepoints(text, 24),
                                 description: ''
                             }))
                         }]
@@ -618,6 +639,11 @@ app.post('/send', async (req, res) => {
                         type: result?.type,
                         fromMe: result?.fromMe,
                     });
+
+                    // ack=-1 לרוב אומר שההודעה נדחתה/לא נשלחה בפועל למרות שהקריאה לא זרקה שגיאה
+                    if (typeof result?.ack === 'number' && result.ack < 0) {
+                        throw new Error(`sendListMessage returned ack=${result.ack}`);
+                    }
                 } catch (listError) {
                     console.log('sendListMessage failed:', listError.message);
                     // Fallback: טקסט רגיל — משתמשים ב-chatId המקורי (sendText עובד עם @lid)
