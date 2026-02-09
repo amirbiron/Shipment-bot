@@ -21,3 +21,9 @@ router.include_router(migrations_router, prefix="/migrations", tags=["Migrations
 # Webhook endpoints
 router.include_router(whatsapp_router, prefix="/whatsapp", tags=["Webhooks"])
 router.include_router(telegram_router, prefix="/telegram", tags=["Webhooks"])
+# Backwards-compatible — הגטוויי בפרודקשן עדיין שולח ל-URL הישן
+# TODO: להסיר אחרי שהגטוויי יתעדכן ל-/api/whatsapp/webhook
+router.include_router(
+    whatsapp_router, prefix="/webhooks/whatsapp", tags=["Webhooks (Legacy)"],
+    deprecated=True,
+)
