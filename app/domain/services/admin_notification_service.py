@@ -1,6 +1,8 @@
 """
 Admin Notification Service - Notify admins about courier events
 """
+import base64
+import mimetypes
 import httpx
 from typing import Optional
 
@@ -63,14 +65,56 @@ class AdminNotificationService:
         )
 
         if wa_targets:
-            is_whatsapp = platform == "whatsapp"
-            has_wa_doc = document_file_id and is_whatsapp
-            has_wa_selfie = selfie_file_id and is_whatsapp
-            has_wa_vehicle = vehicle_photo_file_id and is_whatsapp
+            file_ids: dict[str, Optional[str]] = {
+                "document": document_file_id,
+                "selfie": selfie_file_id,
+                "vehicle": vehicle_photo_file_id,
+            }
+            resolved_media_by_label: dict[str, Optional[str]] = {}
+            wa_media_payloads: list[tuple[str, str]] = []
 
-            doc_status = 'נשלח למטה ⬇️' if has_wa_doc else 'זמין בטלגרם' if document_file_id else 'לא נשלח'
-            selfie_status = 'נשלח למטה ⬇️' if has_wa_selfie else 'זמין בטלגרם' if selfie_file_id else '✗'
-            vehicle_status = 'נשלח למטה ⬇️' if has_wa_vehicle else 'זמין בטלגרם' if vehicle_photo_file_id else '✗'
+            for label, file_id in file_ids.items():
+                if not file_id:
+                    resolved_media_by_label[label] = None
+                    continue
+
+                should_attempt = True
+                if (
+                    platform == "telegram"
+                    and not settings.TELEGRAM_BOT_TOKEN
+                    and not AdminNotificationService._is_media_url(file_id)
+                ):
+                    should_attempt = False
+
+                resolved_media = None
+                if should_attempt:
+                    resolved_media = await AdminNotificationService._resolve_whatsapp_media_url(
+                        file_id=file_id,
+                        platform=platform,
+                    )
+
+                resolved_media_by_label[label] = resolved_media
+                if resolved_media:
+                    wa_media_payloads.append((label, resolved_media))
+                elif should_attempt:
+                    logger.warning(
+                        "Failed to prepare WhatsApp media payload",
+                        extra_data={"user_id": user_id, "label": label},
+                    )
+
+            def _status(label: str, missing_value: str) -> str:
+                file_id = file_ids.get(label)
+                if resolved_media_by_label.get(label):
+                    return 'נשלח למטה ⬇️'
+                if not file_id:
+                    return missing_value
+                if platform == "telegram":
+                    return 'זמין בטלגרם'
+                return 'לא נשלח'
+
+            doc_status = _status("document", "לא נשלח")
+            selfie_status = _status("selfie", "✗")
+            vehicle_status = _status("vehicle", "✗")
 
             # קישור יצירת קשר - לינק לפרופיל בטלגרם או מספר טלפון בוואטסאפ
             if platform == "telegram":
@@ -119,25 +163,18 @@ class AdminNotificationService:
                     )
                 success = success or wa_sent
 
-                # שליחת תמונות (רק אם מוואטסאפ) - שולחים גם אם ההודעה הטקסטית נכשלה
-                if is_whatsapp:
-                    for label, file_id in [
-                        ("document", document_file_id),
-                        ("selfie", selfie_file_id),
-                        ("vehicle", vehicle_photo_file_id),
-                    ]:
-                        if not file_id:
-                            continue
-                        photo_sent = await AdminNotificationService._send_whatsapp_admin_photo(
-                            target, file_id
+                # שליחת תמונות (כולל מסמכי Telegram) - שולחים גם אם ההודעה הטקסטית נכשלה
+                for label, media_url in wa_media_payloads:
+                    photo_sent = await AdminNotificationService._send_whatsapp_admin_photo(
+                        target, media_url
+                    )
+                    if photo_sent:
+                        success = True
+                    else:
+                        logger.warning(
+                            f"Failed to send {label} photo to WhatsApp admin",
+                            extra_data={"user_id": user_id, "target": target},
                         )
-                        if photo_sent:
-                            success = True
-                        else:
-                            logger.warning(
-                                f"Failed to send {label} photo to WhatsApp admin",
-                                extra_data={"user_id": user_id, "target": target}
-                            )
 
         # --- שליחה למנהלים פרטיים בטלגרם ---
         tg_admin_ids = _parse_csv_setting(settings.TELEGRAM_ADMIN_CHAT_IDS)
@@ -202,8 +239,8 @@ class AdminNotificationService:
                     )
                 success = success or tg_sent
 
-                # שליחת תמונות (רק אם מטלגרם)
-                if is_telegram and tg_sent:
+                # שליחת תמונות (רק אם מטלגרם) - גם אם הודעת הטקסט נכשלה
+                if is_telegram:
                     for file_id in [document_file_id, selfie_file_id, vehicle_photo_file_id]:
                         if file_id:
                             await AdminNotificationService._forward_photo(admin_id, file_id)
@@ -350,6 +387,102 @@ class AdminNotificationService:
     # ──────────────────────────────────────────────
     #  שיטות עזר - טלגרם
     # ──────────────────────────────────────────────
+
+    @staticmethod
+    def _is_media_url(value: str) -> bool:
+        return value.startswith("data:") or value.startswith("http://") or value.startswith("https://")
+
+    @staticmethod
+    def _pick_mime_type(file_path: str, content_type: str | None) -> str:
+        if content_type:
+            content_type = content_type.split(";")[0].strip()
+            if content_type:
+                return content_type
+        guessed = mimetypes.guess_type(file_path)[0]
+        return guessed or "application/octet-stream"
+
+    @staticmethod
+    async def _download_telegram_file_as_data_url(file_id: str) -> Optional[str]:
+        """
+        הורדת קובץ מטלגרם והמרה ל-data URL עבור שליחה בוואטסאפ.
+        """
+        if not settings.TELEGRAM_BOT_TOKEN:
+            logger.warning(
+                "Telegram bot token not configured for media download",
+                extra_data={"file_id": file_id},
+            )
+            return None
+
+        base_url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}"
+        circuit_breaker = get_telegram_circuit_breaker()
+
+        async def _fetch() -> tuple[str, bytes, str | None]:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{base_url}/getFile",
+                    json={"file_id": file_id},
+                    timeout=30.0,
+                )
+                if response.status_code != 200:
+                    raise TelegramError.from_response(
+                        "getFile",
+                        response,
+                        message=f"getFile returned status {response.status_code}",
+                    )
+
+                payload = response.json()
+                if not payload.get("ok") or not payload.get("result"):
+                    raise TelegramError(
+                        "getFile returned ok=false",
+                        details={"file_id": file_id, "response": payload},
+                    )
+
+                file_path = payload["result"].get("file_path")
+                if not file_path:
+                    raise TelegramError(
+                        "getFile missing file_path",
+                        details={"file_id": file_id, "response": payload},
+                    )
+
+                file_url = f"https://api.telegram.org/file/bot{settings.TELEGRAM_BOT_TOKEN}/{file_path}"
+                file_response = await client.get(file_url, timeout=30.0)
+                if file_response.status_code != 200:
+                    raise TelegramError.from_response(
+                        "downloadFile",
+                        file_response,
+                        message=f"downloadFile returned status {file_response.status_code}",
+                    )
+                return file_path, file_response.content, file_response.headers.get("content-type")
+
+        try:
+            file_path, content, content_type = await circuit_breaker.execute(_fetch)
+        except Exception as e:
+            logger.error(
+                "Failed to download Telegram file for WhatsApp forwarding",
+                extra_data={"file_id": file_id, "error": str(e)},
+                exc_info=True,
+            )
+            return None
+
+        mime_type = AdminNotificationService._pick_mime_type(file_path, content_type)
+        encoded = base64.b64encode(content).decode("ascii")
+        return f"data:{mime_type};base64,{encoded}"
+
+    @staticmethod
+    async def _resolve_whatsapp_media_url(
+        file_id: str,
+        platform: str,
+    ) -> Optional[str]:
+        """
+        הכנת media_url מתאים לשליחה בוואטסאפ עבור WhatsApp/Telegram.
+        """
+        if not file_id:
+            return None
+        if AdminNotificationService._is_media_url(file_id):
+            return file_id
+        if platform == "whatsapp":
+            return file_id
+        return await AdminNotificationService._download_telegram_file_as_data_url(file_id)
 
     @staticmethod
     async def _send_telegram_message(chat_id: str, text: str) -> bool:

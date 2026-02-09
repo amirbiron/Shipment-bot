@@ -71,6 +71,38 @@ async def test_notify_new_courier_registration_sends_telegram_and_forwards_photo
 
 
 @pytest.mark.unit
+async def test_telegram_photos_sent_even_when_text_fails(monkeypatch):
+    """תמונות טלגרם נשלחות גם אם הודעת הטקסט נכשלה"""
+    monkeypatch.setattr(settings, "WHATSAPP_ADMIN_GROUP_ID", None)
+    monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "")
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_ID", "")
+    monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_IDS", "admin-chat")
+
+    send_mock = AsyncMock(return_value=False)
+    forward_mock = AsyncMock(return_value=True)
+
+    monkeypatch.setattr(
+        AdminNotificationService,
+        "_send_telegram_message_with_inline_keyboard",
+        send_mock,
+    )
+    monkeypatch.setattr(AdminNotificationService, "_forward_photo", forward_mock)
+
+    ok = await AdminNotificationService.notify_new_courier_registration(
+        user_id=444,
+        full_name="Telegram Courier",
+        service_area="ירושלים",
+        phone_or_chat_id="999",
+        document_file_id="file-1",
+        platform="telegram",
+    )
+
+    assert ok is False
+    forward_mock.assert_awaited_once_with("admin-chat", "file-1")
+
+
+@pytest.mark.unit
 async def test_notify_new_courier_registration_sends_whatsapp_and_sends_media(monkeypatch):
     monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", None)
     monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_ID", None)
@@ -167,6 +199,49 @@ async def test_whatsapp_keyboard_fallback_on_failure(monkeypatch):
     assert len(call_args_list) == 2
     assert call_args_list[0]["keyboard"] is not None
     assert call_args_list[1]["keyboard"] is None
+
+
+@pytest.mark.unit
+async def test_whatsapp_photos_forwarded_from_telegram_registration(monkeypatch):
+    """מסמכי טלגרם נשלחים לוואטסאפ מנהלים כ-data URL"""
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_ID", None)
+    monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_IDS", "")
+    monkeypatch.setattr(settings, "WHATSAPP_ADMIN_GROUP_ID", "wa-group")
+    monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "")
+    monkeypatch.setattr(settings, "WHATSAPP_GATEWAY_URL", "http://localhost:3000")
+
+    send_mock = AsyncMock(return_value=True)
+    photo_mock = AsyncMock(return_value=True)
+    download_mock = AsyncMock(
+        side_effect=[
+            "data:image/jpeg;base64,AAAA",
+            "data:image/jpeg;base64,BBBB",
+        ]
+    )
+
+    monkeypatch.setattr(AdminNotificationService, "_send_whatsapp_admin_message", send_mock)
+    monkeypatch.setattr(AdminNotificationService, "_send_whatsapp_admin_photo", photo_mock)
+    monkeypatch.setattr(
+        AdminNotificationService,
+        "_download_telegram_file_as_data_url",
+        download_mock,
+    )
+
+    ok = await AdminNotificationService.notify_new_courier_registration(
+        user_id=12,
+        full_name="Telegram Courier",
+        service_area="תל אביב",
+        phone_or_chat_id="6865105071",
+        document_file_id="tg-file-1",
+        selfie_file_id="tg-file-2",
+        platform="telegram",
+    )
+
+    assert ok is True
+    assert photo_mock.await_count == 2
+    photo_mock.assert_any_await("wa-group", "data:image/jpeg;base64,AAAA")
+    photo_mock.assert_any_await("wa-group", "data:image/jpeg;base64,BBBB")
 
 
 @pytest.mark.unit
