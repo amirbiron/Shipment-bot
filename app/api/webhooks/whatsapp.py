@@ -787,7 +787,16 @@ async def whatsapp_webhook(
 
     for message in payload.messages:
         # מניעת עיבוד כפול — בדיקה מול טבלת idempotency ב-DB
-        if not await _try_acquire_message(db, message.message_id, "whatsapp"):
+        # עטוף ב-try כדי שכשל ב-idempotency (למשל DataError) לא יעצור הודעות הבאות
+        try:
+            if not await _try_acquire_message(db, message.message_id, "whatsapp"):
+                continue
+        except Exception:
+            logger.error(
+                "Idempotency check failed, skipping message",
+                extra_data={"message_id": message.message_id},
+                exc_info=True,
+            )
             continue
 
         _msg_failed = False
