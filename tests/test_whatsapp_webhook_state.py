@@ -203,9 +203,9 @@ async def test_whatsapp_admin_can_return_to_main_menu_from_courier_flow(
     assert data["processed"] == 1
     assert data["responses"][0]["response"].startswith("welcome")
 
-    # חשוב: אסור לשנות role ב-DB רק בגלל שהמשתמש אדמין (לפי מספר).
+    # אדמין שהיה שליח חוזר להיות שולח — כדי שהודעות הבאות לא ייפלו ל-CourierStateHandler
     await db_session.refresh(admin_user)
-    assert admin_user.role == UserRole.COURIER
+    assert admin_user.role == UserRole.SENDER
 
     # אימות שנשלחה הודעת welcome בפועל דרך ה-gateway (קריאה אחת לפחות)
     assert mock_whatsapp_gateway.post.call_count >= 1
@@ -257,9 +257,9 @@ async def test_whatsapp_admin_root_menu_works_with_cross_format_normalization(
     assert data["responses"][0]["response"].startswith("welcome")
     assert data["responses"][0].get("admin_main_menu") is True
 
-    # role לא אמור להשתנות
+    # אדמין שהיה שליח חוזר להיות שולח
     await db_session.refresh(admin_user)
-    assert admin_user.role == UserRole.COURIER
+    assert admin_user.role == UserRole.SENDER
 
     # הודעת welcome נשלחה למספר מההגדרות (0501234567), לא ל-@lid
     assert mock_whatsapp_gateway.post.call_count >= 1
@@ -314,8 +314,9 @@ async def test_whatsapp_admin_root_menu_matches_reply_to_or_from_number(
     assert data["responses"][0]["response"].startswith("welcome")
     assert data["responses"][0].get("admin_main_menu") is True
 
+    # אדמין שהיה שליח חוזר להיות שולח
     await db_session.refresh(admin_user)
-    assert admin_user.role == UserRole.COURIER
+    assert admin_user.role == UserRole.SENDER
 
     assert mock_whatsapp_gateway.post.call_count >= 1
     last_call = mock_whatsapp_gateway.post.call_args
@@ -376,3 +377,121 @@ async def test_whatsapp_admin_station_owner_does_not_lose_role_on_main_menu_rese
     await db_session.refresh(station_owner_admin)
     assert station_owner_admin.role == UserRole.STATION_OWNER
     assert mock_whatsapp_gateway.post.call_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_whatsapp_admin_returns_to_main_menu_after_courier_entry_via_context_flag(
+    test_client: AsyncClient,
+    db_session,
+    user_factory,
+    mock_whatsapp_gateway,
+    monkeypatch,
+):
+    """
+    רגרסיה: אדמין שנכנס לזרימת שליח ואז לוחץ # חוזר לתפריט ראשי —
+    גם אם זיהוי אדמין לפי מספר נכשל (LID ששונה מהמספר בהגדרות).
+    דגל entered_as_admin בקונטקסט משמש כ-fallback.
+    """
+    # sender_id הוא LID שאי-אפשר לנרמל למספר אדמין
+    unknown_lid = "9999888877776666@lid"
+    admin_phone = "972501234567"
+    monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", admin_phone)
+
+    # יצירת משתמש עם מספר שמתאים לאדמין — כדי שהכניסה לזרימת שליח תתעד entered_as_admin
+    admin_user = await user_factory(
+        phone_number=admin_phone,
+        name="Admin Fallback",
+        role=UserRole.SENDER,
+        platform="whatsapp",
+    )
+
+    # שלב 1: אדמין מוזהה (from_number=מספר אמיתי), נכנס לזרימת שליח
+    resp1 = await test_client.post(
+        "/api/webhooks/whatsapp/webhook",
+        json={
+            "messages": [
+                {
+                    "from_number": admin_phone,
+                    "sender_id": admin_phone,
+                    "reply_to": admin_phone,
+                    "message_id": "m-enter-courier-1",
+                    "text": "שליח",
+                    "timestamp": 1700000000,
+                }
+            ]
+        },
+    )
+    assert resp1.status_code == 200
+    await db_session.refresh(admin_user)
+    assert admin_user.role == UserRole.COURIER
+
+    # שלב 2: אדמין שולח # אבל הפעם sender_id הוא LID לא מוכר (זיהוי אדמין נכשל)
+    # הקוד צריך לזהות entered_as_admin מהקונטקסט ולהחזיר לתפריט ראשי
+    resp2 = await test_client.post(
+        "/api/webhooks/whatsapp/webhook",
+        json={
+            "messages": [
+                {
+                    "from_number": admin_phone,
+                    "sender_id": admin_phone,
+                    "reply_to": admin_phone,
+                    "message_id": "m-hash-back-1",
+                    "text": "#",
+                    "timestamp": 1700000001,
+                }
+            ]
+        },
+    )
+    assert resp2.status_code == 200
+    data = resp2.json()
+    assert data["processed"] == 1
+    assert data["responses"][0]["response"].startswith("welcome")
+
+    # אדמין חזר להיות שולח
+    await db_session.refresh(admin_user)
+    assert admin_user.role == UserRole.SENDER
+
+
+@pytest.mark.asyncio
+async def test_whatsapp_approved_courier_non_admin_stays_courier_on_hash(
+    test_client: AsyncClient,
+    db_session,
+    user_factory,
+    mock_whatsapp_gateway,
+    monkeypatch,
+):
+    """
+    שליח מאושר רגיל (לא אדמין) שלוחץ # חוזר לתפריט שליח — לא לתפריט ראשי.
+    """
+    monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "972500000000")
+
+    courier_user = await user_factory(
+        phone_number="972521111111@lid",
+        name="Regular Courier",
+        role=UserRole.COURIER,
+        platform="whatsapp",
+        approval_status=ApprovalStatus.APPROVED,
+    )
+
+    resp = await test_client.post(
+        "/api/webhooks/whatsapp/webhook",
+        json={
+            "messages": [
+                {
+                    "from_number": "972521111111@lid",
+                    "sender_id": "972521111111@lid",
+                    "reply_to": "972521111111@lid",
+                    "message_id": "m-courier-hash-1",
+                    "text": "#",
+                    "timestamp": 1700000000,
+                }
+            ]
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["processed"] == 1
+
+    # שליח מאושר רגיל נשאר שליח — לא מורד לשולח
+    await db_session.refresh(courier_user)
+    assert courier_user.role == UserRole.COURIER
