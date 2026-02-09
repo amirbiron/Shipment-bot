@@ -395,8 +395,9 @@ app.post('/send', async (req, res) => {
             const options = keyboard.flat();
 
             if (isLid) {
-                // @lid — הודעות אינטראקטיביות לא נתמכות, שולחים כטקסט
-                const optionsText = options.map((text, i) => `${i + 1}. ${text}`).join('\n');
+                // @lid — הודעות אינטראקטיביות לא נתמכות, שולחים כטקסט בלי מספור
+                // (הבוט מצפה לטקסט מדויק של האפשרות, לא למספר)
+                const optionsText = options.map((text) => `▫️ ${text}`).join('\n');
                 const fullMessage = `${message}\n\n${optionsText}`;
                 result = await client.sendText(chatId, fullMessage);
                 console.log('Message sent as text (LID fallback) to:', chatId);
@@ -447,6 +448,28 @@ app.post('/send', async (req, res) => {
         res.json({ success: true, messageId: result?.id });
 
     } catch (error) {
+        // אם השליחה ל-@c.us נכשלה עם "No LID for user" — המשתמש הוא LID.
+        // ננסה שוב עם @lid (קורה כשמספר מנהל בהגדרות חסר סיומת).
+        if (error.message && error.message.includes('No LID for user') && !phone.includes('@lid')) {
+            const lidChatId = phone.replace(/\D/g, '') + '@lid';
+            console.log('Retrying with @lid suffix:', lidChatId);
+            try {
+                let retryResult;
+                if (keyboard && Array.isArray(keyboard) && keyboard.length > 0) {
+                    // @lid — שולחים כטקסט בלי הודעות אינטראקטיביות
+                    const options = keyboard.flat();
+                    const optionsText = options.map((text) => `▫️ ${text}`).join('\n');
+                    const fullMessage = `${message}\n\n${optionsText}`;
+                    retryResult = await client.sendText(lidChatId, fullMessage);
+                } else {
+                    retryResult = await client.sendText(lidChatId, message);
+                }
+                console.log('Message sent with @lid retry to:', lidChatId);
+                return res.json({ success: true, messageId: retryResult?.id });
+            } catch (lidError) {
+                console.error('LID retry also failed:', lidError.message);
+            }
+        }
         console.error('Error sending message:', error.message);
         res.status(500).json({
             error: 'Failed to send message',
@@ -531,6 +554,19 @@ app.post('/send-media', async (req, res) => {
 
         res.json({ success: true, messageId: result?.id });
     } catch (error) {
+        // ניסיון חוזר עם @lid אם @c.us נכשל עם "No LID for user"
+        if (error.message && error.message.includes('No LID for user') && !phone.includes('@lid')) {
+            const lidChatId = phone.replace(/\D/g, '') + '@lid';
+            console.log('Retrying media send with @lid suffix:', lidChatId);
+            try {
+                const retryCaption = caption || '';
+                const retryResult = await client.sendImage(lidChatId, media_url, 'image.jpg', retryCaption);
+                console.log('Media sent with @lid retry to:', lidChatId);
+                return res.json({ success: true, messageId: retryResult?.id });
+            } catch (lidError) {
+                console.error('LID media retry also failed:', lidError.message);
+            }
+        }
         console.error('Error sending media:', error.message);
         res.status(500).json({
             error: 'Failed to send media',
