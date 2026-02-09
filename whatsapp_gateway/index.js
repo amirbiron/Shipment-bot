@@ -22,6 +22,40 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));  // הגדלת לימיט לתמיכה בתמונות base64
 
+function _toBase64Url(value) {
+    return value.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function _fromBase64Url(value) {
+    const base64 = value.replace(/-/g, '+').replace(/_/g, '/');
+    const padLength = (4 - (base64.length % 4)) % 4;
+    return base64 + '='.repeat(padLength);
+}
+
+// מייצר rowId "בטוח" (ASCII בלבד) אך ניתן לשחזור לטקסט המקורי
+function encodeListRowId(title, index) {
+    try {
+        const encoded = _toBase64Url(Buffer.from(String(title || ''), 'utf8').toString('base64'));
+        // פורמט: t_<index>_<base64url(title)>
+        return `t_${index + 1}_${encoded}`;
+    } catch (e) {
+        return `menu_${index + 1}`;
+    }
+}
+
+function tryDecodeListRowId(rowId) {
+    if (!rowId || typeof rowId !== 'string') return null;
+    const m = /^t_\d+_(.+)$/.exec(rowId);
+    if (!m || !m[1]) return null;
+    try {
+        const padded = _fromBase64Url(m[1]);
+        const decoded = Buffer.from(padded, 'base64').toString('utf8');
+        return decoded || null;
+    } catch (e) {
+        return null;
+    }
+}
+
 // Get API webhook URL from environment variable
 const API_WEBHOOK_URL = process.env.API_WEBHOOK_URL || 'http://localhost:8000/api/webhooks/whatsapp/webhook';
 
@@ -125,6 +159,16 @@ function resolveWhatsappWebVersion() {
         ? process.env.WHATSAPP_WEB_VERSION.trim()
         : '';
 
+    // אם אין את המודול, עדיין מאפשרים override ידני (ייתכן שיגרום ללוג "Version not available...")
+    // אבל עדיף על מצב שבו האופרטור חושב שביצע override והוא מתעלם בשקט.
+    if (!waVersion) {
+        if (envVersion) {
+            console.log('WARNING: @wppconnect/wa-version missing; using WHATSAPP_WEB_VERSION override as-is:', envVersion);
+            return envVersion;
+        }
+        return null;
+    }
+
     const candidates = [];
     if (envVersion) {
         candidates.push(envVersion);
@@ -133,9 +177,6 @@ function resolveWhatsappWebVersion() {
     // ברירת מחדל: בוחרים את הגרסה האחרונה שזמינה בתוך @wppconnect/wa-version
     // זה מונע את הלוג: "Version not available for X, using latest as fallback"
     try {
-        if (!waVersion) {
-            return null;
-        }
         const latestLocal = waVersion.getLatestVersion('*', true);
         if (latestLocal) {
             candidates.push(latestLocal);
@@ -146,9 +187,6 @@ function resolveWhatsappWebVersion() {
 
     for (const candidate of candidates) {
         try {
-            if (!waVersion) {
-                return null;
-            }
             const html = waVersion.getPageContent(candidate);
             if (html) {
                 return candidate;
@@ -258,8 +296,9 @@ async function initializeClient() {
                     messageText = listReply.title;
                     console.log('Using listResponse title:', messageText);
                 } else if (listReply && listReply.selectedRowId) {
-                    messageText = listReply.selectedRowId;
-                    console.log('Using listResponse rowId:', messageText);
+                    const decoded = tryDecodeListRowId(listReply.selectedRowId);
+                    messageText = decoded || listReply.selectedRowId;
+                    console.log('Using listResponse rowId:', listReply.selectedRowId, 'decoded:', decoded || '(none)');
                 }
             } else if (message.selectedButtonId) {
                 // תגובה ללחיצת כפתור (sendButtons) — הטקסט בשדה selectedButtonId
@@ -527,7 +566,9 @@ app.post('/send', async (req, res) => {
         // Try to send with interactive list if keyboard is provided
         if (keyboard && Array.isArray(keyboard) && keyboard.length > 0) {
             // Flatten keyboard array
-            const options = keyboard.flat();
+            const options = keyboard
+                .flat()
+                .filter((x) => typeof x === 'string' && x.trim());
 
             // Method 1: Try sendButtons with WPPConnect 1.x format
             try {
@@ -542,6 +583,19 @@ app.post('/send', async (req, res) => {
 
                 // Method 2: Try sendListMessage (משתמשים ב-listChatId שכבר פותר ל-@c.us)
                 try {
+                    // בדיקה מהירה: האם היעד יכול לקבל הודעות (מסייע באבחון "נשלח אבל לא הגיע")
+                    try {
+                        const status = await client.checkNumberStatus(listChatId);
+                        console.log('Target status:', {
+                            status: status?.status,
+                            canReceiveMessage: status?.canReceiveMessage,
+                            numberExists: status?.numberExists,
+                            isBusiness: status?.isBusiness
+                        });
+                    } catch (statusError) {
+                        console.log('checkNumberStatus failed:', statusError?.message || String(statusError));
+                    }
+
                     result = await client.sendListMessage(listChatId, {
                         buttonText: 'בחרו 👆',
                         description: message,
@@ -549,15 +603,21 @@ app.post('/send', async (req, res) => {
                         footer: '',
                         sections: [{
                             title: 'אפשרויות',
-                            // Use text as rowId so selection returns the correct text
-                            rows: options.map((text) => ({
-                                rowId: text,
+                            // rowId חייב להיות ID "בטוח" (ASCII בלבד) — אחרת בגרסאות מסוימות ההודעה לא נשלחת בפועל.
+                            // אבל חייבים גם לשמר תאימות לקליטת תשובה: לכן אנחנו מקודדים את הטקסט ל-base64url בתוך rowId.
+                            rows: options.map((text, index) => ({
+                                rowId: encodeListRowId(text, index),
                                 title: text,
                                 description: ''
                             }))
                         }]
                     });
-                    console.log('Message sent with list to:', listChatId);
+                    console.log('Message sent with list to:', listChatId, 'result:', {
+                        id: result?.id,
+                        ack: result?.ack,
+                        type: result?.type,
+                        fromMe: result?.fromMe,
+                    });
                 } catch (listError) {
                     console.log('sendListMessage failed:', listError.message);
                     // Fallback: טקסט רגיל — משתמשים ב-chatId המקורי (sendText עובד עם @lid)
