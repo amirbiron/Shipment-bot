@@ -15,7 +15,7 @@ from app.db.database import get_db
 from app.db.models.user import User, UserRole, ApprovalStatus
 from app.db.models.station import Station
 from app.state_machine.handlers import SenderStateHandler, CourierStateHandler, MessageResponse
-from app.state_machine.states import CourierState, DispatcherState, StationOwnerState
+from app.state_machine.states import CourierState, DispatcherState, StationOwnerState, SenderState
 from app.state_machine.dispatcher_handler import DispatcherStateHandler
 from app.state_machine.station_owner_handler import StationOwnerStateHandler
 from app.state_machine.manager import StateManager
@@ -90,11 +90,9 @@ def _parse_inbound_event(
         # Answer the callback query to remove loading state
         background_tasks.add_task(answer_callback_query, callback.id)
 
-        name = None
-        if callback.from_user:
-            name = callback.from_user.first_name
-            if callback.from_user.last_name:
-                name += f" {callback.from_user.last_name}"
+        name = callback.from_user.first_name
+        if callback.from_user.last_name:
+            name += f" {callback.from_user.last_name}"
 
         return _InboundTelegramEvent(
             send_chat_id=send_chat_id,
@@ -175,6 +173,14 @@ def _is_in_multi_step_flow(
     if _is_courier_in_registration_state(user, current_state):
         return True
 
+    # הגנה על זרימות שולח: מונע "תחנה" וכו' מלתפוס כתובות כמו "תחנה מרכזית"
+    if (
+        isinstance(current_state, str)
+        and current_state.startswith("SENDER.")
+        and current_state != SenderState.MENU.value
+    ):
+        return True
+
     if isinstance(current_state, str) and current_state.startswith(("DISPATCHER.", "STATION.")):
         return True
 
@@ -233,13 +239,11 @@ async def _handle_sender_join_as_courier(
 
 async def _handle_sender_fast_shipment() -> MessageResponse:
     """קישור חיצוני לקבוצת WhatsApp - העלאת משלוח מהיר."""
-    from app.core.config import settings as app_settings
-
-    if app_settings.WHATSAPP_GROUP_LINK:
+    if settings.WHATSAPP_GROUP_LINK:
         msg_text = (
             "📦 <b>העלאת משלוח מהיר</b>\n\n"
             "להעלאת משלוח מהיר, הצטרפו לקבוצת WhatsApp שלנו:\n"
-            f"{app_settings.WHATSAPP_GROUP_LINK}"
+            f"{settings.WHATSAPP_GROUP_LINK}"
         )
     else:
         msg_text = (
@@ -284,10 +288,8 @@ async def _handle_sender_station_signup() -> MessageResponse:
 
 async def _handle_sender_admin_contact() -> MessageResponse:
     """קישור WhatsApp ישיר למנהל הראשי (או fallback להודעה בתוך הבוט)."""
-    from app.core.config import settings as app_settings
-
-    if app_settings.ADMIN_WHATSAPP_NUMBER:
-        admin_link = f"https://wa.me/{app_settings.ADMIN_WHATSAPP_NUMBER}"
+    if settings.ADMIN_WHATSAPP_NUMBER:
+        admin_link = f"https://wa.me/{settings.ADMIN_WHATSAPP_NUMBER}"
         admin_text = (
             "📞 <b>פנייה לניהול</b>\n\n"
             f"ליצירת קשר עם המנהל:\n{admin_link}"
@@ -318,6 +320,7 @@ _SENDER_BUTTON_ROUTES: list[tuple[str, _SenderButtonHandler]] = [
     ("תחנה", _sender_button_station_signup),
     ("פנייה לניהול", _sender_button_admin_contact),
 ]
+
 
 def _telegram_phone_placeholder(telegram_chat_id: str) -> str:
     """
@@ -579,9 +582,8 @@ async def _sender_fallback(
     user: User,
     db: AsyncSession,
     state_manager: StateManager,
-) -> tuple:
+) -> tuple[MessageResponse, str]:
     """fallback לתפריט שולח - משותף לכל ה-fallbacks ב-_route_to_role_menu"""
-    from app.state_machine.states import SenderState
     await state_manager.force_state(user.id, "telegram", SenderState.MENU.value, context={})
     handler = SenderStateHandler(db)
     return await handler.handle_message(
@@ -593,7 +595,7 @@ async def _route_to_role_menu(
     user: User,
     db: AsyncSession,
     state_manager: StateManager,
-) -> tuple:
+) -> tuple[MessageResponse, str]:
     """
     ניתוב לתפריט הנכון לפי תפקיד המשתמש.
 
