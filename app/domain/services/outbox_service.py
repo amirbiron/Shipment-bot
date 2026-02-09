@@ -154,6 +154,22 @@ class OutboxService:
         """Queue notifications when a delivery is captured"""
         messages = []
 
+        # שליפת פרטי השולח לקביעת פלטפורמה ומזהה נמען
+        sender_result = await self.db.execute(
+            select(User).where(User.id == delivery.sender_id)
+        )
+        sender = sender_result.scalar_one_or_none()
+        if not sender:
+            return messages
+
+        # קביעת פלטפורמה ומזהה נמען לפי פרטי השולח
+        if sender.telegram_chat_id:
+            platform = MessagePlatform.TELEGRAM
+            recipient = sender.telegram_chat_id
+        else:
+            platform = MessagePlatform.WHATSAPP
+            recipient = sender.phone_number
+
         content = {
             "delivery_id": delivery.id,
             "courier_id": courier_id,
@@ -164,10 +180,9 @@ class OutboxService:
             )
         }
 
-        # Notify sender
         sender_msg = await self.queue_message(
-            platform=MessagePlatform.WHATSAPP,  # Determine from sender preferences
-            recipient_id=str(delivery.sender_id),
+            platform=platform,
+            recipient_id=recipient,
             message_type="capture_notification_sender",
             message_content=content
         )

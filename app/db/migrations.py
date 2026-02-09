@@ -255,6 +255,11 @@ async def run_migration_006(conn: AsyncConnection) -> None:
             ADD COLUMN IF NOT EXISTS private_group_platform VARCHAR(20);
     """))
 
+    # הרחבת recipient_id ב-outbox — מזהי קבוצות יכולים לחרוג מ-50 תווים
+    await conn.execute(text("""
+        ALTER TABLE outbox_messages ALTER COLUMN recipient_id TYPE VARCHAR(100);
+    """))
+
 
 async def add_enum_values(engine: AsyncEngine) -> None:
     """

@@ -166,7 +166,7 @@ COMMENT ON TABLE conversation_sessions IS 'Per-user state machine tracking for c
 CREATE TABLE outbox_messages (
     id SERIAL PRIMARY KEY,
     platform message_platform NOT NULL,
-    recipient_id VARCHAR(50) NOT NULL,
+    recipient_id VARCHAR(100) NOT NULL,
     message_type VARCHAR(50) NOT NULL,
     message_content JSONB NOT NULL,
     status message_status DEFAULT 'pending',
