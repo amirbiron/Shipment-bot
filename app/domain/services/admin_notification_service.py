@@ -67,22 +67,56 @@ class AdminNotificationService:
         if wa_targets:
             is_whatsapp = platform == "whatsapp"
 
-            def _can_forward(file_id: Optional[str]) -> bool:
+            file_ids: dict[str, Optional[str]] = {
+                "document": document_file_id,
+                "selfie": selfie_file_id,
+                "vehicle": vehicle_photo_file_id,
+            }
+            resolved_media_by_label: dict[str, Optional[str]] = {}
+            wa_media_payloads: list[tuple[str, str]] = []
+
+            for label, file_id in file_ids.items():
                 if not file_id:
-                    return False
-                if is_whatsapp:
-                    return True
-                if AdminNotificationService._is_media_url(file_id):
-                    return True
-                return bool(settings.TELEGRAM_BOT_TOKEN)
+                    resolved_media_by_label[label] = None
+                    continue
 
-            has_wa_doc = _can_forward(document_file_id)
-            has_wa_selfie = _can_forward(selfie_file_id)
-            has_wa_vehicle = _can_forward(vehicle_photo_file_id)
+                should_attempt = True
+                if (
+                    platform == "telegram"
+                    and not settings.TELEGRAM_BOT_TOKEN
+                    and not AdminNotificationService._is_media_url(file_id)
+                ):
+                    should_attempt = False
 
-            doc_status = 'נשלח למטה ⬇️' if has_wa_doc else 'זמין בטלגרם' if document_file_id else 'לא נשלח'
-            selfie_status = 'נשלח למטה ⬇️' if has_wa_selfie else 'זמין בטלגרם' if selfie_file_id else '✗'
-            vehicle_status = 'נשלח למטה ⬇️' if has_wa_vehicle else 'זמין בטלגרם' if vehicle_photo_file_id else '✗'
+                resolved_media = None
+                if should_attempt:
+                    resolved_media = await AdminNotificationService._resolve_whatsapp_media_url(
+                        file_id=file_id,
+                        platform=platform,
+                    )
+
+                resolved_media_by_label[label] = resolved_media
+                if resolved_media:
+                    wa_media_payloads.append((label, resolved_media))
+                elif should_attempt:
+                    logger.warning(
+                        "Failed to prepare WhatsApp media payload",
+                        extra_data={"user_id": user_id, "label": label},
+                    )
+
+            def _status(label: str, missing_value: str) -> str:
+                file_id = file_ids.get(label)
+                if resolved_media_by_label.get(label):
+                    return 'נשלח למטה ⬇️'
+                if not file_id:
+                    return missing_value
+                if platform == "telegram":
+                    return 'זמין בטלגרם'
+                return 'לא נשלח'
+
+            doc_status = _status("document", "לא נשלח")
+            selfie_status = _status("selfie", "✗")
+            vehicle_status = _status("vehicle", "✗")
 
             # קישור יצירת קשר - לינק לפרופיל בטלגרם או מספר טלפון בוואטסאפ
             if platform == "telegram":
@@ -115,26 +149,6 @@ class AdminNotificationService:
                 wa_keyboard = None
             else:
                 wa_keyboard = [[f"✅ אשר {user_id}", f"❌ דחה {user_id}"]]
-
-            wa_media_payloads: list[tuple[str, str]] = []
-            for label, file_id in [
-                ("document", document_file_id),
-                ("selfie", selfie_file_id),
-                ("vehicle", vehicle_photo_file_id),
-            ]:
-                if not _can_forward(file_id):
-                    continue
-                resolved_media = await AdminNotificationService._resolve_whatsapp_media_url(
-                    file_id=file_id,
-                    platform=platform,
-                )
-                if resolved_media:
-                    wa_media_payloads.append((label, resolved_media))
-                else:
-                    logger.warning(
-                        "Failed to prepare WhatsApp media payload",
-                        extra_data={"user_id": user_id, "label": label},
-                    )
 
             for target in wa_targets:
                 wa_sent = await AdminNotificationService._send_whatsapp_admin_message(

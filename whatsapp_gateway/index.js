@@ -807,7 +807,7 @@ app.post('/send-media', async (req, res) => {
 
         if (!isImage) {
             if (rawBase64 && typeof client.sendFileFromBase64 === 'function') {
-                result = await client.sendFileFromBase64(chatId, rawBase64, filename, captionText);
+                result = await client.sendFileFromBase64(chatId, mediaUrlForSend, filename, captionText);
             } else {
                 result = await client.sendFile(chatId, mediaUrlForSend, filename, captionText);
             }
@@ -819,7 +819,7 @@ app.post('/send-media', async (req, res) => {
                 const errMsg = imgError?.message || String(imgError || 'unknown');
                 console.log('sendImage failed, trying sendFile fallback:', errMsg);
                 if (rawBase64 && typeof client.sendFileFromBase64 === 'function') {
-                    result = await client.sendFileFromBase64(chatId, rawBase64, filename, captionText);
+                    result = await client.sendFileFromBase64(chatId, mediaUrlForSend, filename, captionText);
                 } else {
                     result = await client.sendFile(chatId, mediaUrlForSend, filename, captionText);
                 }
@@ -845,14 +845,14 @@ app.post('/send-media', async (req, res) => {
                         retryResult = await client.sendImage(lidChatId, mediaUrlForSend, filename, retryCaption);
                     } catch (imgErr) {
                         if (rawBase64 && typeof client.sendFileFromBase64 === 'function') {
-                            retryResult = await client.sendFileFromBase64(lidChatId, rawBase64, filename, retryCaption);
+                            retryResult = await client.sendFileFromBase64(lidChatId, mediaUrlForSend, filename, retryCaption);
                         } else {
                             retryResult = await client.sendFile(lidChatId, mediaUrlForSend, filename, retryCaption);
                         }
                     }
                 } else {
                     if (rawBase64 && typeof client.sendFileFromBase64 === 'function') {
-                        retryResult = await client.sendFileFromBase64(lidChatId, rawBase64, filename, retryCaption);
+                        retryResult = await client.sendFileFromBase64(lidChatId, mediaUrlForSend, filename, retryCaption);
                     } else {
                         retryResult = await client.sendFile(lidChatId, mediaUrlForSend, filename, retryCaption);
                     }
