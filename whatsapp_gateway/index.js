@@ -238,10 +238,9 @@ async function initializeClient() {
                     } else if (contact && contact.formattedName) {
                         // formattedName מכיל לפעמים את המספר (למשל "⁦+972 54-397-8620⁩")
                         const phoneFromName = extractIsraeliPhoneFromCandidates(contact.formattedName);
-                        if (phoneFromName) {
-                            let digits = phoneFromName;
-                            if (digits.startsWith('0')) digits = '972' + digits.substring(1);
-                            replyTo = `${digits}@c.us`;
+                        const resolved = phoneFromName ? normalizeToChatId(phoneFromName) : null;
+                        if (resolved && resolved.includes('@c.us')) {
+                            replyTo = resolved;
                             console.log('Got number from formattedName:', replyTo);
                         }
                     }
@@ -268,10 +267,9 @@ async function initializeClient() {
                             console.log('Got ID from chat:', replyTo);
                         } else if (chat && chat.contact && chat.contact.formattedName) {
                             const phoneFromChat = extractIsraeliPhoneFromCandidates(chat.contact.formattedName);
-                            if (phoneFromChat) {
-                                let digits = phoneFromChat;
-                                if (digits.startsWith('0')) digits = '972' + digits.substring(1);
-                                replyTo = `${digits}@c.us`;
+                            const resolved = phoneFromChat ? normalizeToChatId(phoneFromChat) : null;
+                            if (resolved && resolved.includes('@c.us')) {
+                                replyTo = resolved;
                                 console.log('Got number from chat formattedName:', replyTo);
                             }
                         }
@@ -295,10 +293,9 @@ async function initializeClient() {
                 // מאמץ אחרון: חילוץ מספר מ-formattedName של השולח
                 if (replyTo.includes('@lid') && message.sender && message.sender.formattedName) {
                     const phoneFromSender = extractIsraeliPhoneFromCandidates(message.sender.formattedName);
-                    if (phoneFromSender) {
-                        let digits = phoneFromSender;
-                        if (digits.startsWith('0')) digits = '972' + digits.substring(1);
-                        replyTo = `${digits}@c.us`;
+                    const resolved = phoneFromSender ? normalizeToChatId(phoneFromSender) : null;
+                    if (resolved && resolved.includes('@c.us')) {
+                        replyTo = resolved;
                         if (!realPhone) realPhone = phoneFromSender;
                         console.log('Got number from sender formattedName:', replyTo);
                     }
@@ -452,10 +449,9 @@ app.post('/send', async (req, res) => {
                         console.log('Resolved @lid via contact.number:', chatId, '→', listChatId);
                     } else if (contact && contact.formattedName) {
                         const phoneFromName = extractIsraeliPhoneFromCandidates(contact.formattedName);
-                        if (phoneFromName) {
-                            let digits = phoneFromName;
-                            if (digits.startsWith('0')) digits = '972' + digits.substring(1);
-                            listChatId = `${digits}@c.us`;
+                        const resolved = phoneFromName ? normalizeToChatId(phoneFromName) : null;
+                        if (resolved && resolved.includes('@c.us')) {
+                            listChatId = resolved;
                             lidToCusMap.set(chatId, listChatId);
                             console.log('Resolved @lid via formattedName:', chatId, '→', listChatId);
                         } else {
