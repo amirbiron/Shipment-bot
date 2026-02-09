@@ -124,9 +124,6 @@ async function initializeClient() {
         client = await wppconnect.create({
             session: SESSION_NAME,
             autoClose: 0, // Disable auto-close (0 = never)
-            // ביטול cache של גרסת WhatsApp Web — תמיד טוען את הגרסה העדכנית ביותר
-            // מונע שגיאת "Version not available for X, using latest as fallback"
-            webVersionCache: { type: 'none' },
             tokenStore: 'file',
             folderNameToken: SESSION_FOLDER,  // Use absolute path to match disk mount
             catchQR: (base64Qr, asciiQR, attempts, urlCode) => {
