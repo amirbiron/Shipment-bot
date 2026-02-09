@@ -5,7 +5,11 @@
 כל המיגרציות idempotent (בטוח להריץ מספר פעמים).
 """
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncConnection
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
+
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 async def run_migration_001(conn: AsyncConnection) -> None:
@@ -164,12 +168,8 @@ async def run_migration_003(conn: AsyncConnection) -> None:
         CREATE INDEX IF NOT EXISTS idx_deliveries_station ON deliveries(station_id);
     """))
 
-    # עדכון enum של UserRole - הוספת station_owner
-    # הערה: ALTER TYPE ... ADD VALUE לא ניתן להרצה בתוך בלוק DO/PL/pgSQL,
-    # לכן מריצים כ-statement רגיל. IF NOT EXISTS דורש PG 12+.
-    await conn.execute(text(
-        "ALTER TYPE userrole ADD VALUE IF NOT EXISTS 'station_owner'"
-    ))
+    # הערה: עדכון enum userrole (הוספת station_owner) מתבצע ב-add_enum_values()
+    # כי ALTER TYPE ... ADD VALUE דורש AUTOCOMMIT ולא יכול לרוץ בתוך טרנזקציה.
 
 
 async def run_migration_004(conn: AsyncConnection) -> None:
@@ -227,10 +227,32 @@ async def run_migration_005(conn: AsyncConnection) -> None:
     """))
 
 
+async def add_enum_values(engine: AsyncEngine) -> None:
+    """
+    הוספת ערכים חדשים ל-enum types קיימים.
+
+    ALTER TYPE ... ADD VALUE לא יכול לרוץ בתוך טרנזקציה (PG < 12)
+    ולא בתוך בלוק PL/pgSQL (כל הגרסאות).
+    לכן מריצים בחיבור נפרד עם AUTOCOMMIT.
+    IF NOT EXISTS נתמך מ-PG 9.3 ומונע race condition בין מספר instances.
+    """
+    async with engine.connect() as conn:
+        await conn.execution_options(isolation_level="AUTOCOMMIT")
+        await conn.execute(text(
+            "ALTER TYPE userrole ADD VALUE IF NOT EXISTS 'station_owner'"
+        ))
+        logger.info("Ensured 'station_owner' exists in userrole enum")
+
+
 async def run_all_migrations(conn: AsyncConnection) -> None:
-    """הרצת כל המיגרציות ברצף."""
+    """הרצת כל המיגרציות ברצף (ללא ALTER TYPE — ראה add_enum_values)."""
+    logger.info("Running migration 001...")
     await run_migration_001(conn)
+    logger.info("Running migration 002...")
     await run_migration_002(conn)
+    logger.info("Running migration 003...")
     await run_migration_003(conn)
+    logger.info("Running migration 004...")
     await run_migration_004(conn)
+    logger.info("Running migration 005...")
     await run_migration_005(conn)
