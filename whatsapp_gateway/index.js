@@ -22,6 +22,10 @@ const API_WEBHOOK_URL = process.env.API_WEBHOOK_URL || 'http://localhost:8000/ap
 const SESSION_FOLDER = '/app/sessions';
 const SESSION_NAME = 'shipment-bot';
 
+// מיפוי @lid → @c.us — נשמר כשה-onMessage מצליח לפתור LID למספר טלפון.
+// משמש ב-/send כדי לשלוח sendListMessage ל-@c.us במקום ל-@lid (שלא עובד).
+const lidToCusMap = new Map();
+
 // חילוץ מספר טלפון ישראלי ממחרוזת (מחזיר רק ספרות)
 function normalizeIsraeliPhone(raw) {
     if (!raw) return null;
@@ -274,6 +278,10 @@ async function initializeClient() {
                 // WPPConnect sendText might still work with LID in some cases
                 if (replyTo.includes('@lid')) {
                     console.log('WARNING: Could not resolve LID to phone number, will try sending to LID directly');
+                } else {
+                    // שומרים את המיפוי lid → @c.us לשימוש ב-/send
+                    lidToCusMap.set(message.from, replyTo);
+                    console.log('Cached LID→@c.us mapping:', message.from, '→', replyTo);
                 }
             }
 
@@ -392,6 +400,35 @@ app.post('/send', async (req, res) => {
 
         let result;
 
+        // sendListMessage לא עובד עם @lid — מחזיר הצלחה אבל ההודעה לא מגיעה.
+        // לכן מנסים לפתור @lid ל-@c.us לפני שליחת הודעה אינטראקטיבית.
+        let listChatId = chatId;
+        if (chatId.includes('@lid')) {
+            // בדיקה ראשונה: מיפוי שנשמר מ-onMessage (הכי מהיר)
+            if (lidToCusMap.has(chatId)) {
+                listChatId = lidToCusMap.get(chatId);
+                console.log('Resolved @lid from cache:', chatId, '→', listChatId);
+            } else {
+                // ניסיון לפתור דרך getContact
+                try {
+                    const contact = await client.getContact(chatId);
+                    if (contact && contact.id && contact.id._serialized && !contact.id._serialized.includes('@lid')) {
+                        listChatId = contact.id._serialized;
+                        lidToCusMap.set(chatId, listChatId);
+                        console.log('Resolved @lid via getContact:', chatId, '→', listChatId);
+                    } else if (contact && contact.number) {
+                        listChatId = `${contact.number}@c.us`;
+                        lidToCusMap.set(chatId, listChatId);
+                        console.log('Resolved @lid via contact.number:', chatId, '→', listChatId);
+                    } else {
+                        console.log('WARNING: Could not resolve @lid to @c.us, sendListMessage may not deliver');
+                    }
+                } catch (e) {
+                    console.log('Could not resolve @lid contact:', e.message);
+                }
+            }
+        }
+
         // Try to send with interactive list if keyboard is provided
         if (keyboard && Array.isArray(keyboard) && keyboard.length > 0) {
             // Flatten keyboard array
@@ -403,14 +440,14 @@ app.post('/send', async (req, res) => {
                     buttonText: { displayText: text },
                     buttonId: text  // Use text as buttonId for easier handling
                 }));
-                result = await client.sendButtons(chatId, 'בחרו אפשרות:', buttons, message);
-                console.log('Message sent with buttons (v1 format) to:', chatId);
+                result = await client.sendButtons(listChatId, 'בחרו אפשרות:', buttons, message);
+                console.log('Message sent with buttons (v1 format) to:', listChatId);
             } catch (btnError) {
                 console.log('sendButtons v1 failed:', btnError.message);
 
-                // Method 2: Try sendListMessage
+                // Method 2: Try sendListMessage (משתמשים ב-listChatId שכבר פותר ל-@c.us)
                 try {
-                    result = await client.sendListMessage(chatId, {
+                    result = await client.sendListMessage(listChatId, {
                         buttonText: 'בחרו 👆',
                         description: message,
                         title: '',
@@ -425,11 +462,12 @@ app.post('/send', async (req, res) => {
                             }))
                         }]
                     });
-                    console.log('Message sent with list to:', chatId);
+                    console.log('Message sent with list to:', listChatId);
                 } catch (listError) {
                     console.log('sendListMessage failed:', listError.message);
-                    // Fallback: send as plain text
-                    result = await client.sendText(chatId, message);
+                    // Fallback: טקסט רגיל — משתמשים ב-chatId המקורי (sendText עובד עם @lid)
+                    const optionsText = options.map((text) => `▫️ ${text}`).join('\n');
+                    result = await client.sendText(chatId, `${message}\n\n${optionsText}`);
                     console.log('Message sent as text (fallback) to:', chatId);
                 }
             }
@@ -454,27 +492,9 @@ app.post('/send', async (req, res) => {
                 let retryResult;
                 if (keyboard && Array.isArray(keyboard) && keyboard.length > 0) {
                     const options = keyboard.flat();
-                    // מנסים sendListMessage — עובד עם @lid
-                    try {
-                        retryResult = await client.sendListMessage(lidChatId, {
-                            buttonText: 'בחרו 👆',
-                            description: message,
-                            title: '',
-                            footer: '',
-                            sections: [{
-                                title: 'אפשרויות',
-                                rows: options.map((text) => ({
-                                    rowId: text,
-                                    title: text,
-                                    description: ''
-                                }))
-                            }]
-                        });
-                    } catch (listErr) {
-                        // fallback — טקסט עם אפשרויות כדי שהמשתמש ידע מה לבחור
-                        const optionsText = options.map((text) => `▫️ ${text}`).join('\n');
-                        retryResult = await client.sendText(lidChatId, `${message}\n\n${optionsText}`);
-                    }
+                    // sendListMessage לא עובד עם @lid (הצלחה שקטה) — שולחים טקסט ישירות
+                    const optionsText = options.map((text) => `▫️ ${text}`).join('\n');
+                    retryResult = await client.sendText(lidChatId, `${message}\n\n${optionsText}`);
                 } else {
                     retryResult = await client.sendText(lidChatId, message);
                 }
