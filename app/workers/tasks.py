@@ -387,3 +387,31 @@ def cleanup_old_messages(days: int = 30):
             return {"deleted": count}
 
     return run_async(_cleanup())
+
+
+@celery_app.task(name="app.workers.tasks.cleanup_old_webhook_events")
+def cleanup_old_webhook_events(days: int = 7):
+    """ניקוי רשומות ישנות מטבלת webhook_events (idempotency)"""
+    from sqlalchemy import delete as sa_delete
+    from app.db.models.webhook_event import WebhookEvent
+
+    async def _cleanup():
+        async with get_task_session() as db:
+            cutoff = datetime.utcnow() - timedelta(days=days)
+
+            result = await db.execute(
+                sa_delete(WebhookEvent).where(
+                    WebhookEvent.status == "completed",
+                    WebhookEvent.created_at < cutoff,
+                )
+            )
+            deleted = result.rowcount
+
+            await db.commit()
+            logger.info(
+                "Cleaned up old webhook events",
+                extra_data={"deleted": deleted, "cutoff_days": days},
+            )
+            return {"deleted": deleted}
+
+    return run_async(_cleanup())
