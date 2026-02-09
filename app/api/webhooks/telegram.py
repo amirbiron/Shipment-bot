@@ -720,6 +720,19 @@ async def telegram_webhook(
 
     # Get or create user (מזהה לפי from_user.id כשאפשר)
     user, is_new_user = await get_or_create_user(db, telegram_user_id, name)
+
+    # לוג זיהוי משתמש — observability למעקב אחר חיפוש/יצירה
+    logger.info(
+        "User resolved",
+        extra_data={
+            "resolved_user_id": user.id,
+            "telegram_chat_id": telegram_user_id,
+            "lookup_by": "telegram_chat_id",
+            "is_new": is_new_user,
+            "role": user.role.value if user.role else None,
+        },
+    )
+
     state_manager = StateManager(db)
 
     if is_new_user:

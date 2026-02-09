@@ -886,7 +886,25 @@ async def whatsapp_webhook(
                 reply_to=reply_to,
                 resolved_phone=resolved_phone,
             )
-    
+
+            # לוג זיהוי משתמש — observability למעקב אחר חיפוש/יצירה
+            _resolved_phone = (
+                _extract_real_phone(resolved_phone)
+                or _extract_real_phone(from_number)
+                or _extract_real_phone(reply_to)
+            )
+            logger.info(
+                "User resolved",
+                extra_data={
+                    "resolved_user_id": user.id,
+                    "lookup_by": "whatsapp",
+                    "sender_id": PhoneNumberValidator.mask(sender_id) if sender_id else None,
+                    "normalized_phone": PhoneNumberValidator.mask(_resolved_phone) if _resolved_phone else None,
+                    "is_new": is_new_user,
+                    "role": user.role.value if user.role else None,
+                },
+            )
+
             # טיפול בפקודות אישור/דחייה מהודעות פרטיות של מנהלים
             # חייב להיות לפני בדיקת is_new_user כדי שמנהל חדש שעוד לא ב-DB
             # יוכל לאשר/לדחות שליחים כבר מההודעה הראשונה שלו.
