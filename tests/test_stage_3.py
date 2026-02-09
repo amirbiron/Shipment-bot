@@ -246,6 +246,75 @@ class TestStage31DriverMenu:
 
 
 # ============================================================================
+# באג #87 - כפתור "חזרה לתפריט" בארנק שליח מציג שוב את הארנק
+# ============================================================================
+
+
+class TestCourierWalletBackButton:
+    """בדיקות לכפתור חזרה לתפריט ממסך הארנק (issue #87)"""
+
+    @pytest.mark.asyncio
+    async def test_back_from_wallet_returns_to_menu(
+        self, db_session, user_factory
+    ):
+        """לחיצה על 'חזרה לתפריט' מארנק מחזירה לתפריט ולא מציגה שוב ארנק"""
+        from app.state_machine.states import CourierState
+
+        courier = await user_factory(
+            phone_number="+972506666666",
+            name="Wallet Tester",
+            role=UserRole.COURIER,
+            platform="telegram",
+            telegram_chat_id="60001",
+            approval_status=ApprovalStatus.APPROVED,
+        )
+
+        handler = CourierStateHandler(db_session, platform="telegram")
+        state_manager = StateManager(db_session)
+        await state_manager.force_state(
+            courier.id, "telegram", CourierState.VIEW_WALLET.value, {}
+        )
+
+        response, new_state = await handler.handle_message(
+            courier, "🔙 חזרה לתפריט", None
+        )
+
+        # חייב לחזור לתפריט - לא להישאר בארנק
+        assert new_state == CourierState.MENU.value
+        assert "תפריט שליח" in response.text
+
+    @pytest.mark.asyncio
+    async def test_wallet_displays_when_no_back_button(
+        self, db_session, user_factory
+    ):
+        """כניסה רגילה לארנק מציגה פרטי ארנק כרגיל"""
+        from app.state_machine.states import CourierState
+
+        courier = await user_factory(
+            phone_number="+972506666667",
+            name="Wallet Viewer",
+            role=UserRole.COURIER,
+            platform="telegram",
+            telegram_chat_id="60002",
+            approval_status=ApprovalStatus.APPROVED,
+        )
+
+        handler = CourierStateHandler(db_session, platform="telegram")
+        state_manager = StateManager(db_session)
+        await state_manager.force_state(
+            courier.id, "telegram", CourierState.MENU.value, {}
+        )
+
+        # נכנסים לארנק דרך התפריט
+        response, new_state = await handler.handle_message(
+            courier, "💰 מצב הארנק", None
+        )
+
+        assert new_state == CourierState.VIEW_WALLET.value
+        assert "פרטי הארנק" in response.text
+
+
+# ============================================================================
 # שלב 3.2 - תפריט סדרן היברידי - Handlers
 # ============================================================================
 
