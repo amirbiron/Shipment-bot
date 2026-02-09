@@ -843,6 +843,29 @@ async def whatsapp_webhook(
                 from app.state_machine.states import SenderState
 
                 # שחזור תפקיד לשולח כדי שהודעות הבאות לא יגיעו ל-CourierStateHandler
+                if user.role == UserRole.COURIER and user.approval_status == ApprovalStatus.APPROVED:
+                    # שליח מאושר לא יורד ל-SENDER גם אם הוא אדמין
+                    response, new_state = await _route_to_role_menu_wa(
+                        user, db, state_manager
+                    )
+                    admin_send_to = _resolve_admin_send_target(
+                        sender_id, reply_to, from_number, resolved_phone
+                    )
+                    background_tasks.add_task(
+                        send_whatsapp_message,
+                        admin_send_to,
+                        response.text,
+                        response.keyboard,
+                    )
+                    responses.append(
+                        {
+                            "from": sender_id,
+                            "response": response.text,
+                            "new_state": new_state,
+                            "admin_main_menu": True,
+                        }
+                    )
+                    continue
                 if user.role == UserRole.COURIER:
                     user.role = UserRole.SENDER
                     await db.commit()
@@ -952,6 +975,33 @@ async def whatsapp_webhook(
         _admin_root_menu = bool(_context.get("admin_root_menu")) and is_admin_sender
 
         if not _is_in_multi_step_flow:
+            if ("הצטרפות למנוי" in text or "שליח" in text):
+                if user.approval_status == ApprovalStatus.APPROVED:
+                    if user.role != UserRole.COURIER:
+                        user.role = UserRole.COURIER
+                        await db.commit()
+                    response, new_state = await _route_to_role_menu_wa(
+                        user, db, state_manager
+                    )
+                    response.text = (
+                        "✅ חשבונך כבר מאושר כשליח. אין צורך להירשם מחדש.\n\n"
+                        + response.text
+                    )
+                    background_tasks.add_task(
+                        send_whatsapp_message,
+                        reply_to,
+                        response.text,
+                        response.keyboard,
+                    )
+                    responses.append(
+                        {
+                            "from": sender_id,
+                            "response": response.text,
+                            "new_state": new_state,
+                            "already_approved": True,
+                        }
+                    )
+                    continue
             if (
                 user.role in (UserRole.SENDER, UserRole.ADMIN) or _admin_root_menu
             ) and ("הצטרפות למנוי" in text or "שליח" in text):
