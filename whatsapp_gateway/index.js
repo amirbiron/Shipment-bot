@@ -22,6 +22,40 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));  // הגדלת לימיט לתמיכה בתמונות base64
 
+function _toBase64Url(value) {
+    return value.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function _fromBase64Url(value) {
+    const base64 = value.replace(/-/g, '+').replace(/_/g, '/');
+    const padLength = (4 - (base64.length % 4)) % 4;
+    return base64 + '='.repeat(padLength);
+}
+
+// מייצר rowId "בטוח" (ASCII בלבד) אך ניתן לשחזור לטקסט המקורי
+function encodeListRowId(title, index) {
+    try {
+        const encoded = _toBase64Url(Buffer.from(String(title || ''), 'utf8').toString('base64'));
+        // פורמט: t_<index>_<base64url(title)>
+        return `t_${index + 1}_${encoded}`;
+    } catch (e) {
+        return `menu_${index + 1}`;
+    }
+}
+
+function tryDecodeListRowId(rowId) {
+    if (!rowId || typeof rowId !== 'string') return null;
+    const m = /^t_\d+_(.+)$/.exec(rowId);
+    if (!m || !m[1]) return null;
+    try {
+        const padded = _fromBase64Url(m[1]);
+        const decoded = Buffer.from(padded, 'base64').toString('utf8');
+        return decoded || null;
+    } catch (e) {
+        return null;
+    }
+}
+
 // Get API webhook URL from environment variable
 const API_WEBHOOK_URL = process.env.API_WEBHOOK_URL || 'http://localhost:8000/api/webhooks/whatsapp/webhook';
 
@@ -262,8 +296,9 @@ async function initializeClient() {
                     messageText = listReply.title;
                     console.log('Using listResponse title:', messageText);
                 } else if (listReply && listReply.selectedRowId) {
-                    messageText = listReply.selectedRowId;
-                    console.log('Using listResponse rowId:', messageText);
+                    const decoded = tryDecodeListRowId(listReply.selectedRowId);
+                    messageText = decoded || listReply.selectedRowId;
+                    console.log('Using listResponse rowId:', listReply.selectedRowId, 'decoded:', decoded || '(none)');
                 }
             } else if (message.selectedButtonId) {
                 // תגובה ללחיצת כפתור (sendButtons) — הטקסט בשדה selectedButtonId
@@ -568,10 +603,10 @@ app.post('/send', async (req, res) => {
                         footer: '',
                         sections: [{
                             title: 'אפשרויות',
-                            // rowId חייב להיות ID "בטוח" (ללא אמוג'י/רווחים) — אחרת בגרסאות מסוימות ההודעה לא נשלחת בפועל
-                            // התוכן למשתמש נשאר ב-title.
+                            // rowId חייב להיות ID "בטוח" (ASCII בלבד) — אחרת בגרסאות מסוימות ההודעה לא נשלחת בפועל.
+                            // אבל חייבים גם לשמר תאימות לקליטת תשובה: לכן אנחנו מקודדים את הטקסט ל-base64url בתוך rowId.
                             rows: options.map((text, index) => ({
-                                rowId: `menu_${index + 1}`,
+                                rowId: encodeListRowId(text, index),
                                 title: text,
                                 description: ''
                             }))
