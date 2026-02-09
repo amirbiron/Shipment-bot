@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from collections.abc import Awaitable, Callable
 from fastapi import APIRouter, Depends, BackgroundTasks
 from pydantic import BaseModel, Field, ConfigDict
-from typing import Optional, List
+from typing import Optional, List, TypeAlias
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -29,6 +29,12 @@ from app.core.exceptions import TelegramError
 logger = get_logger(__name__)
 
 router = APIRouter()
+
+_SenderButtonHandler: TypeAlias = Callable[
+    [User, AsyncSession, StateManager, str, str | None],
+    Awaitable[tuple[MessageResponse, str | None]],
+]
+
 
 @dataclass(frozen=True)
 class _InboundTelegramEvent:
@@ -67,8 +73,17 @@ def _parse_inbound_event(
     """נרמול update לאירוע אחיד (טקסט/תמונה/כפתור)."""
     if update.callback_query:
         callback = update.callback_query
+        if callback.from_user is None:
+            # נענה ל-callback כדי להסיר loading, אבל נדלג על עיבוד ללא מזהה משתמש אמין
+            background_tasks.add_task(answer_callback_query, callback.id)
+            logger.warning(
+                "Telegram callback_query without from_user; skipping processing",
+                extra_data={"callback_query_id": callback.id},
+            )
+            return None
+
         # חשוב: זיהוי משתמש לפי from_user.id (מי לחץ), לא לפי chat.id (איפה ההודעה)
-        telegram_user_id = str(callback.from_user.id) if callback.from_user else None
+        telegram_user_id = str(callback.from_user.id)
         send_chat_id = _resolve_telegram_chat_id(update)
         text = callback.data or ""
 
@@ -83,7 +98,7 @@ def _parse_inbound_event(
 
         return _InboundTelegramEvent(
             send_chat_id=send_chat_id,
-            telegram_user_id=telegram_user_id or send_chat_id,
+            telegram_user_id=telegram_user_id,
             text=text,
             photo_file_id=None,
             name=name,
@@ -234,37 +249,23 @@ async def _handle_sender_fast_shipment() -> MessageResponse:
     return MessageResponse(msg_text)
 
 
-async def _sender_button_fast_shipment(
-    user: User,
-    db: AsyncSession,
-    state_manager: StateManager,
-    text: str,
-    photo_file_id: str | None,
-) -> tuple[MessageResponse, str | None]:
-    _ = (user, db, state_manager, text, photo_file_id)
-    return await _handle_sender_fast_shipment(), None
+def _static_sender_button(
+    response_factory: Callable[[], Awaitable[MessageResponse]],
+) -> _SenderButtonHandler:
+    """אדפטר לכפתורי שולח שלא צריכים את פרטי הבקשה."""
 
+    async def _handler(
+        user: User,
+        db: AsyncSession,
+        state_manager: StateManager,
+        text: str,
+        photo_file_id: str | None,
+    ) -> tuple[MessageResponse, str | None]:
+        del user, db, state_manager, text, photo_file_id
+        resp = await response_factory()
+        return resp, None
 
-async def _sender_button_station_signup(
-    user: User,
-    db: AsyncSession,
-    state_manager: StateManager,
-    text: str,
-    photo_file_id: str | None,
-) -> tuple[MessageResponse, str | None]:
-    _ = (user, db, state_manager, text, photo_file_id)
-    return await _handle_sender_station_signup(), None
-
-
-async def _sender_button_admin_contact(
-    user: User,
-    db: AsyncSession,
-    state_manager: StateManager,
-    text: str,
-    photo_file_id: str | None,
-) -> tuple[MessageResponse, str | None]:
-    _ = (user, db, state_manager, text, photo_file_id)
-    return await _handle_sender_admin_contact(), None
+    return _handler
 
 
 async def _handle_sender_station_signup() -> MessageResponse:
@@ -299,9 +300,15 @@ async def _handle_sender_admin_contact() -> MessageResponse:
     return MessageResponse(admin_text)
 
 
-_SENDER_BUTTON_ROUTES: list[
-    tuple[str, Callable[[User, AsyncSession, StateManager, str, str | None], Awaitable[tuple[MessageResponse, str | None]]]]
-] = [
+_sender_button_fast_shipment = _static_sender_button(_handle_sender_fast_shipment)
+_sender_button_station_signup = _static_sender_button(_handle_sender_station_signup)
+_sender_button_admin_contact = _static_sender_button(_handle_sender_admin_contact)
+
+
+_SENDER_BUTTON_ROUTES: list[tuple[str, _SenderButtonHandler]] = [
+    # חשוב: המיפוי הוא `keyword in text` ולכן **הסדר כאן קריטי**.
+    # יש לשים מחרוזות ספציפיות לפני כלליות (למשל "הצטרפות למנוי" לפני "שליח").
+    #
     # הצטרפות כשליח (שני keywords כדי לשמור על ההתנהגות הקיימת)
     ("הצטרפות למנוי", _handle_sender_join_as_courier),
     ("שליח", _handle_sender_join_as_courier),
@@ -913,6 +920,15 @@ async def telegram_webhook(
         "Unknown user role in telegram webhook, falling back to sender",
         extra_data={"user_id": user.id, "role": str(user.role)},
     )
-    response, new_state = await _sender_fallback(user, db, state_manager)
-    _queue_response_send(background_tasks, send_chat_id, response)
-    return {"ok": True, "new_state": new_state}
+    try:
+        response, new_state = await _sender_fallback(user, db, state_manager)
+        _queue_response_send(background_tasks, send_chat_id, response)
+        return {"ok": True, "new_state": new_state}
+    except Exception as e:
+        logger.error(
+            "Failed sender fallback for unknown role",
+            extra_data={"user_id": user.id, "role": str(user.role), "error": str(e)},
+            exc_info=True,
+        )
+        background_tasks.add_task(send_welcome_message, send_chat_id)
+        return {"ok": True}
