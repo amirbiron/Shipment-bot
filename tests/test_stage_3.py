@@ -6,7 +6,6 @@
 שלב 3.3: פאנל ניהול תחנה - ניהול סדרנים, ארנק תחנה, דוח גבייה, רשימה שחורה
 """
 import pytest
-from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
