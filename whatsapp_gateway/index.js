@@ -392,45 +392,57 @@ app.post('/send', async (req, res) => {
 
         let result;
 
+        // sendListMessage מחזיר הצלחה לכתובות @lid אבל ההודעה לא מגיעה בפועל.
+        // לכן עבור @lid שולחים טקסט רגיל עם אפשרויות.
+        const isLid = chatId.includes('@lid');
+
         // Try to send with interactive list if keyboard is provided
         if (keyboard && Array.isArray(keyboard) && keyboard.length > 0) {
             // Flatten keyboard array
             const options = keyboard.flat();
 
-            // Method 1: Try sendButtons with WPPConnect 1.x format
-            try {
-                const buttons = options.map((text, index) => ({
-                    buttonText: { displayText: text },
-                    buttonId: text  // Use text as buttonId for easier handling
-                }));
-                result = await client.sendButtons(chatId, 'בחרו אפשרות:', buttons, message);
-                console.log('Message sent with buttons (v1 format) to:', chatId);
-            } catch (btnError) {
-                console.log('sendButtons v1 failed:', btnError.message);
-
-                // Method 2: Try sendListMessage
+            if (isLid) {
+                // @lid — טקסט עם אפשרויות (בלי מספור, הבוט מצפה לטקסט מדויק)
+                const optionsText = options.map((text) => `▫️ ${text}`).join('\n');
+                result = await client.sendText(chatId, `${message}\n\n${optionsText}`);
+                console.log('Message sent as text (LID) to:', chatId);
+            } else {
+                // Method 1: Try sendButtons with WPPConnect 1.x format
                 try {
-                    result = await client.sendListMessage(chatId, {
-                        buttonText: 'בחרו 👆',
-                        description: message,
-                        title: '',
-                        footer: '',
-                        sections: [{
-                            title: 'אפשרויות',
-                            // Use text as rowId so selection returns the correct text
-                            rows: options.map((text) => ({
-                                rowId: text,
-                                title: text,
-                                description: ''
-                            }))
-                        }]
-                    });
-                    console.log('Message sent with list to:', chatId);
-                } catch (listError) {
-                    console.log('sendListMessage failed:', listError.message);
-                    // Fallback: send as plain text
-                    result = await client.sendText(chatId, message);
-                    console.log('Message sent as text (fallback) to:', chatId);
+                    const buttons = options.map((text, index) => ({
+                        buttonText: { displayText: text },
+                        buttonId: text  // Use text as buttonId for easier handling
+                    }));
+                    result = await client.sendButtons(chatId, 'בחרו אפשרות:', buttons, message);
+                    console.log('Message sent with buttons (v1 format) to:', chatId);
+                } catch (btnError) {
+                    console.log('sendButtons v1 failed:', btnError.message);
+
+                    // Method 2: Try sendListMessage
+                    try {
+                        result = await client.sendListMessage(chatId, {
+                            buttonText: 'בחרו 👆',
+                            description: message,
+                            title: '',
+                            footer: '',
+                            sections: [{
+                                title: 'אפשרויות',
+                                // Use text as rowId so selection returns the correct text
+                                rows: options.map((text) => ({
+                                    rowId: text,
+                                    title: text,
+                                    description: ''
+                                }))
+                            }]
+                        });
+                        console.log('Message sent with list to:', chatId);
+                    } catch (listError) {
+                        console.log('sendListMessage failed:', listError.message);
+                        // Fallback: send as plain text with options
+                        const optionsText = options.map((text) => `▫️ ${text}`).join('\n');
+                        result = await client.sendText(chatId, `${message}\n\n${optionsText}`);
+                        console.log('Message sent as text (fallback) to:', chatId);
+                    }
                 }
             }
         } else {
