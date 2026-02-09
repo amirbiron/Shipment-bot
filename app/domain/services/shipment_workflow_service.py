@@ -101,6 +101,10 @@ class ShipmentWorkflowService:
         delivery.status = DeliveryStatus.PENDING_APPROVAL
         delivery.requesting_courier_id = courier_id
         delivery.requested_at = datetime.now(timezone.utc)
+        # ניקוי שדות אישור ישנים (רלוונטי אחרי דחייה + בקשה חוזרת)
+        delivery.approved_by_id = None
+        delivery.approved_at = None
+        delivery.approval_decision = None
 
         # שליחת הודעה לסדרנים עם כפתורי אישור/דחייה
         if delivery.station_id:

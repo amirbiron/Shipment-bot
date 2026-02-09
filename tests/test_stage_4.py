@@ -227,6 +227,61 @@ class TestDeliveryRequestFlow:
         assert delivery.requesting_courier_id == courier.id
         assert delivery.requested_at is not None
 
+    @pytest.mark.asyncio
+    async def test_re_request_after_rejection_clears_approval_fields(
+        self, db_session, user_factory, delivery_factory, station_factory,
+        dispatcher_factory, wallet_factory
+    ):
+        """בקשה חוזרת אחרי דחייה מנקה שדות אישור ישנים"""
+        owner = await user_factory(
+            phone_number="+972500000060", name="בעלים60", role=UserRole.STATION_OWNER
+        )
+        station = await station_factory(name="תחנה ניקוי", owner_id=owner.id)
+        disp_user = await user_factory(
+            phone_number="+972500000061", name="סדרן61",
+            role=UserRole.COURIER, approval_status=ApprovalStatus.APPROVED,
+        )
+        await dispatcher_factory(station.id, disp_user.id)
+
+        courier1 = await user_factory(
+            phone_number="+972500000062", name="שליח62",
+            role=UserRole.COURIER, approval_status=ApprovalStatus.APPROVED,
+        )
+        await wallet_factory(courier_id=courier1.id, balance=100.0)
+        courier2 = await user_factory(
+            phone_number="+972500000063", name="שליח63",
+            role=UserRole.COURIER, approval_status=ApprovalStatus.APPROVED,
+        )
+        await wallet_factory(courier_id=courier2.id, balance=100.0)
+        sender = await user_factory(
+            phone_number="+972501111160", name="שולח60"
+        )
+        delivery = await delivery_factory(sender_id=sender.id)
+        delivery.station_id = station.id
+        await db_session.commit()
+
+        workflow = ShipmentWorkflowService(db_session)
+
+        # שלב 1: בקשה ראשונה
+        await workflow.request_delivery(delivery.id, courier1.id)
+
+        # שלב 2: דחייה — מגדיר approval_decision="rejected"
+        await workflow.reject_delivery(delivery.id, disp_user.id)
+        await db_session.refresh(delivery)
+        assert delivery.approval_decision == "rejected"
+        assert delivery.approved_by_id == disp_user.id
+
+        # שלב 3: בקשה חוזרת — צריך לנקות שדות אישור ישנים
+        await workflow.request_delivery(delivery.id, courier2.id)
+        await db_session.refresh(delivery)
+
+        assert delivery.status == DeliveryStatus.PENDING_APPROVAL
+        assert delivery.requesting_courier_id == courier2.id
+        # שדות אישור נוקו
+        assert delivery.approved_by_id is None
+        assert delivery.approved_at is None
+        assert delivery.approval_decision is None
+
 
 # ============================================================================
 # TestCoordinatorApproval
