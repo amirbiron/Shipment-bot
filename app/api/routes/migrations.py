@@ -4,8 +4,10 @@ Database migration endpoints - הרצה חד-פעמית להוספת שדות
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.database import get_db
-from app.db.migrations import run_migration_001, run_migration_002, run_migration_003
+from app.db.database import get_db, engine
+from app.db.migrations import (
+    run_migration_001, run_migration_002, run_migration_003, add_enum_values,
+)
 
 router = APIRouter()
 
@@ -86,9 +88,13 @@ async def run_station_tables_migration(
 ) -> dict[str, object]:
     """
     יצירת טבלאות תחנות והוספת station_owner ל-enum [שלב 3].
-    בטוח להריץ מספר פעמים (משתמש ב-IF NOT EXISTS / ADD VALUE IF NOT EXISTS).
+    בטוח להריץ מספר פעמים (משתמש ב-IF NOT EXISTS).
     """
     try:
+        # שלב 1: הוספת enum value עם AUTOCOMMIT (לא יכול לרוץ בתוך טרנזקציה)
+        await add_enum_values(engine)
+
+        # שלב 2: יצירת טבלאות ואינדקסים
         conn = await db.connection()
         await run_migration_003(conn)
         await db.commit()

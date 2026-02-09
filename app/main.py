@@ -97,7 +97,12 @@ async def startup() -> None:
     # (create_all לא מוסיף עמודות לטבלאות שכבר קיימות)
     # הערה: המיגרציות רצות רק על PostgreSQL. ב-SQLite (בדיקות) create_all מספיק.
     if engine.dialect.name == "postgresql":
-        from app.db.migrations import run_all_migrations
+        from app.db.migrations import run_all_migrations, add_enum_values
+
+        # שלב 1: הוספת ערכי enum חדשים (דורש AUTOCOMMIT, לפני יצירת טבלאות)
+        await add_enum_values(engine)
+
+        # שלב 2: מיגרציות רגילות (טבלאות, עמודות, אינדקסים)
         async with engine.begin() as conn:
             await run_all_migrations(conn)
         logger.info("Auto-migrations completed")
