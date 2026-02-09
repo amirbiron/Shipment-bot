@@ -32,6 +32,53 @@ function _fromBase64Url(value) {
     return base64 + '='.repeat(padLength);
 }
 
+// ניקוי בסיס64 (מסיר רווחים/שורות) למניעת "Image tag load error"
+function sanitizeBase64(value) {
+    if (!value || typeof value !== 'string') return value;
+    return value.replace(/\s+/g, '');
+}
+
+// בדיקה בסיסית אם מחרוזת נראית כמו base64 גולמי (ללא data:)
+function looksLikeBase64(value) {
+    if (!value || typeof value !== 'string') return false;
+    if (value.startsWith('data:')) return false;
+    if (value.length < 200) return false; // להימנע מזיהוי שגוי של טקסט קצר
+    return /^[A-Za-z0-9+/=\s]+$/.test(value);
+}
+
+// נרמול מדיה ל-data URL "נקי" + חילוץ mime/base64
+function normalizeMediaPayload(mediaUrl, mediaType) {
+    if (!mediaUrl || typeof mediaUrl !== 'string') {
+        return { dataUrl: mediaUrl, base64: null, mimeType: null };
+    }
+
+    const dataMatch = /^data:([^;]+);base64,(.*)$/s.exec(mediaUrl);
+    let mimeType = null;
+    let base64 = null;
+
+    if (dataMatch) {
+        mimeType = dataMatch[1] || null;
+        base64 = sanitizeBase64(dataMatch[2] || '');
+    } else if (looksLikeBase64(mediaUrl)) {
+        base64 = sanitizeBase64(mediaUrl);
+    }
+
+    if (!mimeType && base64) {
+        // ברירת מחדל לפי סוג מדיה; אם לא ידוע — JPEG
+        if (mediaType && String(mediaType).includes('image')) {
+            mimeType = 'image/jpeg';
+        } else {
+            mimeType = 'application/octet-stream';
+        }
+    }
+
+    const dataUrl = base64 && mimeType
+        ? `data:${mimeType};base64,${base64}`
+        : mediaUrl;
+
+    return { dataUrl, base64, mimeType };
+}
+
 // מייצר rowId "בטוח" (ASCII בלבד) אך ניתן לשחזור לטקסט המקורי
 function encodeListRowId(title, index) {
     try {
@@ -718,11 +765,16 @@ app.post('/send-media', async (req, res) => {
         });
     }
 
+    // נרמול מדיה ל-data URL נקי (מסיר שורות/רווחים ב-base64)
+    const normalizedMedia = normalizeMediaPayload(media_url, media_type);
+    const mediaUrlForSend = normalizedMedia.dataUrl;
+    const rawBase64 = normalizedMedia.base64;
+
     // חישוב סוג מדיה ושם קובץ מחוץ ל-try — נגישים גם ב-catch (retry)
     let filename = 'media';
-    let mimeType = null;
-    const dataUrlMatch = /^data:([^;]+);base64,/.exec(media_url);
-    if (dataUrlMatch && dataUrlMatch[1]) {
+    let mimeType = normalizedMedia.mimeType;
+    const dataUrlMatch = !mimeType && /^data:([^;]+);base64,/.exec(mediaUrlForSend || '');
+    if (!mimeType && dataUrlMatch && dataUrlMatch[1]) {
         mimeType = dataUrlMatch[1];
     }
 
@@ -754,15 +806,23 @@ app.post('/send-media', async (req, res) => {
         let result;
 
         if (!isImage) {
-            result = await client.sendFile(chatId, media_url, filename, captionText);
+            if (rawBase64 && typeof client.sendFileFromBase64 === 'function') {
+                result = await client.sendFileFromBase64(chatId, rawBase64, filename, captionText);
+            } else {
+                result = await client.sendFile(chatId, mediaUrlForSend, filename, captionText);
+            }
         } else {
             // sendImage עשוי לזרוק שגיאה לא סטנדרטית (ללא message) — תופסים ומנסים sendFile
             try {
-                result = await client.sendImage(chatId, media_url, filename, captionText);
+                result = await client.sendImage(chatId, mediaUrlForSend, filename, captionText);
             } catch (imgError) {
                 const errMsg = imgError?.message || String(imgError || 'unknown');
                 console.log('sendImage failed, trying sendFile fallback:', errMsg);
-                result = await client.sendFile(chatId, media_url, filename, captionText);
+                if (rawBase64 && typeof client.sendFileFromBase64 === 'function') {
+                    result = await client.sendFileFromBase64(chatId, rawBase64, filename, captionText);
+                } else {
+                    result = await client.sendFile(chatId, mediaUrlForSend, filename, captionText);
+                }
             }
         }
 
@@ -782,12 +842,20 @@ app.post('/send-media', async (req, res) => {
                 let retryResult;
                 if (isImage) {
                     try {
-                        retryResult = await client.sendImage(lidChatId, media_url, filename, retryCaption);
+                        retryResult = await client.sendImage(lidChatId, mediaUrlForSend, filename, retryCaption);
                     } catch (imgErr) {
-                        retryResult = await client.sendFile(lidChatId, media_url, filename, retryCaption);
+                        if (rawBase64 && typeof client.sendFileFromBase64 === 'function') {
+                            retryResult = await client.sendFileFromBase64(lidChatId, rawBase64, filename, retryCaption);
+                        } else {
+                            retryResult = await client.sendFile(lidChatId, mediaUrlForSend, filename, retryCaption);
+                        }
                     }
                 } else {
-                    retryResult = await client.sendFile(lidChatId, media_url, filename, retryCaption);
+                    if (rawBase64 && typeof client.sendFileFromBase64 === 'function') {
+                        retryResult = await client.sendFileFromBase64(lidChatId, rawBase64, filename, retryCaption);
+                    } else {
+                        retryResult = await client.sendFile(lidChatId, mediaUrlForSend, filename, retryCaption);
+                    }
                 }
                 console.log('Media sent with @lid retry to:', lidChatId);
                 return res.json({ success: true, messageId: retryResult?.id });
