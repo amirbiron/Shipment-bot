@@ -658,6 +658,9 @@ class TestStationService:
 
         service = StationService(db_session)
         station = await service.create_station("תחנה חדשה", owner.id)
+        # create_station עושה flush בלבד - הקוראים אחראים על commit
+        await db_session.commit()
+        await db_session.refresh(station)
 
         assert station.id is not None
         assert station.name == "תחנה חדשה"
@@ -913,3 +916,72 @@ class TestStage3Models:
         await db_session.refresh(delivery)
 
         assert delivery.station_id is None
+
+
+# ============================================================================
+# תיקון באג: יצירת תחנה לא עדכנה תפקיד + recovery
+# ============================================================================
+
+
+class TestStationCreationAPI:
+    """בדיקות ל-API יצירת תחנה - אטומיות ו-recovery של תפקיד"""
+
+    @pytest.mark.asyncio
+    async def test_create_station_sets_role_atomically(
+        self, test_client, db_session, user_factory
+    ):
+        """יצירת תחנה דרך API מעדכנת תפקיד ל-STATION_OWNER"""
+        user = await user_factory(
+            phone_number="+972501230001",
+            name="Atomic Owner",
+            role=UserRole.SENDER,
+            platform="whatsapp",
+        )
+
+        response = await test_client.post(
+            "/api/stations/",
+            json={"name": "תחנת אטומיות", "owner_phone": "0501230001"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["name"] == "תחנת אטומיות"
+
+        # וידוא שהתפקיד עודכן
+        await db_session.refresh(user)
+        assert user.role == UserRole.STATION_OWNER
+
+    @pytest.mark.asyncio
+    async def test_existing_station_fixes_role(
+        self, test_client, db_session, user_factory
+    ):
+        """
+        אם לתחנה כבר קיימת אבל התפקיד לא עודכן (באג ישן),
+        הקריאה ל-API מתקנת את התפקיד ל-STATION_OWNER.
+        """
+        # יצירת משתמש עם תפקיד SENDER (סימולציה של באג ישן)
+        user = await user_factory(
+            phone_number="+972501230002",
+            name="Broken Owner",
+            role=UserRole.SENDER,
+            platform="whatsapp",
+        )
+
+        # יצירת תחנה ישירות בDB בלי לעדכן תפקיד (סימולציה של באג)
+        station = Station(name="תחנה שבורה", owner_id=user.id)
+        db_session.add(station)
+        await db_session.flush()
+        wallet = StationWallet(station_id=station.id)
+        db_session.add(wallet)
+        await db_session.commit()
+
+        # ניסיון ליצור תחנה - צריך להיכשל עם 400 אבל לתקן את הרול
+        response = await test_client.post(
+            "/api/stations/",
+            json={"name": "תחנה כפולה", "owner_phone": "0501230002"},
+        )
+        assert response.status_code == 400
+
+        # וידוא שהתפקיד תוקן למרות השגיאה
+        await db_session.refresh(user)
+        assert user.role == UserRole.STATION_OWNER
