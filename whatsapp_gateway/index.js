@@ -120,6 +120,9 @@ async function initializeClient() {
         client = await wppconnect.create({
             session: SESSION_NAME,
             autoClose: 0, // Disable auto-close (0 = never)
+            // ביטול cache של גרסת WhatsApp Web — תמיד טוען את הגרסה העדכנית ביותר
+            // מונע שגיאת "Version not available for X, using latest as fallback"
+            webVersionCache: { type: 'none' },
             tokenStore: 'file',
             folderNameToken: SESSION_FOLDER,  // Use absolute path to match disk mount
             catchQR: (base64Qr, asciiQR, attempts, urlCode) => {
@@ -425,9 +428,8 @@ app.post('/send', async (req, res) => {
                     console.log('Message sent with list to:', chatId);
                 } catch (listError) {
                     console.log('sendListMessage failed:', listError.message);
-                    // Fallback: send as plain text with options
-                    const optionsText = options.map((text) => `▫️ ${text}`).join('\n');
-                    result = await client.sendText(chatId, `${message}\n\n${optionsText}`);
+                    // Fallback: send as plain text
+                    result = await client.sendText(chatId, message);
                     console.log('Message sent as text (fallback) to:', chatId);
                 }
             }
