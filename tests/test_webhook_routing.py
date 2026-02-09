@@ -132,6 +132,66 @@ class TestResetRoutingByRole:
         assert data["ok"] is True
         assert StationOwnerState.MENU.value in data.get("new_state", "")
 
+    @pytest.mark.asyncio
+    async def test_whatsapp_station_owner_hash_routes_to_station_panel_even_when_sender_id_differs(
+        self, test_client, db_session, user_factory, mock_whatsapp_gateway
+    ):
+        """
+        רגרסיה/באג בפרודקשן:
+        תחנה נוצרת לפי owner_phone מנורמל (+972...),
+        אבל בווטסאפ המשתמש מזוהה לעיתים לפי sender_id (@lid/@c.us).
+
+        במקרה כזה יכול להיווצר "משתמש כפול" והבוט לא יזהה את בעל התחנה בעת לחיצה על #.
+        הבדיקה מוודאת שכשאפשר לחלץ מספר אמיתי מהודעת WhatsApp — הבוט מנתב לפאנל תחנה.
+        """
+        owner_phone = "+972501111007"
+        sender_id = "device-abc@lid"
+        reply_to = "972501111007@c.us"
+
+        # משתמש "אמיתי" של בעל תחנה (נוצר דרך API/תחנה)
+        owner = await user_factory(
+            phone_number=owner_phone,
+            name="WA Owner",
+            role=UserRole.STATION_OWNER,
+            platform="whatsapp",
+        )
+
+        # משתמש וואטסאפ נוסף שנוצר מה-gateway לפי sender_id
+        await user_factory(
+            phone_number=sender_id,
+            name="WA Duplicate",
+            role=UserRole.SENDER,
+            platform="whatsapp",
+        )
+
+        # יצירת תחנה + ארנק לבעלים
+        station = Station(name="תחנת WA", owner_id=owner.id)
+        db_session.add(station)
+        await db_session.flush()
+        wallet = StationWallet(station_id=station.id)
+        db_session.add(wallet)
+        await db_session.commit()
+
+        resp = await test_client.post(
+            "/api/webhooks/whatsapp/webhook",
+            json={
+                "messages": [
+                    {
+                        "from_number": reply_to,
+                        "sender_id": sender_id,
+                        "reply_to": reply_to,
+                        "message_id": "m-wa-owner-hash-1",
+                        "text": "#",
+                        "timestamp": 1700000000,
+                    }
+                ]
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["processed"] == 1
+        assert StationOwnerState.MENU.value in (data["responses"][0].get("new_state") or "")
+
 
 # ============================================================================
 # הגנה מפני יירוט כפתורים בזרימות רב-שלביות
