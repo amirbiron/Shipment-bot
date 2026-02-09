@@ -22,6 +22,73 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));  // הגדלת לימיט לתמיכה בתמונות base64
 
+// pollMsgId(serialized) -> { optionsFull: string[], createdAt: number }
+const pollMenuMap = new Map();
+const POLL_MENU_TTL_MS = 1000 * 60 * 60; // שעה
+
+function _cleanupOldPollMenus() {
+    const now = Date.now();
+    for (const [key, value] of pollMenuMap.entries()) {
+        if (!value || !value.createdAt || now - value.createdAt > POLL_MENU_TTL_MS) {
+            pollMenuMap.delete(key);
+        }
+    }
+}
+
+function _serializeMsgId(msgId) {
+    if (!msgId) return '';
+    if (typeof msgId === 'string') return msgId;
+    if (typeof msgId === 'object' && msgId._serialized) return String(msgId._serialized);
+    try {
+        return JSON.stringify(msgId);
+    } catch (e) {
+        return String(msgId);
+    }
+}
+
+async function _resolveReplyToForSender(senderId, chatIdHint = null) {
+    let replyTo = senderId;
+    if (!replyTo || typeof replyTo !== 'string') return replyTo;
+
+    if (!replyTo.includes('@lid')) {
+        return replyTo;
+    }
+
+    if (lidToCusMap.has(replyTo)) {
+        const cached = lidToCusMap.get(replyTo);
+        if (cached) return cached;
+    }
+
+    // ניסיון לפתור דרך getContact
+    try {
+        const contact = await client.getContact(replyTo);
+        if (contact && contact.id && contact.id._serialized && !contact.id._serialized.includes('@lid')) {
+            replyTo = contact.id._serialized;
+        } else if (contact && contact.number) {
+            replyTo = `${contact.number}@c.us`;
+        } else if (contact && contact.formattedName) {
+            const phoneFromName = extractIsraeliPhoneFromCandidates(contact.formattedName);
+            const resolved = phoneFromName ? normalizeToChatId(phoneFromName) : null;
+            if (resolved && resolved.includes('@c.us')) {
+                replyTo = resolved;
+            }
+        }
+    } catch (e) {
+        // ignore
+    }
+
+    // ניסיון להשתמש ב-chatId אם הוא לא lid
+    if (replyTo && replyTo.includes('@lid') && chatIdHint && typeof chatIdHint === 'string' && !chatIdHint.includes('@lid')) {
+        replyTo = chatIdHint;
+    }
+
+    if (replyTo && typeof replyTo === 'string' && !replyTo.includes('@lid')) {
+        lidToCusMap.set(senderId, replyTo);
+    }
+
+    return replyTo;
+}
+
 function _toBase64Url(value) {
     return value.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
@@ -286,6 +353,81 @@ async function initializeClient() {
         isConnected = true;
         currentQR = null; // Clear QR once connected
         console.log('WhatsApp client connected successfully');
+
+        // Listen for acknowledgements (מסייע באבחון הודעות שנדחות)
+        try {
+            client.onAck((ack) => {
+                // לא מדפיסים מידע רגיש מעבר למזהה ההודעה וה-ack
+                console.log('Ack event:', {
+                    id: ack?.id?._serialized || ack?.id || null,
+                    ack: ack?.ack,
+                    from: ack?.from?._serialized || ack?.from || null,
+                    to: ack?.to?._serialized || ack?.to || null
+                });
+            });
+        } catch (e) {
+            console.log('WARNING: could not register onAck listener:', e?.message || String(e));
+        }
+
+        // Listen for poll responses (fallback אינטראקטיבי לתפריטים כש-List נדחה)
+        try {
+            client.onPollResponse(async (data) => {
+                try {
+                    _cleanupOldPollMenus();
+
+                    const msgIdSerialized = _serializeMsgId(data?.msgId);
+                    const chatIdSerialized = data?.chatId?._serialized || String(data?.chatId || '');
+                    const senderSerialized = data?.sender?._serialized || String(data?.sender || '');
+                    const selectedOptions = Array.isArray(data?.selectedOptions) ? data.selectedOptions : [];
+
+                    const menu = pollMenuMap.get(msgIdSerialized);
+                    const optionsFull = menu?.optionsFull || [];
+
+                    const selectedTexts = selectedOptions
+                        .map((idx) => (typeof idx === 'number' ? optionsFull[idx] : null))
+                        .filter((x) => typeof x === 'string' && x.trim());
+
+                    const chosenText = selectedTexts[0] || '';
+                    if (!chosenText) {
+                        console.log('Poll response received but could not map selection:', {
+                            msgId: msgIdSerialized,
+                            selectedOptions
+                        });
+                        return;
+                    }
+
+                    const replyTo = await _resolveReplyToForSender(senderSerialized, chatIdSerialized);
+
+                    console.log('Poll response mapped to text:', chosenText);
+                    console.log('Poll sender:', senderSerialized, 'replyTo:', replyTo, 'chatId:', chatIdSerialized);
+
+                    const payload = {
+                        messages: [{
+                            sender_id: senderSerialized,
+                            reply_to: replyTo || senderSerialized,
+                            from_number: replyTo || senderSerialized,
+                            message_id: `${msgIdSerialized}:poll_response`,
+                            text: chosenText,
+                            timestamp: data?.timestamp || Math.floor(Date.now() / 1000),
+                            media_url: null,
+                            media_type: null,
+                            mime_type: null
+                        }]
+                    };
+
+                    const response = await fetch(API_WEBHOOK_URL, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    console.log('Forwarded poll response to API, status:', response.status);
+                } catch (err) {
+                    console.error('Error handling poll response:', err?.message || String(err));
+                }
+            });
+        } catch (e) {
+            console.log('WARNING: could not register onPollResponse listener:', e?.message || String(e));
+        }
 
         // Listen for incoming messages
         client.onMessage(async (message) => {
@@ -646,10 +788,26 @@ app.post('/send', async (req, res) => {
                     }
                 } catch (listError) {
                     console.log('sendListMessage failed:', listError.message);
-                    // Fallback: טקסט רגיל — משתמשים ב-chatId המקורי (sendText עובד עם @lid)
-                    const optionsText = options.map((text) => `▫️ ${text}`).join('\n');
-                    result = await client.sendText(chatId, `${message}\n\n${optionsText}`);
-                    console.log('Message sent as text (fallback) to:', chatId);
+                    // Fallback 1: Poll אינטראקטיבי (עובד בפרטי גם כשה-List נדחה)
+                    try {
+                        const pollName = truncateByCodepoints(message, 100);
+                        const pollChoicesDisplay = options.map((t) => truncateByCodepoints(t, 32));
+                        const pollResult = await client.sendPollMessage(chatId, pollName, pollChoicesDisplay, { selectableCount: 1 });
+                        const pollMsgId = _serializeMsgId(pollResult?.id || pollResult?.msgId || pollResult);
+                        if (pollMsgId) {
+                            pollMenuMap.set(pollMsgId, { optionsFull: options.slice(), createdAt: Date.now() });
+                            console.log('Poll menu sent as fallback, msgId:', pollMsgId);
+                        } else {
+                            console.log('Poll menu sent but could not serialize msgId');
+                        }
+                        result = pollResult;
+                    } catch (pollError) {
+                        console.log('sendPollMessage failed:', pollError?.message || String(pollError));
+                        // Fallback 2: טקסט רגיל (אחרון)
+                        const optionsText = options.map((text) => `▫️ ${text}`).join('\n');
+                        result = await client.sendText(chatId, `${message}\n\n${optionsText}`);
+                        console.log('Message sent as text (fallback) to:', chatId);
+                    }
                 }
             }
         } else {
