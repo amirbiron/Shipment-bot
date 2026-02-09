@@ -162,9 +162,28 @@ async def get_or_create_user(
     user_by_phone = None
     if normalized_phone:
         result = await db.execute(
-            select(User).where(User.phone_number == normalized_phone)
+            select(User)
+            .where(User.phone_number == normalized_phone)
+            .order_by(
+                User.is_active.desc(),
+                User.updated_at.desc(),
+                User.created_at.desc(),
+            )
+            .limit(2)
         )
-        user_by_phone = result.scalar_one_or_none()
+        phone_matches = list(result.scalars().all())
+        user_by_phone = phone_matches[0] if phone_matches else None
+
+        if len(phone_matches) > 1:
+            # למרות ש-phone_number מסומן כ-unique במודל, בפרודקשן ייתכנו נתונים היסטוריים לא עקביים.
+            # אסור להפיל webhook — בוחרים דטרמיניסטית וממשיכים.
+            logger.error(
+                "Multiple user records matched normalized phone; using first match",
+                extra_data={
+                    "phone": PhoneNumberValidator.mask(normalized_phone),
+                    "matched_user_ids": [u.id for u in phone_matches],
+                },
+            )
 
     # בחירת משתמש:
     # - אם יש משתמש לפי מספר אמיתי והוא בעל תחנה/שליח (תפקיד "חזק") — נעדיף אותו.
