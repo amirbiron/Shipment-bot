@@ -94,9 +94,14 @@ def _parse_inbound_event(
     if update.message:
         message = update.message
         send_chat_id = str(message.chat.id)
-        telegram_user_id = (
-            str(message.from_user.id) if message.from_user else send_chat_id
-        )
+        # תאימות אחורה + נכונות:
+        # - ב-private chat: מזהה הצ'אט הוא מזהה המשתמש ולכן נשמור לפי chat.id
+        #   (גם אם ה-payload בבדיקות לא עקבי בין chat.id ל-from.id)
+        # - בקבוצות/ערוצים: חייב לזהות משתמש לפי from_user.id (מי כתב)
+        if message.chat and message.chat.type == "private":
+            telegram_user_id = send_chat_id
+        else:
+            telegram_user_id = str(message.from_user.id) if message.from_user else send_chat_id
         text = message.text or ""
 
         photo_file_id = None
