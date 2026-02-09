@@ -626,17 +626,27 @@ async def test_whatsapp_duplicate_message_skipped(
     assert data2["processed"] == 0
 
 
-@pytest.mark.unit
-def test_dedup_function_detects_duplicates():
-    """בדיקת יחידה ל-_is_duplicate_message"""
-    from app.api.webhooks.whatsapp import _is_duplicate_message, _processed_messages
-    _processed_messages.clear()
+@pytest.mark.asyncio
+async def test_dedup_db_idempotency(
+    db_session,
+):
+    """בדיקת יחידה ל-_try_acquire_message ו-_mark_message_completed (DB idempotency)"""
+    from app.api.webhooks.whatsapp import _try_acquire_message, _mark_message_completed
 
-    # הודעה ראשונה — לא כפולה
-    assert _is_duplicate_message("msg-1") is False
-    # אותה הודעה — כפולה
-    assert _is_duplicate_message("msg-1") is True
-    # הודעה חדשה — לא כפולה
-    assert _is_duplicate_message("msg-2") is False
+    # הודעה ראשונה — אפשר לעבד
+    assert await _try_acquire_message(db_session, "msg-1", "whatsapp") is True
+    await db_session.commit()
 
-    _processed_messages.clear()
+    # אותה הודעה ב-processing — לא מאפשרים עיבוד חוזר
+    assert await _try_acquire_message(db_session, "msg-1", "whatsapp") is False
+
+    # סימון כ-completed
+    await _mark_message_completed(db_session, "msg-1")
+    await db_session.commit()
+
+    # אחרי completed — עדיין חוסם כפילויות
+    assert await _try_acquire_message(db_session, "msg-1", "whatsapp") is False
+
+    # הודעה חדשה — אפשר לעבד
+    assert await _try_acquire_message(db_session, "msg-2", "whatsapp") is True
+    await db_session.commit()
