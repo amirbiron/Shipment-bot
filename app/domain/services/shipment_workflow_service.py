@@ -172,25 +172,21 @@ class ShipmentWorkflowService:
         delivery.approved_at = datetime.now(timezone.utc)
         delivery.approval_decision = "approved"
 
-        # commit אחד אטומי: תפיסה + חיוב + שדות אישור
-        await self.db.commit()
-        await self.db.refresh(delivery)
-
-        # שליפת משתמשים לכרטיס סגור
+        # שליפת משתמשים + הודעות outbox לפני ה-commit — אטומיות מלאה
         courier = await self._get_user(courier_id)
         dispatcher = await self._get_user(dispatcher_id)
 
-        # שליחת הודעה לשליח עם פרטי המשלוח
         if courier:
             await self._notify_courier_approved(delivery, courier)
 
-        # שליחת כרטיס סגור לקבוצה פרטית
         if delivery.station_id and courier and dispatcher:
             await self._send_closed_card(
                 delivery, courier, "approved", dispatcher
             )
 
+        # commit אחד אטומי: תפיסה + חיוב + אישור + הודעות outbox
         await self.db.commit()
+        await self.db.refresh(delivery)
 
         logger.info(
             "Delivery approved by dispatcher",
@@ -241,24 +237,21 @@ class ShipmentWorkflowService:
         delivery.approved_at = datetime.now(timezone.utc)
         delivery.approval_decision = "rejected"
 
-        await self.db.commit()
-        await self.db.refresh(delivery)
-
-        # שליפת משתמשים
+        # שליפת משתמשים + הודעות outbox לפני ה-commit — אטומיות מלאה
         courier = await self._get_user(courier_id)
         dispatcher = await self._get_user(dispatcher_id)
 
-        # הודעה לשליח שהבקשה נדחתה
         if courier:
             await self._notify_courier_rejected(delivery, courier)
 
-        # כרטיס סגור לקבוצה פרטית
         if delivery.station_id and courier and dispatcher:
             await self._send_closed_card(
                 delivery, courier, "rejected", dispatcher
             )
 
+        # commit אחד אטומי: שינוי מצב + הודעות outbox
         await self.db.commit()
+        await self.db.refresh(delivery)
 
         logger.info(
             "Delivery rejected by dispatcher",
