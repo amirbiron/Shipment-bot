@@ -51,7 +51,7 @@ class TestStage1WelcomeMessage:
     ):
         """משתמש חדש בוואטסאפ מקבל הודעת ברוכים הבאים"""
         resp = await test_client.post(
-            "/api/webhooks/whatsapp/webhook",
+            "/api/whatsapp/webhook",
             json={
                 "messages": [
                     {
@@ -590,13 +590,15 @@ class TestStage2KYCFullWebhookFlow:
         """זרימת KYC מלאה: הצטרפות -> שם -> מסמך -> סלפי -> רכב -> תמונה -> תקנון"""
         sender_id = "972508888888@lid"
         reply_to = "972508888888@c.us"
+        msg_counter = [0]
 
         async def post(text: str, media_url: str = None, media_type: str = None) -> dict:
+            msg_counter[0] += 1
             msg = {
                 "from_number": reply_to,
                 "sender_id": sender_id,
                 "reply_to": reply_to,
-                "message_id": "m1",
+                "message_id": f"m-kyc-{msg_counter[0]}",
                 "text": text,
                 "timestamp": 1700000000,
             }
@@ -604,7 +606,7 @@ class TestStage2KYCFullWebhookFlow:
                 msg["media_url"] = media_url
                 msg["media_type"] = media_type or "image"
             r = await test_client.post(
-                "/api/webhooks/whatsapp/webhook",
+                "/api/whatsapp/webhook",
                 json={"messages": [msg]},
             )
             assert r.status_code == 200

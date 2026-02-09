@@ -36,4 +36,8 @@ celery_app.conf.beat_schedule = {
         "task": "app.workers.tasks.cleanup_old_messages",
         "schedule": 86400.0,  # 24 hours
     },
+    "cleanup-old-webhook-events-daily": {
+        "task": "app.workers.tasks.cleanup_old_webhook_events",
+        "schedule": 86400.0,  # 24 hours
+    },
 }

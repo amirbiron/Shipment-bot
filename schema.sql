@@ -205,6 +205,21 @@ CREATE INDEX idx_broadcast_delivery ON broadcast_messages(delivery_id);
 COMMENT ON TABLE broadcast_messages IS 'Track broadcast campaigns to couriers';
 
 -- =====================================================
+-- Webhook Events Table (Idempotency / Deduplication)
+-- =====================================================
+
+CREATE TABLE webhook_events (
+    message_id VARCHAR(200) PRIMARY KEY,
+    platform VARCHAR(20) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'processing',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX ix_webhook_events_status_created ON webhook_events(status, created_at);
+
+COMMENT ON TABLE webhook_events IS 'Idempotency table - prevents duplicate webhook message processing';
+
+-- =====================================================
 -- Functions
 -- =====================================================
 

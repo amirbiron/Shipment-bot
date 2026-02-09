@@ -290,3 +290,7 @@ def reset_circuit_breakers():
     CircuitBreaker.reset_all()
     yield
     CircuitBreaker.reset_all()
+
+
+# הערה: אין צורך ב-autouse fixture לניקוי WebhookEvent (idempotency) —
+# כל בדיקה מקבלת DB in-memory חדש דרך async_engine (function-scoped).

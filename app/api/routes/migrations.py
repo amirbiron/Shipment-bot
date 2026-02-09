@@ -10,9 +10,8 @@ from app.db.migrations import run_migration_001, run_migration_002
 router = APIRouter()
 
 
-@router.api_route(
+@router.post(
     "/run-migration-001",
-    methods=["GET", "POST"],
     summary="הרצת מיגרציה 001 (שדות הרשמת שליחים)",
     description="מוסיף שדות הרשמת שליחים לטבלת users. בטוח להריץ מספר פעמים (משתמש ב-IF NOT EXISTS).",
 )
@@ -42,9 +41,8 @@ async def run_courier_fields_migration(
         }
 
 
-@router.api_route(
+@router.post(
     "/run-migration-002",
-    methods=["GET", "POST"],
     summary="הרצת מיגרציה 002 (שדות KYC לשליחים)",
     description="מוסיף שדות KYC חדשים לטבלת users: סלפי, קטגוריית רכב, תמונת רכב. בטוח להריץ מספר פעמים.",
 )

@@ -18,20 +18,6 @@ router.include_router(users_router, prefix="/users", tags=["Users"])
 router.include_router(wallets_router, prefix="/wallets", tags=["Wallets"])
 router.include_router(stations_router, prefix="/stations", tags=["Stations"])
 router.include_router(migrations_router, prefix="/migrations", tags=["Migrations"])
-# Canonical webhook endpoints (documented)
+# Webhook endpoints
 router.include_router(whatsapp_router, prefix="/whatsapp", tags=["Webhooks"])
 router.include_router(telegram_router, prefix="/telegram", tags=["Webhooks"])
-
-# Backwards-compatible webhook endpoints
-router.include_router(
-    whatsapp_router,
-    prefix="/webhooks/whatsapp",
-    tags=["Webhooks"],
-    include_in_schema=False
-)
-router.include_router(
-    telegram_router,
-    prefix="/webhooks/telegram",
-    tags=["Webhooks"],
-    include_in_schema=False
-)
