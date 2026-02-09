@@ -397,6 +397,15 @@ class TestResolveAdminSendTarget:
         assert result == "0501234567"
 
     @pytest.mark.unit
+    def test_resolve_with_admin_whatsapp_number(self, monkeypatch):
+        """ADMIN_WHATSAPP_NUMBER משמש כברירת מחדל כשאין WHATSAPP_ADMIN_NUMBERS"""
+        from app.core.config import settings
+        monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "")
+        monkeypatch.setattr(settings, "ADMIN_WHATSAPP_NUMBER", "0501234567")
+        result = _resolve_admin_send_target("972501234567@lid", "fallback@c.us")
+        assert result == "0501234567"
+
+    @pytest.mark.unit
     def test_resolve_empty_sender(self, monkeypatch):
         """sender_id ריק — מחזיר את reply_to"""
         from app.core.config import settings
