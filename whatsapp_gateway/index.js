@@ -10,7 +10,13 @@ const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const wppconnect = require('@wppconnect-team/wppconnect');
-const waVersion = require('@wppconnect/wa-version');
+let waVersion = null;
+try {
+    // תלות ישירה קיימת ב-package.json, אבל שומרים על גמישות למקרי hoisting/שינויים עתידיים
+    waVersion = require('@wppconnect/wa-version');
+} catch (e) {
+    console.log('WARNING: @wppconnect/wa-version not available, will not force WhatsApp WEB version');
+}
 
 const app = express();
 app.use(cors());
@@ -127,6 +133,9 @@ function resolveWhatsappWebVersion() {
     // ברירת מחדל: בוחרים את הגרסה האחרונה שזמינה בתוך @wppconnect/wa-version
     // זה מונע את הלוג: "Version not available for X, using latest as fallback"
     try {
+        if (!waVersion) {
+            return null;
+        }
         const latestLocal = waVersion.getLatestVersion('*', true);
         if (latestLocal) {
             candidates.push(latestLocal);
@@ -137,6 +146,9 @@ function resolveWhatsappWebVersion() {
 
     for (const candidate of candidates) {
         try {
+            if (!waVersion) {
+                return null;
+            }
             const html = waVersion.getPageContent(candidate);
             if (html) {
                 return candidate;
