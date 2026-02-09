@@ -79,6 +79,13 @@ function normalizeMediaPayload(mediaUrl, mediaType) {
     return { dataUrl, base64, mimeType };
 }
 
+async function sendFileAuto(client, chatId, mediaUrl, rawBase64, filename, caption) {
+    if (rawBase64 && typeof client.sendFileFromBase64 === 'function') {
+        return await client.sendFileFromBase64(chatId, mediaUrl, filename, caption);
+    }
+    return await client.sendFile(chatId, mediaUrl, filename, caption);
+}
+
 // מייצר rowId "בטוח" (ASCII בלבד) אך ניתן לשחזור לטקסט המקורי
 function encodeListRowId(title, index) {
     try {
@@ -806,11 +813,7 @@ app.post('/send-media', async (req, res) => {
         let result;
 
         if (!isImage) {
-            if (rawBase64 && typeof client.sendFileFromBase64 === 'function') {
-                result = await client.sendFileFromBase64(chatId, mediaUrlForSend, filename, captionText);
-            } else {
-                result = await client.sendFile(chatId, mediaUrlForSend, filename, captionText);
-            }
+            result = await sendFileAuto(client, chatId, mediaUrlForSend, rawBase64, filename, captionText);
         } else {
             // sendImage עשוי לזרוק שגיאה לא סטנדרטית (ללא message) — תופסים ומנסים sendFile
             try {
@@ -818,11 +821,7 @@ app.post('/send-media', async (req, res) => {
             } catch (imgError) {
                 const errMsg = imgError?.message || String(imgError || 'unknown');
                 console.log('sendImage failed, trying sendFile fallback:', errMsg);
-                if (rawBase64 && typeof client.sendFileFromBase64 === 'function') {
-                    result = await client.sendFileFromBase64(chatId, mediaUrlForSend, filename, captionText);
-                } else {
-                    result = await client.sendFile(chatId, mediaUrlForSend, filename, captionText);
-                }
+                result = await sendFileAuto(client, chatId, mediaUrlForSend, rawBase64, filename, captionText);
             }
         }
 
@@ -844,18 +843,14 @@ app.post('/send-media', async (req, res) => {
                     try {
                         retryResult = await client.sendImage(lidChatId, mediaUrlForSend, filename, retryCaption);
                     } catch (imgErr) {
-                        if (rawBase64 && typeof client.sendFileFromBase64 === 'function') {
-                            retryResult = await client.sendFileFromBase64(lidChatId, mediaUrlForSend, filename, retryCaption);
-                        } else {
-                            retryResult = await client.sendFile(lidChatId, mediaUrlForSend, filename, retryCaption);
-                        }
+                        retryResult = await sendFileAuto(
+                            client, lidChatId, mediaUrlForSend, rawBase64, filename, retryCaption
+                        );
                     }
                 } else {
-                    if (rawBase64 && typeof client.sendFileFromBase64 === 'function') {
-                        retryResult = await client.sendFileFromBase64(lidChatId, mediaUrlForSend, filename, retryCaption);
-                    } else {
-                        retryResult = await client.sendFile(lidChatId, mediaUrlForSend, filename, retryCaption);
-                    }
+                    retryResult = await sendFileAuto(
+                        client, lidChatId, mediaUrlForSend, rawBase64, filename, retryCaption
+                    );
                 }
                 console.log('Media sent with @lid retry to:', lidChatId);
                 return res.json({ success: true, messageId: retryResult?.id });

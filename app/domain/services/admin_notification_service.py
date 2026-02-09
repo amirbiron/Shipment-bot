@@ -65,8 +65,6 @@ class AdminNotificationService:
         )
 
         if wa_targets:
-            is_whatsapp = platform == "whatsapp"
-
             file_ids: dict[str, Optional[str]] = {
                 "document": document_file_id,
                 "selfie": selfie_file_id,

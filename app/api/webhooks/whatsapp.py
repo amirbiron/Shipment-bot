@@ -92,7 +92,7 @@ def _resolve_contact_phone(
     stored_phone: str | None,
 ) -> str:
     """בחירת טלפון אמיתי להצגה למנהלים (עם fallback בטוח)."""
-    for candidate in (resolved_phone, from_number, reply_to, sender_id):
+    for candidate in (resolved_phone, from_number, reply_to, sender_id, stored_phone):
         normalized = _extract_real_phone(candidate)
         if normalized:
             return normalized
