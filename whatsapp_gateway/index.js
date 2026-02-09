@@ -124,9 +124,6 @@ async function initializeClient() {
         client = await wppconnect.create({
             session: SESSION_NAME,
             autoClose: 0, // Disable auto-close (0 = never)
-            // ביטול cache של גרסת WhatsApp Web — תמיד טוען את הגרסה העדכנית ביותר
-            // מונע שגיאת "Version not available for X, using latest as fallback"
-            webVersionCache: { type: 'none' },
             tokenStore: 'file',
             folderNameToken: SESSION_FOLDER,  // Use absolute path to match disk mount
             catchQR: (base64Qr, asciiQR, attempts, urlCode) => {
@@ -226,7 +223,7 @@ async function initializeClient() {
                     console.log('Contact info:', JSON.stringify(contact));
 
                     if (!realPhone) {
-                        realPhone = extractIsraeliPhoneFromCandidates(contact?.number);
+                        realPhone = extractIsraeliPhoneFromCandidates(contact?.number, contact?.formattedName);
                     }
 
                     if (contact && contact.id && contact.id._serialized && !contact.id._serialized.includes('@lid')) {
@@ -235,6 +232,15 @@ async function initializeClient() {
                     } else if (contact && contact.number) {
                         replyTo = `${contact.number}@c.us`;
                         console.log('Got number from contact:', replyTo);
+                    } else if (contact && contact.formattedName) {
+                        // formattedName מכיל לפעמים את המספר (למשל "⁦+972 54-397-8620⁩")
+                        const phoneFromName = extractIsraeliPhoneFromCandidates(contact.formattedName);
+                        if (phoneFromName) {
+                            let digits = phoneFromName;
+                            if (digits.startsWith('0')) digits = '972' + digits.substring(1);
+                            replyTo = `${digits}@c.us`;
+                            console.log('Got number from formattedName:', replyTo);
+                        }
                     }
                 } catch (e) {
                     console.log('Could not get contact:', e.message);
@@ -247,7 +253,8 @@ async function initializeClient() {
                         console.log('Chat info:', JSON.stringify(chat?.contact || chat?.id));
                         if (!realPhone) {
                             realPhone = extractIsraeliPhoneFromCandidates(
-                                chat?.contact?.number
+                                chat?.contact?.number,
+                                chat?.contact?.formattedName
                             );
                         }
                         if (chat && chat.contact && chat.contact.number) {
@@ -256,6 +263,14 @@ async function initializeClient() {
                         } else if (chat && chat.id && chat.id._serialized && !chat.id._serialized.includes('@lid')) {
                             replyTo = chat.id._serialized;
                             console.log('Got ID from chat:', replyTo);
+                        } else if (chat && chat.contact && chat.contact.formattedName) {
+                            const phoneFromChat = extractIsraeliPhoneFromCandidates(chat.contact.formattedName);
+                            if (phoneFromChat) {
+                                let digits = phoneFromChat;
+                                if (digits.startsWith('0')) digits = '972' + digits.substring(1);
+                                replyTo = `${digits}@c.us`;
+                                console.log('Got number from chat formattedName:', replyTo);
+                            }
                         }
                     } catch (e) {
                         console.log('Could not get chat:', e.message);
@@ -272,6 +287,18 @@ async function initializeClient() {
                 if (replyTo.includes('@lid') && message.sender && message.sender.id && !message.sender.id.includes('@lid')) {
                     replyTo = message.sender.id;
                     console.log('Using sender.id instead:', replyTo);
+                }
+
+                // מאמץ אחרון: חילוץ מספר מ-formattedName של השולח
+                if (replyTo.includes('@lid') && message.sender && message.sender.formattedName) {
+                    const phoneFromSender = extractIsraeliPhoneFromCandidates(message.sender.formattedName);
+                    if (phoneFromSender) {
+                        let digits = phoneFromSender;
+                        if (digits.startsWith('0')) digits = '972' + digits.substring(1);
+                        replyTo = `${digits}@c.us`;
+                        if (!realPhone) realPhone = phoneFromSender;
+                        console.log('Got number from sender formattedName:', replyTo);
+                    }
                 }
 
                 // If still LID after all attempts, log warning but continue
@@ -420,6 +447,17 @@ app.post('/send', async (req, res) => {
                         listChatId = `${contact.number}@c.us`;
                         lidToCusMap.set(chatId, listChatId);
                         console.log('Resolved @lid via contact.number:', chatId, '→', listChatId);
+                    } else if (contact && contact.formattedName) {
+                        const phoneFromName = extractIsraeliPhoneFromCandidates(contact.formattedName);
+                        if (phoneFromName) {
+                            let digits = phoneFromName;
+                            if (digits.startsWith('0')) digits = '972' + digits.substring(1);
+                            listChatId = `${digits}@c.us`;
+                            lidToCusMap.set(chatId, listChatId);
+                            console.log('Resolved @lid via formattedName:', chatId, '→', listChatId);
+                        } else {
+                            console.log('WARNING: Could not resolve @lid to @c.us, sendListMessage may not deliver');
+                        }
                     } else {
                         console.log('WARNING: Could not resolve @lid to @c.us, sendListMessage may not deliver');
                     }

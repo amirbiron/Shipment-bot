@@ -27,9 +27,14 @@ WhatsApp עובר בהדרגה ממזהים מבוססי מספר טלפון (`9
 ### 1. מיפוי LID → @c.us (lidToCusMap)
 
 כשמתקבלת הודעה מ-`@lid` ב-`onMessage`, הגייטוויי מנסה לפתור את ה-LID למספר טלפון:
-- `client.getContact()` — בודק אם יש מספר ב-contact
-- `client.getChatById()` — בודק אם יש מספר ב-chat
+- `contact.id._serialized` — אם לא @lid
+- `contact.number` — מספר ישיר
+- **`contact.formattedName`** — לפעמים מכיל את המספר (למשל `"⁦+972 54-397-8620⁩"`)
+- `client.getChatById()` — בודק `number` ו-`formattedName` ב-chat contact
 - `message.chatId`, `message.sender.id` — מזהים חלופיים
+- **`message.sender.formattedName`** — מאמץ אחרון, חילוץ מספר מ-formatted name
+
+> **תובנה קריטית:** כש-`contact.number` לא קיים (קורה עם משתמשי LID), `formattedName` עשוי להכיל את המספר בפורמט `⁦+972 XX-XXX-XXXX⁩`. הפונקציה `extractIsraeliPhoneFromCandidates` מחלצת את הספרות ומנרמלת.
 
 אם הפתרון מצליח, **שומרים את המיפוי** ב-`lidToCusMap`:
 ```javascript
