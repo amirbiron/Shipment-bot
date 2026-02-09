@@ -196,6 +196,22 @@ class StationService:
         )
         return result.scalar_one_or_none() is not None
 
+    async def is_dispatcher_of_station(
+        self, user_id: int, station_id: int
+    ) -> bool:
+        """בדיקה אם המשתמש הוא סדרן פעיל בתחנה ספציפית"""
+        result = await self.db.execute(
+            select(StationDispatcher).join(
+                Station, StationDispatcher.station_id == Station.id
+            ).where(
+                StationDispatcher.user_id == user_id,
+                StationDispatcher.station_id == station_id,
+                StationDispatcher.is_active == True,  # noqa: E712
+                Station.is_active == True,  # noqa: E712
+            ).limit(1)
+        )
+        return result.scalar_one_or_none() is not None
+
     # ==================== משלוחי תחנה [3.2] ====================
 
     async def get_station_active_deliveries(

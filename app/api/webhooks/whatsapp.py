@@ -608,14 +608,22 @@ async def _handle_whatsapp_delivery_approval(
 
     workflow = ShipmentWorkflowService(db)
 
-    if action == "approve":
-        success, msg, delivery = await workflow.approve_delivery(
-            delivery_id, dispatcher_id
+    try:
+        if action == "approve":
+            success, msg, delivery = await workflow.approve_delivery(
+                delivery_id, dispatcher_id
+            )
+        else:
+            success, msg, delivery = await workflow.reject_delivery(
+                delivery_id, dispatcher_id
+            )
+    except Exception as e:
+        logger.error(
+            "Delivery approval/rejection failed",
+            extra_data={"delivery_id": delivery_id, "error": str(e)},
+            exc_info=True,
         )
-    else:
-        success, msg, delivery = await workflow.reject_delivery(
-            delivery_id, dispatcher_id
-        )
+        msg = "❌ שגיאה בעיבוד הבקשה. נסה שוב."
 
     return msg
 
@@ -983,12 +991,27 @@ async def whatsapp_webhook(
             if text and not is_new_user:
                 delivery_approval = _match_delivery_approval_command(text)
                 if delivery_approval:
+                    action, delivery_id = delivery_approval
+
+                    # שליפת המשלוח לבדיקת תחנה
                     from app.domain.services.station_service import StationService
+                    from app.db.models.delivery import Delivery
                     station_service = StationService(db)
-                    is_disp = await station_service.is_dispatcher(user.id)
+
+                    delivery_result = await db.execute(
+                        select(Delivery).where(Delivery.id == delivery_id)
+                    )
+                    target_delivery = delivery_result.scalar_one_or_none()
+
+                    # בדיקה שהסדרן שייך לתחנה של המשלוח הספציפי
+                    if target_delivery and target_delivery.station_id:
+                        is_disp = await station_service.is_dispatcher_of_station(
+                            user.id, target_delivery.station_id
+                        )
+                    else:
+                        is_disp = False
 
                     if is_disp:
-                        action, delivery_id = delivery_approval
                         approval_msg = await _handle_whatsapp_delivery_approval(
                             db, action, delivery_id,
                             dispatcher_name=user.name or "סדרן",

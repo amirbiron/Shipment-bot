@@ -96,6 +96,11 @@ class CaptureService:
             ):
                 return False, "המשלוח כבר נתפס על ידי שליח אחר", None
 
+            # שלב 4: אם הסטטוס PENDING_APPROVAL — לוודא שהשליח הוא מי שביקש
+            if delivery.status == DeliveryStatus.PENDING_APPROVAL:
+                if delivery.requesting_courier_id != courier_id:
+                    return False, "המשלוח ממתין לאישור עבור שליח אחר", None
+
             # 3. Lock courier wallet
             wallet_result = await self.db.execute(
                 select(CourierWallet)

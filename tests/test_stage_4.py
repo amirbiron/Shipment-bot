@@ -8,7 +8,7 @@
 - סינון ברודקאסט: רק שליחים מאושרים
 """
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
 from app.db.models.user import User, UserRole, ApprovalStatus
@@ -267,7 +267,7 @@ class TestCoordinatorApproval:
         delivery.station_id = station.id
         delivery.status = DeliveryStatus.PENDING_APPROVAL
         delivery.requesting_courier_id = courier.id
-        delivery.requested_at = datetime.utcnow()
+        delivery.requested_at = datetime.now(timezone.utc)
         await db_session.commit()
 
         workflow = ShipmentWorkflowService(db_session)
@@ -313,7 +313,7 @@ class TestCoordinatorApproval:
         delivery.station_id = station.id
         delivery.status = DeliveryStatus.PENDING_APPROVAL
         delivery.requesting_courier_id = courier.id
-        delivery.requested_at = datetime.utcnow()
+        delivery.requested_at = datetime.now(timezone.utc)
         await db_session.commit()
 
         workflow = ShipmentWorkflowService(db_session)
@@ -353,7 +353,7 @@ class TestCoordinatorApproval:
         delivery.station_id = station.id
         delivery.status = DeliveryStatus.PENDING_APPROVAL
         delivery.requesting_courier_id = courier.id
-        delivery.requested_at = datetime.utcnow()
+        delivery.requested_at = datetime.now(timezone.utc)
         await db_session.commit()
 
         workflow = ShipmentWorkflowService(db_session)
@@ -549,3 +549,173 @@ class TestDeliveryApprovalCommands:
 
         result = _match_delivery_approval_command("אשר שליח 123")
         assert result is None
+
+
+# ============================================================================
+# TestCaptureRaceCondition (תיקון ריוויו #1)
+# ============================================================================
+
+class TestCaptureRaceCondition:
+    """בדיקות race condition ב-capture_delivery"""
+
+    @pytest.mark.asyncio
+    async def test_capture_pending_wrong_courier_blocked(
+        self, db_session, user_factory, delivery_factory, station_factory,
+        wallet_factory
+    ):
+        """שליח אחר לא יכול לתפוס משלוח שממתין לאישור עבור שליח אחר"""
+        owner = await user_factory(
+            phone_number="+972500000030", name="בעלים30", role=UserRole.STATION_OWNER
+        )
+        station = await station_factory(owner_id=owner.id)
+        requesting_courier = await user_factory(
+            phone_number="+972500000031", name="שליח מבקש",
+            role=UserRole.COURIER, approval_status=ApprovalStatus.APPROVED,
+        )
+        stealing_courier = await user_factory(
+            phone_number="+972500000032", name="שליח גונב",
+            role=UserRole.COURIER, approval_status=ApprovalStatus.APPROVED,
+        )
+        await wallet_factory(courier_id=requesting_courier.id, balance=100.0)
+        await wallet_factory(courier_id=stealing_courier.id, balance=100.0)
+        sender = await user_factory(
+            phone_number="+972501111130", name="שולח30"
+        )
+        delivery = await delivery_factory(sender_id=sender.id, fee=10.0)
+        delivery.station_id = station.id
+        delivery.status = DeliveryStatus.PENDING_APPROVAL
+        delivery.requesting_courier_id = requesting_courier.id
+        delivery.requested_at = datetime.now(timezone.utc)
+        await db_session.commit()
+
+        capture_service = CaptureService(db_session)
+        success, msg, _ = await capture_service.capture_delivery(
+            delivery.id, stealing_courier.id
+        )
+
+        assert success is False
+        assert "שליח אחר" in msg
+
+    @pytest.mark.asyncio
+    async def test_capture_pending_correct_courier_succeeds(
+        self, db_session, user_factory, delivery_factory, station_factory,
+        wallet_factory
+    ):
+        """השליח שביקש יכול להיתפס כשסדרן מאשר"""
+        owner = await user_factory(
+            phone_number="+972500000033", name="בעלים33", role=UserRole.STATION_OWNER
+        )
+        station = await station_factory(owner_id=owner.id)
+        courier = await user_factory(
+            phone_number="+972500000034", name="שליח נכון",
+            role=UserRole.COURIER, approval_status=ApprovalStatus.APPROVED,
+        )
+        await wallet_factory(courier_id=courier.id, balance=100.0)
+        sender = await user_factory(
+            phone_number="+972501111131", name="שולח31"
+        )
+        delivery = await delivery_factory(sender_id=sender.id, fee=10.0)
+        delivery.station_id = station.id
+        delivery.status = DeliveryStatus.PENDING_APPROVAL
+        delivery.requesting_courier_id = courier.id
+        delivery.requested_at = datetime.now(timezone.utc)
+        await db_session.commit()
+
+        capture_service = CaptureService(db_session)
+        success, msg, result = await capture_service.capture_delivery(
+            delivery.id, courier.id
+        )
+
+        assert success is True
+        assert result.status == DeliveryStatus.CAPTURED
+
+
+# ============================================================================
+# TestDispatcherScoping (תיקון ריוויו #3)
+# ============================================================================
+
+class TestDispatcherScoping:
+    """בדיקות scoping של סדרן לתחנה ספציפית"""
+
+    @pytest.mark.asyncio
+    async def test_is_dispatcher_of_station_correct(
+        self, db_session, user_factory, station_factory, dispatcher_factory
+    ):
+        """סדרן מזוהה בתחנה שלו"""
+        from app.domain.services.station_service import StationService
+
+        owner = await user_factory(
+            phone_number="+972500000040", name="בעלים40", role=UserRole.STATION_OWNER
+        )
+        station = await station_factory(owner_id=owner.id)
+        disp_user = await user_factory(
+            phone_number="+972500000041", name="סדרן41",
+            role=UserRole.COURIER, approval_status=ApprovalStatus.APPROVED,
+        )
+        await dispatcher_factory(station.id, disp_user.id)
+
+        service = StationService(db_session)
+        assert await service.is_dispatcher_of_station(disp_user.id, station.id) is True
+
+    @pytest.mark.asyncio
+    async def test_is_dispatcher_of_wrong_station(
+        self, db_session, user_factory, station_factory, dispatcher_factory
+    ):
+        """סדרן של תחנה A לא מורשה בתחנה B"""
+        from app.domain.services.station_service import StationService
+
+        owner = await user_factory(
+            phone_number="+972500000042", name="בעלים42", role=UserRole.STATION_OWNER
+        )
+        station_a = await station_factory(name="תחנה A", owner_id=owner.id)
+        station_b = await station_factory(name="תחנה B", owner_id=owner.id)
+        disp_user = await user_factory(
+            phone_number="+972500000043", name="סדרן43",
+            role=UserRole.COURIER, approval_status=ApprovalStatus.APPROVED,
+        )
+        # סדרן רק בתחנה A
+        await dispatcher_factory(station_a.id, disp_user.id)
+
+        service = StationService(db_session)
+        assert await service.is_dispatcher_of_station(disp_user.id, station_a.id) is True
+        assert await service.is_dispatcher_of_station(disp_user.id, station_b.id) is False
+
+    @pytest.mark.asyncio
+    async def test_cross_station_approve_blocked(
+        self, db_session, user_factory, delivery_factory, station_factory,
+        dispatcher_factory
+    ):
+        """סדרן של תחנה A לא יכול לאשר משלוח של תחנה B"""
+        owner = await user_factory(
+            phone_number="+972500000044", name="בעלים44", role=UserRole.STATION_OWNER
+        )
+        station_a = await station_factory(name="תחנה A2", owner_id=owner.id)
+        station_b = await station_factory(name="תחנה B2", owner_id=owner.id)
+        disp_user = await user_factory(
+            phone_number="+972500000045", name="סדרן45",
+            role=UserRole.COURIER, approval_status=ApprovalStatus.APPROVED,
+        )
+        await dispatcher_factory(station_a.id, disp_user.id)
+
+        courier = await user_factory(
+            phone_number="+972500000046", name="שליח46",
+            role=UserRole.COURIER, approval_status=ApprovalStatus.APPROVED,
+        )
+        sender = await user_factory(
+            phone_number="+972501111140", name="שולח40"
+        )
+        delivery = await delivery_factory(sender_id=sender.id)
+        # משלוח של תחנה B
+        delivery.station_id = station_b.id
+        delivery.status = DeliveryStatus.PENDING_APPROVAL
+        delivery.requesting_courier_id = courier.id
+        delivery.requested_at = datetime.now(timezone.utc)
+        await db_session.commit()
+
+        workflow = ShipmentWorkflowService(db_session)
+        success, msg, _ = await workflow.approve_delivery(
+            delivery.id, disp_user.id
+        )
+
+        assert success is False
+        assert "הרשאה" in msg

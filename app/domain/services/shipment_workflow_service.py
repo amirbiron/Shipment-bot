@@ -6,7 +6,7 @@ Shipment Workflow Service - זרימת אישור משלוח [שלב 4]
 2. בקשה נשלחת לסדרני התחנה
 3. סדרן מאשר/דוחה → כרטיס סגור נשלח לקבוצה פרטית
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Tuple, Optional
 from html import escape
 
@@ -100,7 +100,7 @@ class ShipmentWorkflowService:
         # עדכון סטטוס ל-PENDING_APPROVAL
         delivery.status = DeliveryStatus.PENDING_APPROVAL
         delivery.requesting_courier_id = courier_id
-        delivery.requested_at = datetime.utcnow()
+        delivery.requested_at = datetime.now(timezone.utc)
 
         # שליחת הודעה לסדרנים עם כפתורי אישור/דחייה
         if delivery.station_id:
@@ -165,7 +165,7 @@ class ShipmentWorkflowService:
         # רענון הרשומה מה-DB אחרי שה-capture עדכן אותה
         await self.db.refresh(delivery)
         delivery.approved_by_id = dispatcher_id
-        delivery.approved_at = datetime.utcnow()
+        delivery.approved_at = datetime.now(timezone.utc)
         delivery.approval_decision = "approved"
         await self.db.commit()
         await self.db.refresh(delivery)
@@ -232,7 +232,7 @@ class ShipmentWorkflowService:
         delivery.requesting_courier_id = None
         delivery.requested_at = None
         delivery.approved_by_id = dispatcher_id
-        delivery.approved_at = datetime.utcnow()
+        delivery.approved_at = datetime.now(timezone.utc)
         delivery.approval_decision = "rejected"
 
         await self.db.commit()
