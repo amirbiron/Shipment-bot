@@ -170,6 +170,49 @@ async def test_whatsapp_keyboard_fallback_on_failure(monkeypatch):
 
 
 @pytest.mark.unit
+async def test_whatsapp_photos_forwarded_from_telegram_registration(monkeypatch):
+    """מסמכי טלגרם נשלחים לוואטסאפ מנהלים כ-data URL"""
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_ID", None)
+    monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_IDS", "")
+    monkeypatch.setattr(settings, "WHATSAPP_ADMIN_GROUP_ID", "wa-group")
+    monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "")
+    monkeypatch.setattr(settings, "WHATSAPP_GATEWAY_URL", "http://localhost:3000")
+
+    send_mock = AsyncMock(return_value=True)
+    photo_mock = AsyncMock(return_value=True)
+    download_mock = AsyncMock(
+        side_effect=[
+            "data:image/jpeg;base64,AAAA",
+            "data:image/jpeg;base64,BBBB",
+        ]
+    )
+
+    monkeypatch.setattr(AdminNotificationService, "_send_whatsapp_admin_message", send_mock)
+    monkeypatch.setattr(AdminNotificationService, "_send_whatsapp_admin_photo", photo_mock)
+    monkeypatch.setattr(
+        AdminNotificationService,
+        "_download_telegram_file_as_data_url",
+        download_mock,
+    )
+
+    ok = await AdminNotificationService.notify_new_courier_registration(
+        user_id=12,
+        full_name="Telegram Courier",
+        service_area="תל אביב",
+        phone_or_chat_id="6865105071",
+        document_file_id="tg-file-1",
+        selfie_file_id="tg-file-2",
+        platform="telegram",
+    )
+
+    assert ok is True
+    assert photo_mock.await_count == 2
+    photo_mock.assert_any_await("wa-group", "data:image/jpeg;base64,AAAA")
+    photo_mock.assert_any_await("wa-group", "data:image/jpeg;base64,BBBB")
+
+
+@pytest.mark.unit
 async def test_forward_photo_records_success_on_send_photo(monkeypatch):
     """sendPhoto שמצליח מדווח הצלחה ל-circuit breaker (לא נשאר תקוע ב-HALF_OPEN)"""
     monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "test-token")
