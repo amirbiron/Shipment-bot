@@ -59,6 +59,51 @@ class WhatsAppWebhookPayload(BaseModel):
     messages: list[WhatsAppMessage] = []
 
 
+def _extract_real_phone(value: str | None) -> str | None:
+    """
+    ניסיון לחלץ מספר טלפון אמיתי מהשדות של WhatsApp.
+
+    תומך בערכים כמו:
+    - 0501234567
+    - 972501234567
+    - +972501234567
+    - 972501234567@c.us / @lid
+    """
+    if not value:
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    if "@" in raw:
+        raw = raw.split("@")[0].strip()
+    cleaned = re.sub(r"[^\d+]", "", raw)
+    if not cleaned:
+        return None
+    if not PhoneNumberValidator.validate(cleaned):
+        return None
+    return PhoneNumberValidator.normalize(cleaned)
+
+
+def _resolve_contact_phone(
+    resolved_phone: str | None,
+    from_number: str | None,
+    reply_to: str | None,
+    sender_id: str | None,
+    stored_phone: str | None,
+) -> str:
+    """בחירת טלפון אמיתי להצגה למנהלים (עם fallback בטוח)."""
+    for candidate in (resolved_phone, from_number, reply_to, sender_id):
+        normalized = _extract_real_phone(candidate)
+        if normalized:
+            return normalized
+
+    for fallback in (reply_to, from_number, sender_id, stored_phone):
+        if fallback:
+            return fallback
+
+    return "לא ידוע"
+
+
 async def get_or_create_user(
     db: AsyncSession,
     sender_identifier: str,
@@ -87,30 +132,6 @@ async def get_or_create_user(
             return raw
         digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:17]
         return f"wa:{digest}"
-
-    def _extract_real_phone(value: str | None) -> str | None:
-        """
-        ניסיון לחלץ מספר טלפון אמיתי מהשדות של WhatsApp.
-
-        תומך בערכים כמו:
-        - 0501234567
-        - 972501234567
-        - +972501234567
-        - 972501234567@c.us / @lid
-        """
-        if not value:
-            return None
-        raw = value.strip()
-        if not raw:
-            return None
-        if "@" in raw:
-            raw = raw.split("@")[0].strip()
-        cleaned = re.sub(r"[^\d+]", "", raw)
-        if not cleaned:
-            return None
-        if not PhoneNumberValidator.validate(cleaned):
-            return None
-        return PhoneNumberValidator.normalize(cleaned)
 
     # ניסיון לחלץ מספר אמיתי (אם הגטוויי הצליח) כדי למנוע "משתמש כפול"
     # בין יצירת תחנה (מבוסס +972...) לבין שיחות WhatsApp (מבוסס sender_id/@lid).
@@ -1185,12 +1206,19 @@ async def whatsapp_webhook(
                 and user.approval_status == ApprovalStatus.PENDING
             ):
                 # שליפת מסמכים ישירות מה-DB - כל השדות כבר נשמרו בשלבי ה-KYC
+                contact_phone = _resolve_contact_phone(
+                    resolved_phone=resolved_phone,
+                    from_number=from_number,
+                    reply_to=reply_to,
+                    sender_id=sender_id,
+                    stored_phone=user.phone_number,
+                )
                 background_tasks.add_task(
                     AdminNotificationService.notify_new_courier_registration,
                     user.id,
                     user.full_name or user.name or "לא צוין",
                     user.service_area or "לא צוין",
-                    user.phone_number,
+                    contact_phone,
                     user.id_document_url,
                     "whatsapp",
                     user.vehicle_category,
