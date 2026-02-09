@@ -238,10 +238,12 @@ async def add_enum_values(engine: AsyncEngine) -> None:
     """
     async with engine.connect() as conn:
         await conn.execution_options(isolation_level="AUTOCOMMIT")
+        # SQLEnum(UserRole) ללא values_callable שולח את שם ה-member (STATION_OWNER)
+        # ולא את ה-value (station_owner), לכן חייבים להוסיף באותיות גדולות.
         await conn.execute(text(
-            "ALTER TYPE userrole ADD VALUE IF NOT EXISTS 'station_owner'"
+            "ALTER TYPE userrole ADD VALUE IF NOT EXISTS 'STATION_OWNER'"
         ))
-        logger.info("Ensured 'station_owner' exists in userrole enum")
+        logger.info("Ensured 'STATION_OWNER' exists in userrole enum")
 
 
 async def run_all_migrations(conn: AsyncConnection) -> None:
