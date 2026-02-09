@@ -549,28 +549,37 @@ app.post('/send-media', async (req, res) => {
         if (!isImage) {
             result = await client.sendFile(chatId, media_url, filename, captionText);
         } else {
-            result = await client.sendImage(chatId, media_url, filename, captionText);
+            // sendImage עשוי לזרוק שגיאה לא סטנדרטית (ללא message) — תופסים ומנסים sendFile
+            try {
+                result = await client.sendImage(chatId, media_url, filename, captionText);
+            } catch (imgError) {
+                const errMsg = imgError?.message || String(imgError || 'unknown');
+                console.log('sendImage failed, trying sendFile fallback:', errMsg);
+                result = await client.sendFile(chatId, media_url, filename, captionText);
+            }
         }
 
+        console.log('Media sent to:', chatId);
         res.json({ success: true, messageId: result?.id });
     } catch (error) {
+        const errorMsg = error?.message || String(error || 'unknown error');
         // ניסיון חוזר עם @lid אם @c.us נכשל עם "No LID for user"
-        if (error.message && error.message.includes('No LID for user') && !phone.includes('@lid')) {
+        if (errorMsg.includes('No LID for user') && !phone.includes('@lid')) {
             const lidChatId = phone.replace(/\D/g, '') + '@lid';
             console.log('Retrying media send with @lid suffix:', lidChatId);
             try {
                 const retryCaption = caption || '';
-                const retryResult = await client.sendImage(lidChatId, media_url, 'image.jpg', retryCaption);
+                const retryResult = await client.sendFile(lidChatId, media_url, 'image.jpg', retryCaption);
                 console.log('Media sent with @lid retry to:', lidChatId);
                 return res.json({ success: true, messageId: retryResult?.id });
             } catch (lidError) {
-                console.error('LID media retry also failed:', lidError.message);
+                console.error('LID media retry also failed:', lidError?.message || String(lidError));
             }
         }
-        console.error('Error sending media:', error.message);
+        console.error('Error sending media:', errorMsg);
         res.status(500).json({
             error: 'Failed to send media',
-            details: error.message
+            details: errorMsg
         });
     }
 });

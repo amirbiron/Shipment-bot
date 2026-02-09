@@ -6,7 +6,7 @@ from typing import Optional
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.core.circuit_breaker import get_telegram_circuit_breaker, get_whatsapp_circuit_breaker
+from app.core.circuit_breaker import get_telegram_circuit_breaker, get_whatsapp_admin_circuit_breaker
 from app.core.exceptions import TelegramError, WhatsAppError
 
 logger = get_logger(__name__)
@@ -521,7 +521,7 @@ class AdminNotificationService:
             logger.warning("WhatsApp gateway URL not configured")
             return False
 
-        circuit_breaker = get_whatsapp_circuit_breaker()
+        circuit_breaker = get_whatsapp_admin_circuit_breaker()
 
         async def _send():
             async with httpx.AsyncClient() as client:
@@ -563,7 +563,7 @@ class AdminNotificationService:
             logger.warning("No media_url provided for WhatsApp admin photo")
             return False
 
-        circuit_breaker = get_whatsapp_circuit_breaker()
+        circuit_breaker = get_whatsapp_admin_circuit_breaker()
 
         async def _send():
             async with httpx.AsyncClient() as client:
