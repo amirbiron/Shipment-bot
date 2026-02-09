@@ -60,7 +60,11 @@ class WhatsAppWebhookPayload(BaseModel):
 
 
 async def get_or_create_user(
-    db: AsyncSession, sender_identifier: str
+    db: AsyncSession,
+    sender_identifier: str,
+    from_number: str | None = None,
+    reply_to: str | None = None,
+    resolved_phone: str | None = None,
 ) -> tuple[User, bool]:
     """
     Get existing user or create new one. Returns (user, is_new)
@@ -68,21 +72,141 @@ async def get_or_create_user(
     בווטסאפ לא תמיד יש מספר טלפון יציב (למשל @lid), לכן אנחנו משתמשים במזהה שולח יציב
     בתור ה-"phone_number" במודל לצורך זיהוי ושמירת session.
     """
-    result = await db.execute(
-        select(User).where(User.phone_number == sender_identifier)
+    import hashlib
+
+    def _whatsapp_sender_placeholder(raw: str) -> str:
+        """
+        יצירת placeholder קצר ויציב ל-phone_number עבור מזהים ארוכים.
+
+        הערה: עמודת phone_number מוגדרת VARCHAR(20). אם המזהה ארוך — PostgreSQL יזרוק שגיאה.
+        """
+        raw = (raw or "").strip()
+        if not raw:
+            return "wa:unknown"
+        if len(raw) <= 20:
+            return raw
+        digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:17]
+        return f"wa:{digest}"
+
+    def _extract_real_phone(value: str | None) -> str | None:
+        """
+        ניסיון לחלץ מספר טלפון אמיתי מהשדות של WhatsApp.
+
+        תומך בערכים כמו:
+        - 0501234567
+        - 972501234567
+        - +972501234567
+        - 972501234567@c.us / @lid
+        """
+        if not value:
+            return None
+        raw = value.strip()
+        if not raw:
+            return None
+        if "@" in raw:
+            raw = raw.split("@")[0].strip()
+        cleaned = re.sub(r"[^\d+]", "", raw)
+        if not cleaned:
+            return None
+        if not PhoneNumberValidator.validate(cleaned):
+            return None
+        return PhoneNumberValidator.normalize(cleaned)
+
+    # ניסיון לחלץ מספר אמיתי (אם הגטוויי הצליח) כדי למנוע "משתמש כפול"
+    # בין יצירת תחנה (מבוסס +972...) לבין שיחות WhatsApp (מבוסס sender_id/@lid).
+    normalized_phone = (
+        _extract_real_phone(resolved_phone)
+        or _extract_real_phone(from_number)
+        or _extract_real_phone(reply_to)
     )
-    user = result.scalar_one_or_none()
 
-    if not user:
-        user = User(
-            phone_number=sender_identifier, platform="whatsapp", role=UserRole.SENDER
+    # חיפוש לפי מזהה שיחה יציב: משתמשים באותו placeholder גם ב-lookup וגם ביצירה
+    # כדי למנוע מצב שבו sender_id ארוך נשמר כ-wa:<hash> אבל lookup מחפש את הערך הגולמי.
+    sender_key_raw = (sender_identifier or "").strip()
+    sender_key = _whatsapp_sender_placeholder(sender_key_raw)
+
+    user_by_sender = None
+    if sender_key:
+        keys = [sender_key]
+        if sender_key_raw and sender_key_raw != sender_key:
+            # תמיכה לאחור/SQLite: אם איכשהו נשמר ערך גולמי ארוך (ב-SQLite אין הגבלת אורך),
+            # נחפש גם אותו וגם את ה-hash. ייתכן ששניהם קיימים בפועל — אסור לקרוס.
+            keys.append(sender_key_raw)
+
+        result = await db.execute(
+            select(User)
+            .where(User.phone_number.in_(keys))
+            # אם יש גם hash וגם raw — נעדיף hash (המצב התקין בקוד החדש),
+            # ואז user פעיל ומעודכן יותר.
+            .order_by(
+                (User.phone_number == sender_key).desc(),
+                User.is_active.desc(),
+                User.updated_at.desc(),
+                User.created_at.desc(),
+            )
+            .limit(2)
         )
-        db.add(user)
-        await db.commit()
-        await db.refresh(user)
-        return user, True  # New user
+        matches = list(result.scalars().all())
+        user_by_sender = matches[0] if matches else None
 
-    return user, False  # Existing user
+        if len(matches) > 1:
+            logger.error(
+                "Multiple user records matched WhatsApp sender key; using first match",
+                extra_data={
+                    "sender_key": sender_key,
+                    "sender_key_raw": sender_key_raw,
+                    "matched_user_ids": [u.id for u in matches],
+                },
+            )
+
+    user_by_phone = None
+    if normalized_phone:
+        result = await db.execute(
+            select(User)
+            .where(User.phone_number == normalized_phone)
+            .order_by(
+                User.is_active.desc(),
+                User.updated_at.desc(),
+                User.created_at.desc(),
+            )
+            .limit(2)
+        )
+        phone_matches = list(result.scalars().all())
+        user_by_phone = phone_matches[0] if phone_matches else None
+
+        if len(phone_matches) > 1:
+            # למרות ש-phone_number מסומן כ-unique במודל, בפרודקשן ייתכנו נתונים היסטוריים לא עקביים.
+            # אסור להפיל webhook — בוחרים דטרמיניסטית וממשיכים.
+            logger.error(
+                "Multiple user records matched normalized phone; using first match",
+                extra_data={
+                    "phone": PhoneNumberValidator.mask(normalized_phone),
+                    "matched_user_ids": [u.id for u in phone_matches],
+                },
+            )
+
+    # בחירת משתמש:
+    # - אם יש משתמש לפי מספר אמיתי והוא בעל תחנה/שליח (תפקיד "חזק") — נעדיף אותו.
+    # - אחרת נעדיף את המשתמש לפי sender_id כדי לשמר session יציב גם כש-reply_to משתנה (@lid/@c.us).
+    if user_by_phone and user_by_phone.id != getattr(user_by_sender, "id", None):
+        if user_by_phone.role in {UserRole.STATION_OWNER, UserRole.COURIER, UserRole.ADMIN}:
+            return user_by_phone, False
+
+    if user_by_sender:
+        return user_by_sender, False
+
+    if user_by_phone:
+        return user_by_phone, False
+
+    # יצירת משתמש חדש — ברירת מחדל: sender_id (יציב). אם הוא ארוך מדי, משתמשים ב-placeholder.
+    create_identifier = (sender_identifier or reply_to or from_number or "").strip()
+    create_identifier = _whatsapp_sender_placeholder(create_identifier)
+
+    user = User(phone_number=create_identifier, platform="whatsapp", role=UserRole.SENDER)
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    return user, True  # New user
 
 
 async def send_whatsapp_message(
@@ -627,7 +751,13 @@ async def whatsapp_webhook(
             continue  # לא ממשיכים לטיפול רגיל בהודעות מקבוצות
 
         # Get or create user
-        user, is_new_user = await get_or_create_user(db, sender_id)
+        user, is_new_user = await get_or_create_user(
+            db,
+            sender_id,
+            from_number=from_number,
+            reply_to=reply_to,
+            resolved_phone=resolved_phone,
+        )
 
         # טיפול בפקודות אישור/דחייה מהודעות פרטיות של מנהלים
         # חייב להיות לפני בדיקת is_new_user כדי שמנהל חדש שעוד לא ב-DB

@@ -175,8 +175,47 @@ async def run_migration_003(conn: AsyncConnection) -> None:
     """))
 
 
+async def run_migration_004(conn: AsyncConnection) -> None:
+    """
+    מיגרציה 004 - אינדקסים ליציבות Telegram.
+
+    מוסיפה אינדקס על users.telegram_chat_id לביצועים.
+    אם אין כפילויות - מוסיפה גם UNIQUE index כדי למנוע הישנות.
+
+    הערה: אם יש כפילויות בפרודקשן, יצירת UNIQUE תיכשל ולכן אנחנו בודקים מראש.
+    """
+    # אינדקס רגיל (לא ייחודי) תמיד בטוח
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_users_telegram_chat_id
+        ON users(telegram_chat_id)
+        WHERE telegram_chat_id IS NOT NULL;
+    """))
+
+    # יצירת UNIQUE index רק אם אין כפילויות
+    await conn.execute(text("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM users
+                WHERE telegram_chat_id IS NOT NULL
+                GROUP BY telegram_chat_id
+                HAVING COUNT(*) > 1
+                LIMIT 1
+            ) THEN
+                EXECUTE '
+                    CREATE UNIQUE INDEX IF NOT EXISTS uq_users_telegram_chat_id_not_null
+                    ON users(telegram_chat_id)
+                    WHERE telegram_chat_id IS NOT NULL
+                ';
+            END IF;
+        END $$;
+    """))
+
+
 async def run_all_migrations(conn: AsyncConnection) -> None:
     """הרצת כל המיגרציות ברצף."""
     await run_migration_001(conn)
     await run_migration_002(conn)
     await run_migration_003(conn)
+    await run_migration_004(conn)

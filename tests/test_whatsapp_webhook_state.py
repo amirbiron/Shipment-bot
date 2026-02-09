@@ -60,6 +60,89 @@ async def test_whatsapp_state_persists_across_reply_to_changes(
     assert res5["responses"][0]["new_state"] == "SENDER.DELIVERY.PICKUP_STREET"
 
 
+@pytest.mark.integration
+async def test_whatsapp_state_persists_with_long_sender_id_hashed(
+    test_client: AsyncClient,
+    mock_whatsapp_gateway,
+):
+    """
+    רגרסיה: sender_id ארוך (מעל 20 תווים) נשמר כ-wa:<hash>.
+    ה-lookup חייב להשתמש באותו hash כדי שה-state לא יישבר בין הודעות.
+    """
+    long_sender_id = "very-long-stable-sender-identifier-1234567890@lid"
+
+    async def post(text: str, reply_to: str) -> dict:
+        payload = {
+            "messages": [
+                {
+                    "from_number": reply_to,
+                    "sender_id": long_sender_id,
+                    "reply_to": reply_to,
+                    "message_id": "m-long-1",
+                    "text": text,
+                    "timestamp": 1700000000,
+                }
+            ]
+        }
+        r = await test_client.post("/api/webhooks/whatsapp/webhook", json=payload)
+        assert r.status_code == 200
+        return r.json()
+
+    # 1) יצירת משתמש חדש (welcome)
+    res1 = await post("שלום", reply_to="972501234567@c.us")
+    assert res1["processed"] == 1
+    assert res1["responses"][0]["new_user"] is True
+
+    # 2) התחלת זרימת שולח — צריך להתקדם (לא להיווצר משתמש נוסף/להיתקע)
+    res2 = await post("📦 אני רוצה לשלוח חבילה", reply_to="972501234567@lid")
+    assert res2["processed"] == 1
+    assert res2["responses"][0]["new_state"] == "SENDER.REGISTER.COLLECT_NAME"
+
+
+@pytest.mark.asyncio
+async def test_whatsapp_long_sender_id_raw_and_hashed_records_do_not_crash(
+    test_client: AsyncClient,
+    db_session,
+    user_factory,
+    mock_whatsapp_gateway,
+):
+    """
+    רגרסיה: קיימות שתי רשומות משתמש עבור אותו sender_id ארוך:
+    1) phone_number = הערך הגולמי (אפשרי בסביבות/גרסאות ישנות או ב-SQLite)
+    2) phone_number = wa:<hash> (המצב התקין בקוד החדש)
+
+    ה-webhook לא אמור לקרוס בגלל MultipleResultsFound, וחייב לבחור אחת דטרמיניסטית.
+    """
+    import hashlib
+
+    sender_id_raw = "very-long-stable-sender-identifier-1234567890@lid"
+    digest = hashlib.sha1(sender_id_raw.encode("utf-8")).hexdigest()[:17]
+    sender_id_hashed = f"wa:{digest}"
+
+    # יוצרים שתי רשומות שונות (כמו מצב "תמיכה לאחור" אמיתי)
+    await user_factory(phone_number=sender_id_raw, name="Legacy Raw", platform="whatsapp")
+    await user_factory(phone_number=sender_id_hashed, name="Hashed", platform="whatsapp")
+
+    resp = await test_client.post(
+        "/api/webhooks/whatsapp/webhook",
+        json={
+            "messages": [
+                {
+                    "from_number": "972501234567@c.us",
+                    "sender_id": sender_id_raw,
+                    "reply_to": "972501234567@c.us",
+                    "message_id": "m-dupe-1",
+                    "text": "שלום",
+                    "timestamp": 1700000000,
+                }
+            ]
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["processed"] == 1
+
+
 @pytest.mark.asyncio
 async def test_whatsapp_document_image_captured_as_photo(
     test_client: AsyncClient,

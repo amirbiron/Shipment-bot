@@ -123,11 +123,31 @@ async def get_or_create_user(
     telegram_chat_id: str,
     name: Optional[str] = None
 ) -> tuple[User, bool]:
-    """Get existing user or create new one. Returns (user, is_new)"""
+    """
+    Get existing user or create new one. Returns (user, is_new).
+
+    הגנה לפרודקשן:
+    בחלק מהסביבות היסטורית, מסד הנתונים לא כלל UNIQUE אמיתי על telegram_chat_id,
+    ולכן עלולות להיות כפילויות. במצב כזה scalar_one_or_none() יזרוק MultipleResultsFound
+    ויפיל את ה-webhook. כאן אנחנו בוחרים משתמש דטרמיניסטית וממשיכים.
+    """
     result = await db.execute(
-        select(User).where(User.telegram_chat_id == telegram_chat_id)
+        select(User)
+        .where(User.telegram_chat_id == telegram_chat_id)
+        .order_by(User.is_active.desc(), User.updated_at.desc(), User.created_at.desc())
+        .limit(2)
     )
-    user = result.scalar_one_or_none()
+    users = list(result.scalars().all())
+    user = users[0] if users else None
+
+    if len(users) > 1:
+        logger.error(
+            "Duplicate telegram_chat_id detected; using first match to avoid webhook crash",
+            extra_data={
+                "telegram_chat_id": telegram_chat_id,
+                "user_ids": [u.id for u in users],
+            },
+        )
 
     if not user:
         user = User(
