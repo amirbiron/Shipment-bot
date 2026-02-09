@@ -173,7 +173,7 @@ class TestResetRoutingByRole:
         await db_session.commit()
 
         resp = await test_client.post(
-            "/api/webhooks/whatsapp/webhook",
+            "/api/whatsapp/webhook",
             json={
                 "messages": [
                     {

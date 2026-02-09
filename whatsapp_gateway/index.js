@@ -151,7 +151,7 @@ function truncateByCodepoints(text, maxLen, suffix = '…') {
 }
 
 // Get API webhook URL from environment variable
-const API_WEBHOOK_URL = process.env.API_WEBHOOK_URL || 'http://localhost:8000/api/webhooks/whatsapp/webhook';
+const API_WEBHOOK_URL = process.env.API_WEBHOOK_URL || 'http://localhost:8000/api/whatsapp/webhook';
 
 // Session folder path - use absolute path for Render's disk mount
 const SESSION_FOLDER = '/app/sessions';

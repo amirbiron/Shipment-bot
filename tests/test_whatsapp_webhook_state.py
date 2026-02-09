@@ -20,21 +20,23 @@ async def test_whatsapp_state_persists_across_reply_to_changes(
     mock_whatsapp_gateway,
 ):
     sender_id = "123456@lid"  # stable chat identifier
+    msg_counter = [0]
 
     async def post(text: str, reply_to: str) -> dict:
+        msg_counter[0] += 1
         payload = {
             "messages": [
                 {
                     "from_number": reply_to,  # legacy field (can change)
                     "sender_id": sender_id,  # stable field (must not change)
                     "reply_to": reply_to,  # where to actually reply
-                    "message_id": "m1",
+                    "message_id": f"m-state-{msg_counter[0]}",
                     "text": text,
                     "timestamp": 1700000000,
                 }
             ]
         }
-        r = await test_client.post("/api/webhooks/whatsapp/webhook", json=payload)
+        r = await test_client.post("/api/whatsapp/webhook", json=payload)
         assert r.status_code == 200
         return r.json()
 
@@ -70,21 +72,23 @@ async def test_whatsapp_state_persists_with_long_sender_id_hashed(
     ה-lookup חייב להשתמש באותו hash כדי שה-state לא יישבר בין הודעות.
     """
     long_sender_id = "very-long-stable-sender-identifier-1234567890@lid"
+    msg_counter = [0]
 
     async def post(text: str, reply_to: str) -> dict:
+        msg_counter[0] += 1
         payload = {
             "messages": [
                 {
                     "from_number": reply_to,
                     "sender_id": long_sender_id,
                     "reply_to": reply_to,
-                    "message_id": "m-long-1",
+                    "message_id": f"m-long-{msg_counter[0]}",
                     "text": text,
                     "timestamp": 1700000000,
                 }
             ]
         }
-        r = await test_client.post("/api/webhooks/whatsapp/webhook", json=payload)
+        r = await test_client.post("/api/whatsapp/webhook", json=payload)
         assert r.status_code == 200
         return r.json()
 
@@ -124,7 +128,7 @@ async def test_whatsapp_long_sender_id_raw_and_hashed_records_do_not_crash(
     await user_factory(phone_number=sender_id_hashed, name="Hashed", platform="whatsapp")
 
     resp = await test_client.post(
-        "/api/webhooks/whatsapp/webhook",
+        "/api/whatsapp/webhook",
         json={
             "messages": [
                 {
@@ -165,7 +169,7 @@ async def test_whatsapp_document_image_captured_as_photo(
     )
 
     resp = await test_client.post(
-        "/api/webhooks/whatsapp/webhook",
+        "/api/whatsapp/webhook",
         json={
             "messages": [
                 {
@@ -215,7 +219,7 @@ async def test_whatsapp_non_image_document_not_captured(
     )
 
     resp = await test_client.post(
-        "/api/webhooks/whatsapp/webhook",
+        "/api/whatsapp/webhook",
         json={
             "messages": [
                 {
@@ -267,7 +271,7 @@ async def test_whatsapp_admin_can_return_to_main_menu_from_courier_flow(
     )
 
     resp = await test_client.post(
-        "/api/webhooks/whatsapp/webhook",
+        "/api/whatsapp/webhook",
         json={
             "messages": [
                 {
@@ -319,7 +323,7 @@ async def test_whatsapp_admin_root_menu_works_with_cross_format_normalization(
     )
 
     resp = await test_client.post(
-        "/api/webhooks/whatsapp/webhook",
+        "/api/whatsapp/webhook",
         json={
             "messages": [
                 {
@@ -378,7 +382,7 @@ async def test_whatsapp_admin_root_menu_matches_reply_to_or_from_number(
     )
 
     resp = await test_client.post(
-        "/api/webhooks/whatsapp/webhook",
+        "/api/whatsapp/webhook",
         json={
             "messages": [
                 {
@@ -439,7 +443,7 @@ async def test_whatsapp_admin_station_owner_does_not_lose_role_on_main_menu_rese
     )
 
     resp = await test_client.post(
-        "/api/webhooks/whatsapp/webhook",
+        "/api/whatsapp/webhook",
         json={
             "messages": [
                 {
@@ -494,7 +498,7 @@ async def test_whatsapp_admin_returns_to_main_menu_after_courier_entry_via_conte
 
     # שלב 1: הגטוויי שולח sender_id=LID אבל from_number=מספר אמיתי → אדמין מזוהה
     resp1 = await test_client.post(
-        "/api/webhooks/whatsapp/webhook",
+        "/api/whatsapp/webhook",
         json={
             "messages": [
                 {
@@ -515,7 +519,7 @@ async def test_whatsapp_admin_returns_to_main_menu_after_courier_entry_via_conte
     # שלב 2: הגטוויי שולח רק LID בכל השדות → זיהוי אדמין נכשל
     # הקוד צריך לזהות entered_as_admin מהקונטקסט ולהחזיר לתפריט ראשי
     resp2 = await test_client.post(
-        "/api/webhooks/whatsapp/webhook",
+        "/api/whatsapp/webhook",
         json={
             "messages": [
                 {
@@ -562,7 +566,7 @@ async def test_whatsapp_approved_courier_non_admin_stays_courier_on_hash(
     )
 
     resp = await test_client.post(
-        "/api/webhooks/whatsapp/webhook",
+        "/api/whatsapp/webhook",
         json={
             "messages": [
                 {
@@ -583,3 +587,56 @@ async def test_whatsapp_approved_courier_non_admin_stays_courier_on_hash(
     # שליח מאושר רגיל נשאר שליח — לא מורד לשולח
     await db_session.refresh(courier_user)
     assert courier_user.role == UserRole.COURIER
+
+
+# ============================================================================
+# Deduplication
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_whatsapp_duplicate_message_skipped(
+    test_client: AsyncClient,
+    mock_whatsapp_gateway,
+):
+    """הודעה עם אותו message_id נדלגת (deduplication) ולא מעובדת פעמיים"""
+    payload = {
+        "messages": [
+            {
+                "from_number": "972501112222@c.us",
+                "sender_id": "972501112222@lid",
+                "reply_to": "972501112222@c.us",
+                "message_id": "m-dedup-test-1",
+                "text": "שלום",
+                "timestamp": 1700000000,
+            }
+        ]
+    }
+
+    # שליחה ראשונה — חייבת להתעבד
+    resp1 = await test_client.post("/api/whatsapp/webhook", json=payload)
+    assert resp1.status_code == 200
+    data1 = resp1.json()
+    assert data1["processed"] == 1
+
+    # שליחה שנייה עם אותו message_id — חייבת להידלג
+    resp2 = await test_client.post("/api/whatsapp/webhook", json=payload)
+    assert resp2.status_code == 200
+    data2 = resp2.json()
+    assert data2["processed"] == 0
+
+
+@pytest.mark.unit
+def test_dedup_function_detects_duplicates():
+    """בדיקת יחידה ל-_is_duplicate_message"""
+    from app.api.webhooks.whatsapp import _is_duplicate_message, _processed_messages
+    _processed_messages.clear()
+
+    # הודעה ראשונה — לא כפולה
+    assert _is_duplicate_message("msg-1") is False
+    # אותה הודעה — כפולה
+    assert _is_duplicate_message("msg-1") is True
+    # הודעה חדשה — לא כפולה
+    assert _is_duplicate_message("msg-2") is False
+
+    _processed_messages.clear()

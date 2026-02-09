@@ -4,6 +4,8 @@ WhatsApp Webhook Handler - Bot Gateway Layer
 
 import asyncio
 import re
+import time
+from collections import OrderedDict
 
 import httpx
 from fastapi import APIRouter, Depends, BackgroundTasks
@@ -28,6 +30,38 @@ from app.core.config import settings
 from app.core.exceptions import WhatsAppError
 
 logger = get_logger(__name__)
+
+# ──────────────────────────────────────────────
+#  מנגנון deduplication – מונע עיבוד כפול של אותה הודעה
+#  שומר message_id ב-cache בזיכרון עם TTL של 5 דקות
+# ──────────────────────────────────────────────
+_DEDUP_TTL_SECONDS = 300  # 5 דקות
+_DEDUP_MAX_SIZE = 10_000
+_processed_messages: OrderedDict[str, float] = OrderedDict()
+
+
+def _is_duplicate_message(message_id: str) -> bool:
+    """בדיקה אם ההודעה כבר עובדה. מחזיר True אם כפולה."""
+    now = time.monotonic()
+
+    # ניקוי ערכים ישנים מתחילת ה-OrderedDict
+    while _processed_messages:
+        oldest_key, oldest_time = next(iter(_processed_messages.items()))
+        if now - oldest_time > _DEDUP_TTL_SECONDS:
+            _processed_messages.pop(oldest_key)
+        else:
+            break
+
+    if message_id in _processed_messages:
+        return True
+
+    _processed_messages[message_id] = now
+
+    # הגנה על גודל ה-cache
+    if len(_processed_messages) > _DEDUP_MAX_SIZE:
+        _processed_messages.popitem(last=False)
+
+    return False
 
 router = APIRouter()
 
@@ -694,6 +728,14 @@ async def whatsapp_webhook(
     responses = []
 
     for message in payload.messages:
+        # מניעת עיבוד כפול של אותה הודעה (deduplication)
+        if message.message_id and _is_duplicate_message(message.message_id):
+            logger.info(
+                "Skipping duplicate message",
+                extra_data={"message_id": message.message_id},
+            )
+            continue
+
         text = message.text or ""
         sender_id = (message.sender_id or message.from_number or "").strip()
         reply_to = (message.reply_to or message.from_number or "").strip()

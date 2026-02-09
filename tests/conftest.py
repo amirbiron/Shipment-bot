@@ -290,3 +290,12 @@ def reset_circuit_breakers():
     CircuitBreaker.reset_all()
     yield
     CircuitBreaker.reset_all()
+
+
+@pytest.fixture(autouse=True)
+def reset_whatsapp_dedup_cache():
+    """ניקוי cache ה-deduplication של WhatsApp webhook בין בדיקות"""
+    from app.api.webhooks.whatsapp import _processed_messages
+    _processed_messages.clear()
+    yield
+    _processed_messages.clear()
