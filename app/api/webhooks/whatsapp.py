@@ -127,17 +127,37 @@ async def get_or_create_user(
 
     user_by_sender = None
     if sender_key:
+        keys = [sender_key]
         if sender_key_raw and sender_key_raw != sender_key:
             # תמיכה לאחור/SQLite: אם איכשהו נשמר ערך גולמי ארוך (ב-SQLite אין הגבלת אורך),
-            # נחפש גם אותו וגם את ה-hash.
-            result = await db.execute(
-                select(User).where(User.phone_number.in_([sender_key, sender_key_raw]))
+            # נחפש גם אותו וגם את ה-hash. ייתכן ששניהם קיימים בפועל — אסור לקרוס.
+            keys.append(sender_key_raw)
+
+        result = await db.execute(
+            select(User)
+            .where(User.phone_number.in_(keys))
+            # אם יש גם hash וגם raw — נעדיף hash (המצב התקין בקוד החדש),
+            # ואז user פעיל ומעודכן יותר.
+            .order_by(
+                (User.phone_number == sender_key).desc(),
+                User.is_active.desc(),
+                User.updated_at.desc(),
+                User.created_at.desc(),
             )
-        else:
-            result = await db.execute(
-                select(User).where(User.phone_number == sender_key)
+            .limit(2)
+        )
+        matches = list(result.scalars().all())
+        user_by_sender = matches[0] if matches else None
+
+        if len(matches) > 1:
+            logger.error(
+                "Multiple user records matched WhatsApp sender key; using first match",
+                extra_data={
+                    "sender_key": sender_key,
+                    "sender_key_raw": sender_key_raw,
+                    "matched_user_ids": [u.id for u in matches],
+                },
             )
-        user_by_sender = result.scalar_one_or_none()
 
     user_by_phone = None
     if normalized_phone:
