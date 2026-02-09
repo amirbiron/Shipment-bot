@@ -274,11 +274,12 @@ async def add_enum_values(engine: AsyncEngine) -> None:
         ))
         logger.info("Ensured 'STATION_OWNER' exists in userrole enum")
 
-        # שלב 4: הוספת pending_approval לסטטוס משלוח
+        # שלב 4: הוספת PENDING_APPROVAL לסטטוס משלוח
+        # SQLEnum(DeliveryStatus) ללא values_callable שולח את שם ה-member (uppercase)
         await conn.execute(text(
-            "ALTER TYPE deliverystatus ADD VALUE IF NOT EXISTS 'pending_approval'"
+            "ALTER TYPE deliverystatus ADD VALUE IF NOT EXISTS 'PENDING_APPROVAL'"
         ))
-        logger.info("Ensured 'pending_approval' exists in deliverystatus enum")
+        logger.info("Ensured 'PENDING_APPROVAL' exists in deliverystatus enum")
 
 
 async def run_all_migrations(conn: AsyncConnection) -> None:

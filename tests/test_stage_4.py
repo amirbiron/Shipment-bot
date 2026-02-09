@@ -629,6 +629,37 @@ class TestCaptureRaceCondition:
         assert success is True
         assert result.status == DeliveryStatus.CAPTURED
 
+    @pytest.mark.asyncio
+    async def test_station_delivery_blocked_from_direct_capture(
+        self, db_session, user_factory, delivery_factory, station_factory,
+        wallet_factory
+    ):
+        """משלוח של תחנה בסטטוס OPEN לא ניתן לתפיסה ישירה דרך API"""
+        owner = await user_factory(
+            phone_number="+972500000035", name="בעלים35", role=UserRole.STATION_OWNER
+        )
+        station = await station_factory(owner_id=owner.id)
+        courier = await user_factory(
+            phone_number="+972500000036", name="שליח עוקף",
+            role=UserRole.COURIER, approval_status=ApprovalStatus.APPROVED,
+        )
+        await wallet_factory(courier_id=courier.id, balance=100.0)
+        sender = await user_factory(
+            phone_number="+972501111132", name="שולח32"
+        )
+        delivery = await delivery_factory(sender_id=sender.id, fee=10.0)
+        delivery.station_id = station.id
+        # סטטוס OPEN — ניסיון תפיסה ישירה צריך להיחסם
+        await db_session.commit()
+
+        capture_service = CaptureService(db_session)
+        success, msg, _ = await capture_service.capture_delivery(
+            delivery.id, courier.id
+        )
+
+        assert success is False
+        assert "אישור סדרן" in msg
+
 
 # ============================================================================
 # TestDispatcherScoping (תיקון ריוויו #3)

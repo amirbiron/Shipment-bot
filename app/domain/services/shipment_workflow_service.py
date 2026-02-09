@@ -153,20 +153,22 @@ class ShipmentWorkflowService:
                 return False, "אין לך הרשאה לאשר משלוחים בתחנה זו.", None
 
         # ביצוע תפיסה אטומית דרך CaptureService (חיוב ארנק וכו')
+        # auto_commit=False כדי שהכל יהיה באותה טרנזקציה עם שדות האישור
         courier_id = delivery.requesting_courier_id
         success, msg, captured = await self.capture_service.capture_delivery(
-            delivery_id, courier_id
+            delivery_id, courier_id, auto_commit=False
         )
 
         if not success:
             return False, f"שגיאה בתפיסת המשלוח: {msg}", None
 
-        # עדכון שדות אישור
-        # רענון הרשומה מה-DB אחרי שה-capture עדכן אותה
+        # עדכון שדות אישור — באותה טרנזקציה עם התפיסה וחיוב הארנק
         await self.db.refresh(delivery)
         delivery.approved_by_id = dispatcher_id
         delivery.approved_at = datetime.now(timezone.utc)
         delivery.approval_decision = "approved"
+
+        # commit אחד אטומי: תפיסה + חיוב + שדות אישור
         await self.db.commit()
         await self.db.refresh(delivery)
 

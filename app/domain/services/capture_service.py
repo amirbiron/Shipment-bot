@@ -69,10 +69,15 @@ class CaptureService:
     async def capture_delivery(
         self,
         delivery_id: int,
-        courier_id: int
+        courier_id: int,
+        auto_commit: bool = True,
     ) -> Tuple[bool, str, Optional[Delivery]]:
         """
         Atomically capture a delivery for a courier.
+
+        Args:
+            auto_commit: אם False, לא עושה commit — מאפשר לקוד הקורא לנהל
+                טרנזקציה אחת (למשל approve_delivery ב-ShipmentWorkflowService).
 
         Returns:
             Tuple of (success, message, delivery)
@@ -95,6 +100,10 @@ class CaptureService:
                 DeliveryStatus.OPEN, DeliveryStatus.PENDING_APPROVAL
             ):
                 return False, "המשלוח כבר נתפס על ידי שליח אחר", None
+
+            # שלב 4: משלוח של תחנה חייב לעבור דרך זרימת אישור — אסור לתפוס ישירות
+            if delivery.station_id and delivery.status == DeliveryStatus.OPEN:
+                return False, "משלוח של תחנה חייב לעבור אישור סדרן", None
 
             # שלב 4: אם הסטטוס PENDING_APPROVAL — לוודא שהשליח הוא מי שביקש
             if delivery.status == DeliveryStatus.PENDING_APPROVAL:
@@ -148,9 +157,14 @@ class CaptureService:
             # Queue notification messages via outbox
             await self.outbox_service.queue_capture_notification(delivery, courier_id)
 
-            # 8. Commit transaction
-            await self.db.commit()
-            await self.db.refresh(delivery)
+            # 8. Commit או flush — כשנקרא מ-workflow, הקורא מנהל את הטרנזקציה
+            if auto_commit:
+                await self.db.commit()
+                await self.db.refresh(delivery)
+            else:
+                # flush כותב ל-DB בתוך הטרנזקציה (ללא commit)
+                # כך ש-refresh מהקורא יראה את השינויים
+                await self.db.flush()
 
             return True, f"המשלוח נתפס בהצלחה! עמלה: {fee}₪, יתרה חדשה: {future_balance}₪", delivery
 
