@@ -80,15 +80,41 @@ function normalizeMediaPayload(mediaUrl, mediaType) {
 }
 
 async function sendFileAuto(client, chatId, mediaUrl, rawBase64, filename, caption) {
+    let lastError = null;
+
     if (rawBase64 && typeof client.sendFileFromBase64 === 'function') {
         try {
             return await client.sendFileFromBase64(chatId, rawBase64, filename, caption);
         } catch (err) {
+            lastError = err;
             const errMsg = err?.message || String(err || 'unknown');
             console.log('sendFileFromBase64 failed, retrying with sendFile:', errMsg);
         }
     }
-    return await client.sendFile(chatId, mediaUrl, filename, caption);
+
+    try {
+        return await client.sendFile(chatId, mediaUrl, filename, caption);
+    } catch (err) {
+        lastError = err;
+        const errMsg = err?.message || String(err || 'unknown');
+        if (rawBase64) {
+            console.log('sendFile failed, trying temp file fallback:', errMsg);
+            const tmpName = `wa_media_${Date.now()}_${Math.random().toString(16).slice(2)}_${filename}`;
+            const tmpPath = path.join('/tmp', tmpName);
+            try {
+                await fs.promises.writeFile(tmpPath, Buffer.from(rawBase64, 'base64'));
+                return await client.sendFile(chatId, tmpPath, filename, caption);
+            } finally {
+                try {
+                    await fs.promises.unlink(tmpPath);
+                } catch (cleanupError) {
+                    console.log('Failed to cleanup temp media file:', cleanupError?.message || String(cleanupError));
+                }
+            }
+        }
+    }
+
+    throw lastError;
 }
 
 // מייצר rowId "בטוח" (ASCII בלבד) אך ניתן לשחזור לטקסט המקורי
