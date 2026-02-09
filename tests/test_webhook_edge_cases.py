@@ -153,7 +153,7 @@ class TestTelegramGetOrCreateUser:
     @pytest.mark.asyncio
     async def test_duplicate_telegram_chat_id_selects_deterministically(self, db_session, user_factory):
         """כפילות telegram_chat_id — בוחר דטרמיניסטית ומלוגג error"""
-        from unittest.mock import AsyncMock, MagicMock
+        from unittest.mock import MagicMock
 
         # סימולציית שתי שורות מ-DB (כמו שקורה בפרודקשן ללא UNIQUE constraint)
         user1 = await user_factory(
@@ -294,13 +294,14 @@ class TestWhatsAppGetOrCreateUser:
             platform="whatsapp",
         )
 
-        user, is_new = await wa_get_or_create_user(
+        user, is_new, norm_phone = await wa_get_or_create_user(
             db_session,
             "device-abc@lid",
             from_number="972501234567@c.us",
         )
         assert is_new is False
         assert user.id == station_owner.id
+        assert norm_phone == "+972501234567"
 
     @pytest.mark.asyncio
     async def test_prefers_sender_id_when_phone_user_is_sender(self, db_session, user_factory):
@@ -316,7 +317,7 @@ class TestWhatsAppGetOrCreateUser:
             platform="whatsapp",
         )
 
-        user, is_new = await wa_get_or_create_user(
+        user, is_new, _ = await wa_get_or_create_user(
             db_session,
             "device-xyz@lid",
             from_number="972501234567@c.us",
@@ -328,7 +329,7 @@ class TestWhatsAppGetOrCreateUser:
     async def test_long_sender_id_creates_hashed_placeholder(self, db_session):
         """sender_id ארוך (>20 תווים) — placeholder מגובב"""
         long_id = "very-long-identifier-that-exceeds-twenty-chars@lid"
-        user, is_new = await wa_get_or_create_user(db_session, long_id)
+        user, is_new, _ = await wa_get_or_create_user(db_session, long_id)
         assert is_new is True
         assert user.phone_number.startswith("wa:")
         assert len(user.phone_number) <= 20
@@ -336,11 +337,30 @@ class TestWhatsAppGetOrCreateUser:
     @pytest.mark.asyncio
     async def test_creates_new_user_with_sender_id(self, db_session):
         """משתמש חדש — phone_number=sender_id, platform=whatsapp, role=SENDER"""
-        user, is_new = await wa_get_or_create_user(db_session, "new-device@lid")
+        user, is_new, _ = await wa_get_or_create_user(db_session, "new-device@lid")
         assert is_new is True
         assert user.phone_number == "new-device@lid"
         assert user.platform == "whatsapp"
         assert user.role == UserRole.SENDER
+
+    @pytest.mark.asyncio
+    async def test_returns_normalized_phone_when_available(self, db_session):
+        """get_or_create_user מחזיר normalized_phone כערך שלישי"""
+        user, is_new, norm_phone = await wa_get_or_create_user(
+            db_session,
+            "some-sender@lid",
+            from_number="972509999999@c.us",
+        )
+        assert norm_phone == "+972509999999"
+
+    @pytest.mark.asyncio
+    async def test_returns_none_normalized_phone_when_no_real_phone(self, db_session):
+        """ללא מספר טלפון אמיתי — normalized_phone=None"""
+        user, is_new, norm_phone = await wa_get_or_create_user(
+            db_session,
+            "device-only@lid",
+        )
+        assert norm_phone is None
 
 
 # ============================================================================
@@ -370,7 +390,7 @@ class TestCrossPlatformEdgeCases:
         assert found_tg.id == tg_user.id
 
         # וואטסאפ מוצא לפי phone
-        found_wa, is_new_wa = await wa_get_or_create_user(
+        found_wa, is_new_wa, _ = await wa_get_or_create_user(
             db_session,
             "new-sender@lid",
             from_number="972501234567@c.us",
@@ -411,16 +431,16 @@ class TestMaskingSafety:
 
 
 # ============================================================================
-# לוגי observability — וידוא שדות "User resolved"
+# לוגי observability — וידוא שלוג "User resolved" נקרא ב-webhook handlers
 # ============================================================================
 
 
 class TestUserResolvedLog:
-    """וידוא שלוג 'User resolved' נרשם עם כל השדות הנכונים"""
+    """בדיקות אינטגרציה: webhook handler מלוגג 'User resolved' עם כל השדות"""
 
     @pytest.mark.asyncio
-    async def test_telegram_user_resolved_log_fields(self, db_session, user_factory):
-        """טלגרם — לוג info עם resolved_user_id, telegram_chat_id, lookup_by, is_new, role"""
+    async def test_telegram_webhook_logs_user_resolved(self, test_client, db_session, user_factory):
+        """טלגרם — webhook מלוגג 'User resolved' עם resolved_user_id, lookup_by, is_new, role"""
         user = await user_factory(
             phone_number="tg:82000",
             telegram_chat_id="82000",
@@ -429,44 +449,101 @@ class TestUserResolvedLog:
         )
 
         with patch("app.api.webhooks.telegram.logger") as mock_logger:
-            result_user, is_new = await tg_get_or_create_user(db_session, "82000")
+            resp = await test_client.post(
+                "/api/telegram/webhook",
+                json={
+                    "update_id": 300,
+                    "message": {
+                        "message_id": 300,
+                        "chat": {"id": 82000, "type": "private"},
+                        "text": "#",
+                        "date": 1700000000,
+                        "from": {"id": 82000, "first_name": "LogTest"},
+                    },
+                },
+            )
+            assert resp.status_code == 200
 
-        # הפונקציה עצמה לא מלוגגת — הלוג נמצא ב-webhook handler.
-        # כאן בודקים שהפונקציה מחזירה ערכים תקינים שהלוג ישתמש בהם.
-        assert result_user.id == user.id
-        assert is_new is False
-        assert result_user.role == UserRole.SENDER
+        # חיפוש הקריאה ללוג "User resolved"
+        resolved_calls = [
+            c for c in mock_logger.info.call_args_list
+            if len(c.args) > 0 and c.args[0] == "User resolved"
+        ]
+        assert len(resolved_calls) == 1, f"Expected 1 'User resolved' log, got {len(resolved_calls)}"
+        extra = resolved_calls[0].kwargs["extra_data"]
+        assert extra["resolved_user_id"] == user.id
+        assert extra["telegram_chat_id"] == "82000"
+        assert extra["lookup_by"] == "telegram_chat_id"
+        assert extra["is_new"] is False
+        assert extra["role"] == "sender"
 
     @pytest.mark.asyncio
-    async def test_whatsapp_user_resolved_log_fields(self, db_session, user_factory):
-        """וואטסאפ — לוג info עם resolved_user_id, sender_id, normalized_phone, is_new, role"""
+    async def test_whatsapp_webhook_logs_user_resolved(
+        self, test_client, db_session, user_factory, mock_whatsapp_gateway,
+    ):
+        """וואטסאפ — webhook מלוגג 'User resolved' עם sender_id ממוסך ו-normalized_phone ממוסך"""
         user = await user_factory(
             phone_number="+972507654321",
             platform="whatsapp",
             role=UserRole.COURIER,
         )
 
-        result_user, is_new = await wa_get_or_create_user(
-            db_session,
-            "new-device@lid",
-            from_number="972507654321@c.us",
-        )
+        with patch("app.api.webhooks.whatsapp.logger") as mock_logger:
+            resp = await test_client.post(
+                "/api/whatsapp/webhook",
+                json={
+                    "messages": [{
+                        "from_number": "972507654321@c.us",
+                        "sender_id": "972507654321@lid",
+                        "reply_to": "972507654321@c.us",
+                        "message_id": "m-log-obs-1",
+                        "text": "#",
+                        "timestamp": 1700000000,
+                    }]
+                },
+            )
+            assert resp.status_code == 200
 
-        # וידוא שהערכים שהלוג ישתמש בהם נכונים
-        assert result_user.id == user.id
-        assert is_new is False
-        assert result_user.role == UserRole.COURIER
+        # חיפוש הקריאה ללוג "User resolved"
+        resolved_calls = [
+            c for c in mock_logger.info.call_args_list
+            if len(c.args) > 0 and c.args[0] == "User resolved"
+        ]
+        assert len(resolved_calls) == 1, f"Expected 1 'User resolved' log, got {len(resolved_calls)}"
+        extra = resolved_calls[0].kwargs["extra_data"]
+        assert extra["resolved_user_id"] == user.id
+        assert extra["lookup_by"] == "whatsapp"
+        assert extra["is_new"] is False
+        assert extra["role"] == "courier"
+        # מספרים ממוסכים — 4 תווים אחרונים מוחלפים ב-****
+        assert extra["sender_id"].endswith("****")
+        assert extra["normalized_phone"].endswith("****")
+        # mask() מסתיר 4 ספרות אחרונות — המספר המלא לא נחשף
+        assert not extra["sender_id"].endswith("@lid")
+        assert not extra["normalized_phone"].endswith("4321")
 
     @pytest.mark.asyncio
-    async def test_telegram_new_user_resolved_log_is_new_true(self, db_session):
-        """טלגרם — משתמש חדש: is_new=True"""
-        user, is_new = await tg_get_or_create_user(db_session, "99001", name="New")
-        assert is_new is True
-        assert user.role == UserRole.SENDER
+    async def test_telegram_webhook_logs_is_new_true_for_new_user(self, test_client, db_session):
+        """טלגרם — משתמש חדש: is_new=True בלוג"""
+        with patch("app.api.webhooks.telegram.logger") as mock_logger:
+            resp = await test_client.post(
+                "/api/telegram/webhook",
+                json={
+                    "update_id": 301,
+                    "message": {
+                        "message_id": 301,
+                        "chat": {"id": 99002, "type": "private"},
+                        "text": "שלום",
+                        "date": 1700000000,
+                        "from": {"id": 99002, "first_name": "NewUser"},
+                    },
+                },
+            )
+            assert resp.status_code == 200
 
-    @pytest.mark.asyncio
-    async def test_whatsapp_new_user_resolved_log_is_new_true(self, db_session):
-        """וואטסאפ — משתמש חדש: is_new=True"""
-        user, is_new = await wa_get_or_create_user(db_session, "brand-new@lid")
-        assert is_new is True
-        assert user.role == UserRole.SENDER
+        resolved_calls = [
+            c for c in mock_logger.info.call_args_list
+            if len(c.args) > 0 and c.args[0] == "User resolved"
+        ]
+        assert len(resolved_calls) == 1
+        assert resolved_calls[0].kwargs["extra_data"]["is_new"] is True
