@@ -120,11 +120,23 @@ async def get_or_create_user(
         or _extract_real_phone(reply_to)
     )
 
+    # חיפוש לפי מזהה שיחה יציב: משתמשים באותו placeholder גם ב-lookup וגם ביצירה
+    # כדי למנוע מצב שבו sender_id ארוך נשמר כ-wa:<hash> אבל lookup מחפש את הערך הגולמי.
+    sender_key_raw = (sender_identifier or "").strip()
+    sender_key = _whatsapp_sender_placeholder(sender_key_raw)
+
     user_by_sender = None
-    if sender_identifier:
-        result = await db.execute(
-            select(User).where(User.phone_number == sender_identifier)
-        )
+    if sender_key:
+        if sender_key_raw and sender_key_raw != sender_key:
+            # תמיכה לאחור/SQLite: אם איכשהו נשמר ערך גולמי ארוך (ב-SQLite אין הגבלת אורך),
+            # נחפש גם אותו וגם את ה-hash.
+            result = await db.execute(
+                select(User).where(User.phone_number.in_([sender_key, sender_key_raw]))
+            )
+        else:
+            result = await db.execute(
+                select(User).where(User.phone_number == sender_key)
+            )
         user_by_sender = result.scalar_one_or_none()
 
     user_by_phone = None

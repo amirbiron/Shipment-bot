@@ -60,6 +60,45 @@ async def test_whatsapp_state_persists_across_reply_to_changes(
     assert res5["responses"][0]["new_state"] == "SENDER.DELIVERY.PICKUP_STREET"
 
 
+@pytest.mark.integration
+async def test_whatsapp_state_persists_with_long_sender_id_hashed(
+    test_client: AsyncClient,
+    mock_whatsapp_gateway,
+):
+    """
+    רגרסיה: sender_id ארוך (מעל 20 תווים) נשמר כ-wa:<hash>.
+    ה-lookup חייב להשתמש באותו hash כדי שה-state לא יישבר בין הודעות.
+    """
+    long_sender_id = "very-long-stable-sender-identifier-1234567890@lid"
+
+    async def post(text: str, reply_to: str) -> dict:
+        payload = {
+            "messages": [
+                {
+                    "from_number": reply_to,
+                    "sender_id": long_sender_id,
+                    "reply_to": reply_to,
+                    "message_id": "m-long-1",
+                    "text": text,
+                    "timestamp": 1700000000,
+                }
+            ]
+        }
+        r = await test_client.post("/api/webhooks/whatsapp/webhook", json=payload)
+        assert r.status_code == 200
+        return r.json()
+
+    # 1) יצירת משתמש חדש (welcome)
+    res1 = await post("שלום", reply_to="972501234567@c.us")
+    assert res1["processed"] == 1
+    assert res1["responses"][0]["new_user"] is True
+
+    # 2) התחלת זרימת שולח — צריך להתקדם (לא להיווצר משתמש נוסף/להיתקע)
+    res2 = await post("📦 אני רוצה לשלוח חבילה", reply_to="972501234567@lid")
+    assert res2["processed"] == 1
+    assert res2["responses"][0]["new_state"] == "SENDER.REGISTER.COLLECT_NAME"
+
+
 @pytest.mark.asyncio
 async def test_whatsapp_document_image_captured_as_photo(
     test_client: AsyncClient,
