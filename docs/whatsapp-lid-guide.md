@@ -49,10 +49,6 @@ lidToCusMap.set(message.from, replyTo);  // "xxx@lid" → "972xxx@c.us"
 3. אם נמצא `@c.us` — שולחים `sendListMessage` אליו (עובד!)
 4. אם לא נמצא — `sendText` עם אפשרויות בטקסט (fallback)
 
-> עדכון: בפועל נתקלנו במקרים שבהם `sendListMessage` "מחזיר הצלחה" אבל ההודעה לא מגיעה גם כשהיעד הוא `@c.us`.
-> לכן בגייטוויי **שולחים תמיד קודם תפריט כטקסט** (`sendText`) בתור ברירת מחדל אמינה,
-> ורק אם משתנה הסביבה `WHATSAPP_INTERACTIVE_ENABLED=true` מופעל — מנסים בנוסף גם הודעה אינטראקטיבית.
-
 ### 3. נתיב retry ("No LID for user")
 
 כשהשליחה ל-`@c.us` נכשלת עם `"No LID for user"`:

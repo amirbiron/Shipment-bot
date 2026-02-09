@@ -426,7 +426,6 @@ app.post('/send', async (req, res) => {
         console.log('Sending to:', chatId);
 
         let result;
-        const interactiveEnabled = String(process.env.WHATSAPP_INTERACTIVE_ENABLED || '').toLowerCase() === 'true';
 
         // sendListMessage לא עובד עם @lid — מחזיר הצלחה אבל ההודעה לא מגיעה.
         // לכן מנסים לפתור @lid ל-@c.us לפני שליחת הודעה אינטראקטיבית.
@@ -470,31 +469,29 @@ app.post('/send', async (req, res) => {
         // Try to send with interactive list if keyboard is provided
         if (keyboard && Array.isArray(keyboard) && keyboard.length > 0) {
             // Flatten keyboard array
-            const options = keyboard.flat().filter((x) => typeof x === 'string' && x.trim());
+            const options = keyboard.flat();
 
-            // ברירת מחדל אמינה: שולחים תמיד תפריט כטקסט (עובד גם עם @lid)
-            const optionsText = options.map((text) => `▫️ ${text}`).join('\n');
-            result = await client.sendText(chatId, `${message}\n\n${optionsText}`);
-            console.log('Message sent as text menu to:', chatId);
+            // Method 1: Try sendButtons with WPPConnect 1.x format
+            try {
+                const buttons = options.map((text, index) => ({
+                    buttonText: { displayText: text },
+                    buttonId: text  // Use text as buttonId for easier handling
+                }));
+                result = await client.sendButtons(listChatId, 'בחרו אפשרות:', buttons, message);
+                console.log('Message sent with buttons (v1 format) to:', listChatId);
+            } catch (btnError) {
+                console.log('sendButtons v1 failed:', btnError.message);
 
-            // שיפור UX אופציונלי: ניסיון לשלוח רשימה אינטראקטיבית רק אם מופעל ובטוח לשליחה
-            // הערה: sendListMessage עשוי "להצליח" בלי שההודעה תגיע, ולכן הוא כבוי כברירת מחדל.
-            if (
-                interactiveEnabled &&
-                typeof client.sendListMessage === 'function' &&
-                typeof listChatId === 'string' &&
-                listChatId.includes('@c.us') &&
-                !listChatId.includes('@lid') &&
-                options.length > 0
-            ) {
+                // Method 2: Try sendListMessage (משתמשים ב-listChatId שכבר פותר ל-@c.us)
                 try {
-                    await client.sendListMessage(listChatId, {
+                    result = await client.sendListMessage(listChatId, {
                         buttonText: 'בחרו 👆',
                         description: message,
                         title: '',
                         footer: '',
                         sections: [{
                             title: 'אפשרויות',
+                            // Use text as rowId so selection returns the correct text
                             rows: options.map((text) => ({
                                 rowId: text,
                                 title: text,
@@ -502,9 +499,13 @@ app.post('/send', async (req, res) => {
                             }))
                         }]
                     });
-                    console.log('Interactive list also sent to:', listChatId);
+                    console.log('Message sent with list to:', listChatId);
                 } catch (listError) {
-                    console.log('sendListMessage (optional) failed:', listError?.message || String(listError));
+                    console.log('sendListMessage failed:', listError.message);
+                    // Fallback: טקסט רגיל — משתמשים ב-chatId המקורי (sendText עובד עם @lid)
+                    const optionsText = options.map((text) => `▫️ ${text}`).join('\n');
+                    result = await client.sendText(chatId, `${message}\n\n${optionsText}`);
+                    console.log('Message sent as text (fallback) to:', chatId);
                 }
             }
         } else {
