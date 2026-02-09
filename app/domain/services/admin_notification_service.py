@@ -227,8 +227,8 @@ class AdminNotificationService:
                     )
                 success = success or tg_sent
 
-                # שליחת תמונות (רק אם מטלגרם)
-                if is_telegram and tg_sent:
+                # שליחת תמונות (רק אם מטלגרם) - גם אם הודעת הטקסט נכשלה
+                if is_telegram:
                     for file_id in [document_file_id, selfie_file_id, vehicle_photo_file_id]:
                         if file_id:
                             await AdminNotificationService._forward_photo(admin_id, file_id)
