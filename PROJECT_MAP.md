@@ -76,6 +76,7 @@
 | `wallet_ledger.py` | ספר חשבונות (immutable) — היסטוריית עסקאות עם מניעת כפל חיוב |
 | `outbox_message.py` | Transactional Outbox — הודעות ממתינות לשליחה אסינכרונית עם ספירת ניסיונות |
 | `conversation_session.py` | מעקב אחר מצב מכונת המצבים בשיחה, כולל נתוני הקשר |
+| `webhook_event.py` | טבלת idempotency — מניעת עיבוד כפול של הודעות webhook (message_id, status, created_at) |
 
 ---
 

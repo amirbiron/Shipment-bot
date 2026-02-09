@@ -4,7 +4,7 @@ WhatsApp Webhook Handler - Bot Gateway Layer
 
 import asyncio
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from fastapi import APIRouter, Depends, BackgroundTasks
@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.db.database import get_db
 from app.db.models.user import User, UserRole, ApprovalStatus
@@ -45,71 +45,76 @@ async def _try_acquire_message(db: AsyncSession, message_id: str, platform: str)
     """
     ניסיון לרכוש הודעה לעיבוד (idempotency check).
     מחזיר True אם ההודעה חדשה ואפשר לעבד, False אם כפולה.
+    גישה אופטימיסטית: INSERT קודם, טיפול בקיים אחר כך.
     """
     if not message_id:
         return True  # הודעה ללא ID — מאפשרים עיבוד (אין מה לדדפ)
 
-    # בדיקה אם כבר קיימת רשומה
-    result = await db.execute(
-        select(WebhookEvent).where(WebhookEvent.message_id == message_id)
-    )
-    existing = result.scalar_one_or_none()
-
-    if existing:
-        if existing.status == "completed":
-            logger.info(
-                "Skipping completed duplicate message",
-                extra_data={"message_id": message_id},
-            )
-            return False
-
-        # הודעה ב-processing — בדיקה אם תקועה
-        age = (datetime.utcnow() - existing.created_at).total_seconds()
-        if age < _STALE_PROCESSING_SECONDS:
-            logger.info(
-                "Skipping in-progress message",
-                extra_data={"message_id": message_id, "age_seconds": age},
-            )
-            return False
-
-        # הודעה תקועה — מאפשרים retry
-        logger.warning(
-            "Retrying stale processing message",
-            extra_data={"message_id": message_id, "age_seconds": age},
-        )
-        existing.status = "processing"
-        existing.created_at = datetime.utcnow()
-        return True
-
-    # הודעה חדשה — הוספה ב-savepoint כדי לא לשבור את ה-transaction הראשי
+    # ניסיון אופטימיסטי — הוספת הודעה חדשה ב-savepoint
     try:
         async with db.begin_nested():
             db.add(WebhookEvent(
                 message_id=message_id,
                 platform=platform,
                 status="processing",
+                created_at=datetime.now(timezone.utc),
             ))
+        return True
     except IntegrityError:
-        # race condition — instance אחר הכניס את ההודעה בדיוק עכשיו
+        pass  # הודעה כבר קיימת — בדיקה אם completed או stale
+
+    # הודעה קיימת — בדיקה אם כבר הושלמה
+    result = await db.execute(
+        select(WebhookEvent.status, WebhookEvent.created_at)
+        .where(WebhookEvent.message_id == message_id)
+    )
+    row = result.one_or_none()
+    if not row:
+        return False
+
+    if row.status == "completed":
         logger.info(
-            "Skipping duplicate message (race)",
+            "Skipping completed duplicate message",
             extra_data={"message_id": message_id},
         )
         return False
 
-    return True
+    # ניסיון retry אטומי — UPDATE רק אם ההודעה תקועה מעבר ל-threshold
+    threshold = datetime.now(timezone.utc) - timedelta(seconds=_STALE_PROCESSING_SECONDS)
+    update_result = await db.execute(
+        update(WebhookEvent)
+        .where(
+            WebhookEvent.message_id == message_id,
+            WebhookEvent.status == "processing",
+            WebhookEvent.created_at < threshold,
+        )
+        .values(created_at=datetime.now(timezone.utc))
+    )
+
+    if update_result.rowcount > 0:
+        logger.warning(
+            "Retrying stale processing message",
+            extra_data={"message_id": message_id},
+        )
+        return True
+
+    logger.info(
+        "Skipping in-progress message",
+        extra_data={"message_id": message_id},
+    )
+    return False
 
 
 async def _mark_message_completed(db: AsyncSession, message_id: str) -> None:
-    """סימון הודעה כ-completed אחרי עיבוד מוצלח."""
+    """סימון הודעה כ-completed אחרי עיבוד מוצלח + commit."""
     if not message_id:
         return
-    result = await db.execute(
-        select(WebhookEvent).where(WebhookEvent.message_id == message_id)
+    await db.execute(
+        update(WebhookEvent)
+        .where(WebhookEvent.message_id == message_id)
+        .values(status="completed")
     )
-    event = result.scalar_one_or_none()
-    if event:
-        event.status = "completed"
+    await db.commit()
 
 router = APIRouter()
 

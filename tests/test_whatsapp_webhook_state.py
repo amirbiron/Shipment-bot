@@ -642,11 +642,47 @@ async def test_dedup_db_idempotency(
 
     # סימון כ-completed
     await _mark_message_completed(db_session, "msg-1")
-    await db_session.commit()
 
     # אחרי completed — עדיין חוסם כפילויות
     assert await _try_acquire_message(db_session, "msg-1", "whatsapp") is False
 
     # הודעה חדשה — אפשר לעבד
     assert await _try_acquire_message(db_session, "msg-2", "whatsapp") is True
+    await db_session.commit()
+
+
+@pytest.mark.asyncio
+async def test_dedup_stale_message_allows_retry(
+    db_session,
+):
+    """הודעה תקועה ב-processing מעבר ל-threshold מאפשרת retry"""
+    from datetime import datetime, timedelta, timezone
+    from app.api.webhooks.whatsapp import (
+        _try_acquire_message,
+        _STALE_PROCESSING_SECONDS,
+    )
+    from app.db.models.webhook_event import WebhookEvent
+    from sqlalchemy import select
+
+    # הכנסת הודעה ראשונה
+    assert await _try_acquire_message(db_session, "msg-stale-1", "whatsapp") is True
+    await db_session.commit()
+
+    # הודעה עדיין "טרייה" — לא מאפשרים retry
+    assert await _try_acquire_message(db_session, "msg-stale-1", "whatsapp") is False
+
+    # זיוף created_at ישן — הודעה "תקועה"
+    from sqlalchemy import update as sa_update
+    await db_session.execute(
+        sa_update(WebhookEvent)
+        .where(WebhookEvent.message_id == "msg-stale-1")
+        .values(
+            created_at=datetime.now(timezone.utc)
+            - timedelta(seconds=_STALE_PROCESSING_SECONDS + 10)
+        )
+    )
+    await db_session.commit()
+
+    # עכשיו ההודעה תקועה — retry מותר
+    assert await _try_acquire_message(db_session, "msg-stale-1", "whatsapp") is True
     await db_session.commit()
