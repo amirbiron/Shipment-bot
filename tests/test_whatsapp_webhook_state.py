@@ -633,14 +633,13 @@ async def test_dedup_db_idempotency(
     """בדיקת יחידה ל-_try_acquire_message ו-_mark_message_completed (DB idempotency)"""
     from app.api.webhooks.whatsapp import _try_acquire_message, _mark_message_completed
 
-    # הודעה ראשונה — אפשר לעבד
+    # הודעה ראשונה — אפשר לעבד (commit פנימי ב-_try_acquire_message)
     assert await _try_acquire_message(db_session, "msg-1", "whatsapp") is True
-    await db_session.commit()
 
     # אותה הודעה ב-processing — לא מאפשרים עיבוד חוזר
     assert await _try_acquire_message(db_session, "msg-1", "whatsapp") is False
 
-    # סימון כ-completed
+    # סימון כ-completed (commit פנימי ב-_mark_message_completed)
     await _mark_message_completed(db_session, "msg-1")
 
     # אחרי completed — עדיין חוסם כפילויות
@@ -648,7 +647,6 @@ async def test_dedup_db_idempotency(
 
     # הודעה חדשה — אפשר לעבד
     assert await _try_acquire_message(db_session, "msg-2", "whatsapp") is True
-    await db_session.commit()
 
 
 @pytest.mark.asyncio
@@ -664,9 +662,8 @@ async def test_dedup_stale_message_allows_retry(
     from app.db.models.webhook_event import WebhookEvent
     from sqlalchemy import select
 
-    # הכנסת הודעה ראשונה
+    # הכנסת הודעה ראשונה (commit פנימי)
     assert await _try_acquire_message(db_session, "msg-stale-1", "whatsapp") is True
-    await db_session.commit()
 
     # הודעה עדיין "טרייה" — לא מאפשרים retry
     assert await _try_acquire_message(db_session, "msg-stale-1", "whatsapp") is False
@@ -683,6 +680,5 @@ async def test_dedup_stale_message_allows_retry(
     )
     await db_session.commit()
 
-    # עכשיו ההודעה תקועה — retry מותר
+    # עכשיו ההודעה תקועה — retry מותר (commit פנימי)
     assert await _try_acquire_message(db_session, "msg-stale-1", "whatsapp") is True
-    await db_session.commit()

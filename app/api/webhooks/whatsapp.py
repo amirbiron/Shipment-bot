@@ -59,6 +59,9 @@ async def _try_acquire_message(db: AsyncSession, message_id: str, platform: str)
                 status="processing",
                 created_at=datetime.now(timezone.utc),
             ))
+        # commit מיידי כדי שהרשומה תישמר גם אם העיבוד נכשל —
+        # מונע retry מיידי ומכריח המתנה של _STALE_PROCESSING_SECONDS
+        await db.commit()
         return True
     except IntegrityError:
         pass  # הודעה כבר קיימת — בדיקה אם completed או stale
@@ -92,6 +95,8 @@ async def _try_acquire_message(db: AsyncSession, message_id: str, platform: str)
     )
 
     if update_result.rowcount > 0:
+        # commit מיידי — אותה סיבה כמו ב-INSERT
+        await db.commit()
         logger.warning(
             "Retrying stale processing message",
             extra_data={"message_id": message_id},
