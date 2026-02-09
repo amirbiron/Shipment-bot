@@ -212,13 +212,19 @@ def _normalize_whatsapp_identifier(value: str) -> str:
     return digits
 
 
+def _iter_whatsapp_admin_number_candidates() -> list[str]:
+    """איסוף כל מספרי המנהלים המוגדרים (כולל מספר מנהל ראשי)"""
+    raw_candidates = []
+    raw_candidates.extend(settings.WHATSAPP_ADMIN_NUMBERS.split(","))
+    if settings.ADMIN_WHATSAPP_NUMBER:
+        raw_candidates.append(settings.ADMIN_WHATSAPP_NUMBER)
+    return [candidate.strip() for candidate in raw_candidates if candidate.strip()]
+
+
 def _get_whatsapp_admin_numbers() -> set[str]:
     """מחזיר סט מספרי מנהלים פרטיים לוואטסאפ (מנורמלים)"""
     normalized = set()
-    for raw in settings.WHATSAPP_ADMIN_NUMBERS.split(","):
-        raw = raw.strip()
-        if not raw:
-            continue
+    for raw in _iter_whatsapp_admin_number_candidates():
         normalized_value = _normalize_whatsapp_identifier(raw)
         if normalized_value:
             normalized.add(normalized_value)
@@ -258,7 +264,7 @@ def _resolve_admin_send_target(
     """
     מציאת כתובת שליחה למנהל — מעדיף את המספר מההגדרות (שאנחנו יודעים שעובד).
 
-    כרטיס הנהג נשלח למנהל דרך המספר שבהגדרות (WHATSAPP_ADMIN_NUMBERS) ומגיע בהצלחה.
+    כרטיס הנהג נשלח למנהל דרך המספר שבהגדרות (WHATSAPP_ADMIN_NUMBERS/ADMIN_WHATSAPP_NUMBER) ומגיע בהצלחה.
     אבל כש-reply_to הוא @lid, הגטוויי עשוי לא להצליח לשלוח אליו.
     לכן אם אנחנו מזהים התאמה לפי sender_id / reply_to / from_number — נשלח למספר ההגדרות.
     """
@@ -273,10 +279,7 @@ def _resolve_admin_send_target(
     if not normalized_candidates:
         return reply_to
 
-    for raw in settings.WHATSAPP_ADMIN_NUMBERS.split(","):
-        raw = raw.strip()
-        if not raw:
-            continue
+    for raw in _iter_whatsapp_admin_number_candidates():
         if _normalize_whatsapp_identifier(raw) in normalized_candidates:
             logger.debug(
                 "Using admin number from settings for reply",
@@ -288,6 +291,21 @@ def _resolve_admin_send_target(
             return raw
 
     return reply_to
+
+
+def _normalize_whatsapp_command_text(text: str) -> str:
+    """ניקוי טקסט פקודות (כמו #/תפריט ראשי) מתווי כיוון/אימוג'י"""
+    if not text:
+        return ""
+    cleaned = text.strip().replace("*", "")
+    cleaned = cleaned.replace("\uFE0F", "").replace("\u20E3", "")
+    cleaned = re.sub(
+        r"[\u200b\u200c\u200d\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]",
+        "",
+        cleaned,
+    )
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip()
 
 
 def _match_approval_command(text: str) -> tuple[str, int] | None:
@@ -507,6 +525,7 @@ async def whatsapp_webhook(
 
     for message in payload.messages:
         text = message.text or ""
+        normalized_text = _normalize_whatsapp_command_text(text)
         sender_id = (message.sender_id or message.from_number or "").strip()
         reply_to = (message.reply_to or message.from_number or "").strip()
         from_number = (message.from_number or "").strip()
@@ -622,7 +641,7 @@ async def whatsapp_webhook(
             continue
 
         # Handle "#" to return to main menu
-        if text.strip() in {"#", "תפריט ראשי"}:
+        if normalized_text in {"#", "תפריט ראשי"}:
             # רענון מהDB לפני בדיקת סטטוס - למניעת stale data אם האדמין אישר בינתיים
             await db.refresh(user)
             # לוג לדיבאג - מראה את מצב המשתמש בלחיצה על #
