@@ -492,27 +492,9 @@ app.post('/send', async (req, res) => {
                 let retryResult;
                 if (keyboard && Array.isArray(keyboard) && keyboard.length > 0) {
                     const options = keyboard.flat();
-                    // מנסים sendListMessage עם @lid — אם נכשל (throw), fallback לטקסט
-                    try {
-                        retryResult = await client.sendListMessage(lidChatId, {
-                            buttonText: 'בחרו 👆',
-                            description: message,
-                            title: '',
-                            footer: '',
-                            sections: [{
-                                title: 'אפשרויות',
-                                rows: options.map((text) => ({
-                                    rowId: text,
-                                    title: text,
-                                    description: ''
-                                }))
-                            }]
-                        });
-                    } catch (listErr) {
-                        // fallback — טקסט עם אפשרויות כדי שהמשתמש ידע מה לבחור
-                        const optionsText = options.map((text) => `▫️ ${text}`).join('\n');
-                        retryResult = await client.sendText(lidChatId, `${message}\n\n${optionsText}`);
-                    }
+                    // sendListMessage לא עובד עם @lid (הצלחה שקטה) — שולחים טקסט ישירות
+                    const optionsText = options.map((text) => `▫️ ${text}`).join('\n');
+                    retryResult = await client.sendText(lidChatId, `${message}\n\n${optionsText}`);
                 } else {
                     retryResult = await client.sendText(lidChatId, message);
                 }
