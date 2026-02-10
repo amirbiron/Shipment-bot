@@ -1,7 +1,7 @@
 """
 דשבורד — סיכום נתוני תחנה
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -56,8 +56,13 @@ async def get_dashboard(
     dispatchers = await station_service.get_dispatchers(station_id)
     blacklist = await station_service.get_blacklist(station_id)
 
-    # סטטיסטיקות יומיות
-    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    # סטטיסטיקות יומיות — לפי שעון ישראל (UTC+2/+3)
+    # הערה: ישראל UTC+2 בחורף, UTC+3 בקיץ. משתמשים ב-+2 כבסיס עקבי.
+    _ISRAEL_OFFSET = timezone(timedelta(hours=2))
+    now_israel = datetime.now(_ISRAEL_OFFSET)
+    today_start = now_israel.replace(
+        hour=0, minute=0, second=0, microsecond=0,
+    ).astimezone(timezone.utc).replace(tzinfo=None)
 
     # משלוחים שנוצרו היום
     today_count_result = await db.execute(

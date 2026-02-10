@@ -140,24 +140,35 @@ async def export_collection_report(
     db: AsyncSession = Depends(get_db),
     cycle_start: Optional[str] = Query(None, description="תחילת מחזור (YYYY-MM-DD)"),
 ) -> StreamingResponse:
-    """ייצוא CSV — עם BOM לתמיכה בעברית ב-Excel"""
+    """ייצוא CSV — עם BOM לתמיכה בעברית ב-Excel, generator-based streaming"""
     # שימוש חוזר בלוגיקת הדוח
     report_data = await get_collection_report(auth=auth, db=db, cycle_start=cycle_start)
 
-    output = io.StringIO()
-    # BOM לתמיכה ב-Excel עברית
-    output.write("\ufeff")
-    writer = csv.writer(output)
-    writer.writerow(["שם נהג", "סה\"כ חוב", "מספר חיובים"])
-    for item in report_data.items:
-        writer.writerow([item.driver_name, f"{item.total_debt:.2f}", item.charge_count])
-    writer.writerow([])
-    writer.writerow(["סה\"כ", f"{report_data.total_debt:.2f}", ""])
+    def _generate_csv():
+        """Generator שמייצר שורות CSV בהדרגה — חוסך זיכרון בדוחות גדולים"""
+        output = io.StringIO()
+        writer = csv.writer(output)
 
-    output.seek(0)
+        # BOM לתמיכה ב-Excel עברית
+        output.write("\ufeff")
+        writer.writerow(["שם נהג", "סה\"כ חוב", "מספר חיובים"])
+        yield output.getvalue()
+        output.seek(0)
+        output.truncate(0)
+
+        for item in report_data.items:
+            writer.writerow([item.driver_name, f"{item.total_debt:.2f}", item.charge_count])
+            yield output.getvalue()
+            output.seek(0)
+            output.truncate(0)
+
+        writer.writerow([])
+        writer.writerow(["סה\"כ", f"{report_data.total_debt:.2f}", ""])
+        yield output.getvalue()
+
     filename = f"collection_report_{report_data.cycle_start}.csv"
     return StreamingResponse(
-        iter([output.getvalue()]),
+        _generate_csv(),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )

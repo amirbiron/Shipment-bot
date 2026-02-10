@@ -3,7 +3,14 @@
 """
 import pytest
 
-from app.core.auth import create_access_token, verify_token, generate_otp, store_otp, verify_otp
+from app.core.auth import (
+    check_otp_cooldown,
+    create_access_token,
+    generate_otp,
+    store_otp,
+    verify_otp,
+    verify_token,
+)
 from app.db.models.user import UserRole
 from app.db.models.station import Station
 from app.db.models.station_wallet import StationWallet
@@ -209,3 +216,108 @@ class TestPanelAuthEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert data["station_name"] == "תחנת מבחן"
+
+    @pytest.mark.asyncio
+    async def test_request_otp_rate_limit(
+        self, test_client, user_factory, db_session,
+    ):
+        """בקשת OTP כפולה — 429"""
+        user = await user_factory(
+            phone_number="+972501234567",
+            name="בעל תחנה",
+            role=UserRole.STATION_OWNER,
+        )
+        station = Station(name="תחנה", owner_id=user.id)
+        db_session.add(station)
+        await db_session.flush()
+        wallet = StationWallet(station_id=station.id)
+        db_session.add(wallet)
+        await db_session.commit()
+
+        # בקשה ראשונה — הצלחה
+        response1 = await test_client.post("/api/panel/auth/request-otp", json={
+            "phone_number": "0501234567",
+        })
+        assert response1.status_code == 200
+
+        # בקשה שנייה מיידית — 429
+        response2 = await test_client.post("/api/panel/auth/request-otp", json={
+            "phone_number": "0501234567",
+        })
+        assert response2.status_code == 429
+
+    @pytest.mark.asyncio
+    async def test_ownership_mismatch_rejected(
+        self, test_client, user_factory, db_session,
+    ):
+        """token עם user_id שאינו הבעלים — 403"""
+        owner = await user_factory(
+            phone_number="+972501234567",
+            name="בעלים אמיתי",
+            role=UserRole.STATION_OWNER,
+        )
+        other_user = await user_factory(
+            phone_number="+972502222222",
+            name="משתמש אחר",
+            role=UserRole.STATION_OWNER,
+        )
+        station = Station(name="תחנה", owner_id=owner.id)
+        db_session.add(station)
+        await db_session.flush()
+        wallet = StationWallet(station_id=station.id)
+        db_session.add(wallet)
+        await db_session.commit()
+
+        # token עם user_id של משתמש אחר אבל station_id של הבעלים
+        token = create_access_token(other_user.id, station.id, "station_owner")
+        response = await test_client.get(
+            "/api/panel/dashboard",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 403
+
+
+class TestJWTExpTimestamp:
+    """בדיקות שה-exp ב-JWT הוא int (Unix timestamp)"""
+
+    @pytest.mark.unit
+    def test_exp_is_int(self):
+        """exp ב-TokenPayload חייב להיות int"""
+        token = create_access_token(user_id=1, station_id=1, role="station_owner")
+        payload = verify_token(token)
+        assert payload is not None
+        assert isinstance(payload.exp, int)
+
+
+class TestOTPRateLimiting:
+    """בדיקות rate limiting של OTP"""
+
+    @pytest.mark.asyncio
+    async def test_cooldown_blocks_rapid_requests(self):
+        """cooldown חוסם בקשות מהירות"""
+        await store_otp(user_id=999, otp="111111")
+        # cooldown מופעל אחרי store_otp
+        allowed = await check_otp_cooldown(999)
+        assert allowed is False
+
+    @pytest.mark.asyncio
+    async def test_otp_max_attempts_exceeded(self):
+        """חריגה ממקסימום ניסיונות — נחסם"""
+        await store_otp(user_id=888, otp="123456")
+        # 5 ניסיונות שגויים
+        for _ in range(5):
+            await verify_otp(888, "000000")
+        # הניסיון ה-6 נכשל גם עם הקוד הנכון
+        result = await verify_otp(888, "123456")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_successful_verify_resets_attempts(self):
+        """אימות מוצלח מאפס את מונה הניסיונות"""
+        await store_otp(user_id=777, otp="123456")
+        # ניסיונות שגויים
+        await verify_otp(777, "000000")
+        await verify_otp(777, "000000")
+        # אימות נכון
+        result = await verify_otp(777, "123456")
+        assert result is True

@@ -1,6 +1,12 @@
 """
 אימות לפאנל ווב — כניסה באמצעות OTP
+
+זרימה:
+1. בעל תחנה מבקש OTP → נשלח אליו דרך הבוט (Telegram/WhatsApp)
+2. מזין את הקוד בפאנל → מקבל JWT token
 """
+from html import escape
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, field_validator
 from sqlalchemy import select
@@ -8,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import (
     TokenPayload,
+    check_otp_cooldown,
     create_access_token,
     generate_otp,
     store_otp,
@@ -16,7 +23,9 @@ from app.core.auth import (
 from app.core.logging import get_logger
 from app.core.validation import PhoneNumberValidator
 from app.db.database import get_db
+from app.db.models.outbox_message import MessagePlatform
 from app.db.models.user import User, UserRole
+from app.domain.services.outbox_service import OutboxService
 from app.domain.services.station_service import StationService
 from app.api.dependencies.auth import get_current_station_owner
 
@@ -87,6 +96,7 @@ class MeResponse(BaseModel):
         200: {"description": "OTP נשלח בהצלחה"},
         403: {"description": "המשתמש אינו בעל תחנה"},
         404: {"description": "משתמש לא נמצא"},
+        429: {"description": "בקשת OTP מוקדמת מדי — נא להמתין"},
     },
     tags=["Panel - אימות"],
 )
@@ -122,19 +132,49 @@ async def request_otp(
             detail="לא נמצאה תחנה פעילה למשתמש",
         )
 
+    # Rate limiting — cooldown בין בקשות
+    if not await check_otp_cooldown(user.id):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="נא להמתין לפחות דקה בין בקשות קוד כניסה",
+        )
+
     # יצירת ושמירת OTP
     otp = generate_otp()
     await store_otp(user.id, otp)
 
-    # שליחת OTP דרך הבוט
-    # TODO: לשלוח הודעה ל-Telegram/WhatsApp עם הקוד
-    # לפי user.platform — להשתמש ב-background_tasks
+    # שליחת OTP דרך הבוט — לפי הפלטפורמה של המשתמש
+    otp_message = (
+        f"🔐 <b>קוד כניסה לפאנל</b>\n\n"
+        f"הקוד שלך: <b>{escape(otp)}</b>\n\n"
+        f"הקוד תקף ל-5 דקות.\n"
+        f"אם לא ביקשת קוד — התעלם מהודעה זו."
+    )
+
+    platform_str = user.platform or "telegram"
+    if platform_str == "telegram" and user.telegram_chat_id:
+        platform = MessagePlatform.TELEGRAM
+        recipient_id = user.telegram_chat_id
+    else:
+        platform = MessagePlatform.WHATSAPP
+        recipient_id = user.phone_number
+
+    outbox = OutboxService(db)
+    await outbox.queue_message(
+        platform=platform,
+        recipient_id=recipient_id,
+        message_type="panel_otp",
+        message_content={"message_text": otp_message},
+    )
+    await db.commit()
+
     logger.info(
         "OTP requested for panel login",
         extra_data={
             "user_id": user.id,
             "phone": PhoneNumberValidator.mask(data.phone_number),
             "station_id": station.id,
+            "platform": platform_str,
         },
     )
 
@@ -169,7 +209,7 @@ async def verify_otp_endpoint(
             detail="משתמש לא נמצא",
         )
 
-    # אימות OTP
+    # אימות OTP (כולל בדיקת מגבלת ניסיונות)
     is_valid = await verify_otp(user.id, data.otp)
     if not is_valid:
         raise HTTPException(

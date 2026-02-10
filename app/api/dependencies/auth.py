@@ -31,7 +31,7 @@ async def get_current_station_owner(
     אימות JWT ווידוא שהמשתמש הוא בעל תחנה פעילה.
 
     מחזיר TokenPayload עם user_id, station_id, role.
-    זורק 401 אם הטוקן לא תקין, 403 אם התחנה לא פעילה.
+    זורק 401 אם הטוקן לא תקין, 403 אם התחנה לא פעילה או הבעלות השתנתה.
     """
     token_data = verify_token(credentials.credentials)
     if not token_data:
@@ -51,6 +51,21 @@ async def get_current_station_owner(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="התחנה לא פעילה",
+        )
+
+    # ולידציה שהמשתמש עדיין הבעלים של התחנה
+    if station.owner_id != token_data.user_id:
+        logger.warning(
+            "Panel access denied — ownership mismatch",
+            extra_data={
+                "user_id": token_data.user_id,
+                "station_id": token_data.station_id,
+                "actual_owner_id": station.owner_id,
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="אין הרשאה — הבעלות על התחנה השתנתה",
         )
 
     return token_data
