@@ -43,7 +43,7 @@ export const exportCollectionCsv = async (
   a.href = url;
   a.download = `collection_report${cycleStart ? `_${cycleStart}` : ""}.csv`;
   a.click();
-  URL.revokeObjectURL(url);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
 
 export const getRevenueReport = (
