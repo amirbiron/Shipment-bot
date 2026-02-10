@@ -872,6 +872,16 @@ class CourierStateHandler:
         from datetime import datetime
         from app.db.models.user import ApprovalStatus, UserRole
 
+        # מניעת עיבוד כפול: אם המשתמש כבר אישר תקנון (race condition / webhook כפול)
+        # מרפרשים מה-DB כדי לתפוס שינויים שבוצעו בבקשה מקבילית
+        await self.db.refresh(user)
+        if user.terms_accepted_at is not None and user.approval_status == ApprovalStatus.PENDING:
+            logger.info(
+                "תקנון כבר אושר, מעביר למצב המתנה לאישור",
+                extra_data={"user_id": user.id},
+            )
+            return await self._handle_pending_approval(user, message, context, photo_file_id)
+
         if "מאשר" not in message and "אישור" not in message:
             response = MessageResponse(
                 "כדי להמשיך, עליך ללחוץ על הכפתור 'קראתי ואני מאשר'.",
