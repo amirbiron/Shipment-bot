@@ -675,6 +675,31 @@ class CourierStateHandler:
         self.platform = platform
         self.state_manager = StateManager(db)
 
+    def _blocked_or_rejected_response(self, user: User) -> tuple[MessageResponse, str, dict] | None:
+        """מחזיר תשובה לשליח חסום/נדחה, או None אם הסטטוס אחר."""
+        from app.db.models.user import ApprovalStatus
+        from app.core.validation import TextSanitizer
+
+        if user.approval_status == ApprovalStatus.BLOCKED:
+            response = MessageResponse(
+                "❌ חשבונך נחסם. לפרטים נוספים, פנה להנהלה.\n\n"
+                "💡 לחזרה לתפריט הראשי (כשולח חבילות) לחצו על #"
+            )
+            return response, CourierState.PENDING_APPROVAL.value, {}
+
+        if user.approval_status == ApprovalStatus.REJECTED:
+            note_line = TextSanitizer.format_note_line(
+                user.rejection_note, platform=self.platform,
+            )
+            response = MessageResponse(
+                f"לצערנו, בקשתך להצטרף כשליח נדחתה.{note_line}\n"
+                "לפרטים נוספים, פנה להנהלה.\n\n"
+                "💡 לחזרה לתפריט הראשי (כשולח חבילות) לחצו על #"
+            )
+            return response, CourierState.PENDING_APPROVAL.value, {}
+
+        return None
+
     async def handle_message(
         self,
         user: User,
@@ -922,19 +947,9 @@ class CourierStateHandler:
         await self.db.refresh(user)
 
         # בדיקת סטטוס חסימה/דחייה קודם - למניעת עקיפת החסימה דרך הרשמה מחדש
-        if user.approval_status == ApprovalStatus.BLOCKED:
-            response = MessageResponse(
-                "❌ חשבונך נחסם. לפרטים נוספים, פנה להנהלה.\n\n"
-                "💡 לחזרה לתפריט הראשי (כשולח חבילות) לחצו על #"
-            )
-            return response, CourierState.PENDING_APPROVAL.value, {}
-
-        if user.approval_status == ApprovalStatus.REJECTED:
-            response = MessageResponse(
-                "לצערנו, בקשתך להצטרף כשליח נדחתה. לפרטים נוספים, פנה להנהלה.\n\n"
-                "💡 לחזרה לתפריט הראשי (כשולח חבילות) לחצו על #"
-            )
-            return response, CourierState.PENDING_APPROVAL.value, {}
+        blocked_or_rejected = self._blocked_or_rejected_response(user)
+        if blocked_or_rejected is not None:
+            return blocked_or_rejected
 
         # בדיקה: אם המשתמש לא סיים את הרישום - מחזירים אותו להתחלה
         # (רק אם הוא לא חסום/נדחה)
@@ -1142,19 +1157,9 @@ class CourierStateHandler:
             return await self._handle_menu(user, message, context, photo_file_id)
 
         # אם השליח נחסם או נדחה - מציגים הודעה מתאימה ולא מאפשרים רישום מחדש
-        if user.approval_status == ApprovalStatus.BLOCKED:
-            response = MessageResponse(
-                "❌ חשבונך נחסם. לפרטים נוספים, פנה להנהלה.\n\n"
-                "💡 לחזרה לתפריט הראשי (כשולח חבילות) לחצו על #"
-            )
-            return response, CourierState.PENDING_APPROVAL.value, {}
-
-        if user.approval_status == ApprovalStatus.REJECTED:
-            response = MessageResponse(
-                "לצערנו, בקשתך להצטרף כשליח נדחתה. לפרטים נוספים, פנה להנהלה.\n\n"
-                "💡 לחזרה לתפריט הראשי (כשולח חבילות) לחצו על #"
-            )
-            return response, CourierState.PENDING_APPROVAL.value, {}
+        blocked_or_rejected = self._blocked_or_rejected_response(user)
+        if blocked_or_rejected is not None:
+            return blocked_or_rejected
 
         # אם השליח סיים את הרישום (יש לו תאריך אישור תקנון) - הוא ממתין לאישור
         if user.terms_accepted_at is not None:

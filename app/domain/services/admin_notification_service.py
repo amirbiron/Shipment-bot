@@ -10,6 +10,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.circuit_breaker import get_telegram_circuit_breaker, get_whatsapp_admin_circuit_breaker
 from app.core.exceptions import TelegramError, WhatsAppError
+from app.core.validation import TextSanitizer
 
 logger = get_logger(__name__)
 
@@ -266,6 +267,7 @@ class AdminNotificationService:
         platform: str,
         decision: str,
         decided_by: str,
+        rejection_note: Optional[str] = None,
     ) -> bool:
         """
         שליחת סיכום החלטת אישור/דחייה לקבוצת מנהלים.
@@ -284,6 +286,10 @@ class AdminNotificationService:
             status_icon = "❌"
             status_text = "נדחה"
 
+        # שורת הערת דחייה (אם קיימת) — פורמט מרוכז דרך TextSanitizer
+        wa_note_line = TextSanitizer.format_note_line(rejection_note, platform="whatsapp", label="הערה")
+        tg_note_line = TextSanitizer.format_note_line(rejection_note, platform="telegram", label="הערה")
+
         # שליחה לקבוצת וואטסאפ
         if settings.WHATSAPP_ADMIN_GROUP_ID:
             wa_msg = f"""{status_icon} *כרטיס נהג #{user_id} - {status_text}*
@@ -294,7 +300,7 @@ class AdminNotificationService:
 • רכב: {vehicle_display}
 • פלטפורמה: {platform}
 
-📌 *סטטוס:* {status_text}
+📌 *סטטוס:* {status_text}{wa_note_line}
 👤 *על ידי:* {decided_by}"""
 
             wa_success = await AdminNotificationService._send_whatsapp_admin_message(
@@ -312,7 +318,7 @@ class AdminNotificationService:
 • רכב: {vehicle_display}
 • פלטפורמה: {platform}
 
-📌 <b>סטטוס:</b> {status_text}
+📌 <b>סטטוס:</b> {status_text}{tg_note_line}
 👤 <b>על ידי:</b> {decided_by}"""
 
             tg_success = await AdminNotificationService._send_telegram_message(

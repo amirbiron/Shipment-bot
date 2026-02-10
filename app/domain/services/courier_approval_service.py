@@ -10,6 +10,7 @@ from sqlalchemy import select
 from app.db.models.user import User, UserRole, ApprovalStatus
 from app.domain.services.admin_notification_service import AdminNotificationService
 from app.core.logging import get_logger
+from app.core.validation import TextSanitizer
 
 logger = get_logger(__name__)
 
@@ -41,7 +42,7 @@ class CourierApprovalService:
         if user.role == UserRole.SENDER and user.approval_status == ApprovalStatus.PENDING:
             logger.info(
                 "Approving courier who reverted to sender via #",
-                extra_data={"user_id": user_id}
+                extra_data={"user_id": user_id, "action": "approve"}
             )
             user.role = UserRole.COURIER
 
@@ -65,7 +66,7 @@ class CourierApprovalService:
 
         logger.info(
             "Courier approved",
-            extra_data={"user_id": user_id, "name": user.full_name or user.name or 'לא צוין'}
+            extra_data={"user_id": user_id, "action": "approve", "name": user.full_name or user.name or 'לא צוין'}
         )
 
         return ApprovalResult(
@@ -75,7 +76,7 @@ class CourierApprovalService:
         )
 
     @staticmethod
-    async def reject(db: AsyncSession, user_id: int) -> ApprovalResult:
+    async def reject(db: AsyncSession, user_id: int, rejection_note: Optional[str] = None) -> ApprovalResult:
         """דחיית שליח לפי user_id. מחזיר תוצאה עם הודעה מתאימה."""
         result = await db.execute(
             select(User).where(User.id == user_id)
@@ -90,12 +91,18 @@ class CourierApprovalService:
         if user.role == UserRole.SENDER and user.approval_status == ApprovalStatus.PENDING:
             logger.info(
                 "Rejecting courier who reverted to sender via #",
-                extra_data={"user_id": user_id}
+                extra_data={"user_id": user_id, "action": "reject"}
             )
             user.role = UserRole.COURIER
 
         if user.role != UserRole.COURIER:
             return ApprovalResult(False, f"❌ משתמש {user_id} אינו נהג")
+
+        if user.approval_status == ApprovalStatus.APPROVED:
+            return ApprovalResult(
+                False,
+                f"ℹ️ נהג {user_id} ({user.full_name or user.name or 'לא צוין'}) כבר מאושר. לא ניתן לדחות נהג מאושר."
+            )
 
         if user.approval_status == ApprovalStatus.REJECTED:
             return ApprovalResult(
@@ -110,16 +117,24 @@ class CourierApprovalService:
             )
 
         user.approval_status = ApprovalStatus.REJECTED
+        # שמירת הערת דחייה — תמיד מעדכנים (גם None) למניעת הערה ישנה שנשארת
+        user.rejection_note = rejection_note
         await db.commit()
 
         logger.info(
             "Courier rejected",
-            extra_data={"user_id": user_id, "name": user.full_name or user.name or 'לא צוין'}
+            extra_data={
+                "user_id": user_id,
+                "action": "reject",
+                "name": user.full_name or user.name or 'לא צוין',
+                "has_rejection_note": bool(rejection_note),
+            }
         )
 
+        note_suffix = TextSanitizer.format_note_line(rejection_note, label="הערה")
         return ApprovalResult(
             True,
-            f"❌ נהג {user_id} ({user.full_name or user.name or 'לא צוין'}) נדחה.",
+            f"❌ נהג {user_id} ({user.full_name or user.name or 'לא צוין'}) נדחה.{note_suffix}",
             user
         )
 
@@ -130,6 +145,7 @@ class CourierApprovalService:
         admin_name: str,
         send_telegram_fn: Optional[Callable[..., Awaitable]] = None,
         send_whatsapp_fn: Optional[Callable[..., Awaitable]] = None,
+        rejection_note: Optional[str] = None,
     ) -> None:
         """
         שליחת הודעות לאחר החלטת אישור/דחייה:
@@ -137,6 +153,9 @@ class CourierApprovalService:
         2. סיכום לקבוצת מנהלים
         """
         # הודעות לשליח - בשני פורמטים (HTML לטלגרם, Markdown לוואטסאפ)
+        # חישוב הערת דחייה מראש — נדרש גם בהודעה לשליח וגם בסיכום לקבוצה
+        note = (rejection_note or user.rejection_note) if action != "approve" else None
+
         if action == "approve":
             tg_msg = """🎉 <b>חשבונך אושר!</b>
 
@@ -151,11 +170,15 @@ class CourierApprovalService:
 
 כתוב *תפריט* כדי להתחיל."""
         else:
-            tg_msg = """😔 <b>לצערנו, בקשתך להצטרף כשליח נדחתה.</b>
+            # הודעת דחייה עם הערת מנהל (אם קיימת)
+            tg_note = TextSanitizer.format_note_line(note, platform="telegram")
+            wa_note = TextSanitizer.format_note_line(note, platform="whatsapp")
 
+            tg_msg = f"""😔 <b>לצערנו, בקשתך להצטרף כשליח נדחתה.</b>
+{tg_note}
 אם אתה חושב שזו טעות, אנא צור קשר עם התמיכה."""
-            wa_msg = """😔 *לצערנו, בקשתך להצטרף כשליח נדחתה.*
-
+            wa_msg = f"""😔 *לצערנו, בקשתך להצטרף כשליח נדחתה.*
+{wa_note}
 אם אתה חושב שזו טעות, אנא צור קשר עם התמיכה."""
 
         # שליחה לשליח - זיהוי פלטפורמה עם סדר עקבי
@@ -179,4 +202,5 @@ class CourierApprovalService:
             user.platform or 'telegram',
             decision,
             admin_name,
+            rejection_note=note,
         )

@@ -183,6 +183,38 @@ class TestTextSanitizer:
         assert pattern is None
 
     @pytest.mark.unit
+    def test_format_note_line_none_returns_empty(self):
+        """format_note_line מחזיר מחרוזת ריקה כש-note הוא None"""
+        assert TextSanitizer.format_note_line(None) == ""
+        assert TextSanitizer.format_note_line("") == ""
+
+    @pytest.mark.unit
+    def test_format_note_line_telegram(self):
+        """format_note_line — פורמט HTML לטלגרם עם escaping"""
+        result = TextSanitizer.format_note_line('<b>bold</b>', platform="telegram")
+        assert "<b>הערת המנהל:</b>" in result
+        assert "&lt;b&gt;bold&lt;/b&gt;" in result
+
+    @pytest.mark.unit
+    def test_format_note_line_whatsapp(self):
+        """format_note_line — פורמט Markdown לוואטסאפ ללא escaping"""
+        result = TextSanitizer.format_note_line("הערה חופשית", platform="whatsapp")
+        assert "*הערת המנהל:*" in result
+        assert "הערה חופשית" in result
+
+    @pytest.mark.unit
+    def test_format_note_line_text(self):
+        """format_note_line — טקסט רגיל ללא עיצוב"""
+        result = TextSanitizer.format_note_line("הערה", platform="text")
+        assert result == "\nהערת המנהל: הערה"
+
+    @pytest.mark.unit
+    def test_format_note_line_custom_label(self):
+        """format_note_line — תווית מותאמת"""
+        result = TextSanitizer.format_note_line("טקסט", platform="whatsapp", label="הערה")
+        assert "*הערה:*" in result
+
+    @pytest.mark.unit
     def test_remove_control_characters(self):
         """Test control character removal"""
         text = "Hello\x00World\x0BTest"
