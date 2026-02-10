@@ -280,6 +280,10 @@ class StationOwnerState(str, Enum):
     ADD_BLACKLIST_REASON = "STATION.ADD_BLACKLIST.REASON"
     REMOVE_BLACKLIST_SELECT = "STATION.REMOVE_BLACKLIST.SELECT"
 
+    # אישור פעולות הרסניות
+    CONFIRM_REMOVE_DISPATCHER = "STATION.CONFIRM_REMOVE_DISPATCHER"
+    CONFIRM_REMOVE_BLACKLIST = "STATION.CONFIRM_REMOVE_BLACKLIST"
+
     # שלב 4: הגדרות קבוצות תחנה
     GROUP_SETTINGS = "STATION.GROUP_SETTINGS"
     SET_PUBLIC_GROUP = "STATION.SET_PUBLIC_GROUP"
@@ -307,7 +311,13 @@ STATION_OWNER_TRANSITIONS = {
         StationOwnerState.MENU,
     ],
     StationOwnerState.REMOVE_DISPATCHER_SELECT: [
+        StationOwnerState.CONFIRM_REMOVE_DISPATCHER,
         StationOwnerState.MANAGE_DISPATCHERS,
+        StationOwnerState.MENU,
+    ],
+    StationOwnerState.CONFIRM_REMOVE_DISPATCHER: [
+        StationOwnerState.MANAGE_DISPATCHERS,
+        StationOwnerState.REMOVE_DISPATCHER_SELECT,
         StationOwnerState.MENU,
     ],
 
@@ -332,7 +342,13 @@ STATION_OWNER_TRANSITIONS = {
         StationOwnerState.MENU,
     ],
     StationOwnerState.REMOVE_BLACKLIST_SELECT: [
+        StationOwnerState.CONFIRM_REMOVE_BLACKLIST,
         StationOwnerState.VIEW_BLACKLIST,
+        StationOwnerState.MENU,
+    ],
+    StationOwnerState.CONFIRM_REMOVE_BLACKLIST: [
+        StationOwnerState.VIEW_BLACKLIST,
+        StationOwnerState.REMOVE_BLACKLIST_SELECT,
         StationOwnerState.MENU,
     ],
 
