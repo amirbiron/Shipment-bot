@@ -373,15 +373,11 @@ async def get_or_create_user(
         existing = result.scalar_one_or_none()
         if existing:
             return existing, False, normalized_phone
-        # לא אמור לקרות — אם קרה, ניפול ל-fallback עם ה-identifier המקורי
-        fallback_id = _whatsapp_sender_placeholder(
-            (sender_identifier or reply_to or from_number or "").strip()
+        # לא אמור לקרות — IntegrityError בלי רשומה תואמת.
+        # זורקים שגיאה ברורה כדי שה-webhook ידלג על ההודעה עם לוג מתאים.
+        raise ValueError(
+            f"לא ניתן ליצור או למצוא משתמש עם phone_number={PhoneNumberValidator.mask(create_identifier)}"
         )
-        user = User(phone_number=fallback_id, platform="whatsapp", role=UserRole.SENDER)
-        db.add(user)
-        await db.commit()
-        await db.refresh(user)
-        return user, True, normalized_phone
 
 
 async def send_whatsapp_message(
