@@ -84,6 +84,11 @@ if allowed_origins:
 
 app.include_router(api_router, prefix="/api")
 
+# הגשת Frontend של פאנל ניהול התחנה — SPA עם client-side routing
+_PANEL_DIR = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if _PANEL_DIR.exists():
+    app.mount("/panel", StaticFiles(directory=_PANEL_DIR, html=True), name="panel")
+
 
 @app.on_event("startup")
 async def startup() -> None:
