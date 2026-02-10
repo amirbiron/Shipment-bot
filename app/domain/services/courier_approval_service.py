@@ -75,7 +75,7 @@ class CourierApprovalService:
         )
 
     @staticmethod
-    async def reject(db: AsyncSession, user_id: int) -> ApprovalResult:
+    async def reject(db: AsyncSession, user_id: int, rejection_note: Optional[str] = None) -> ApprovalResult:
         """דחיית שליח לפי user_id. מחזיר תוצאה עם הודעה מתאימה."""
         result = await db.execute(
             select(User).where(User.id == user_id)
@@ -110,16 +110,24 @@ class CourierApprovalService:
             )
 
         user.approval_status = ApprovalStatus.REJECTED
+        # שמירת הערת דחייה (אם סופקה)
+        if rejection_note:
+            user.rejection_note = rejection_note
         await db.commit()
 
         logger.info(
             "Courier rejected",
-            extra_data={"user_id": user_id, "name": user.full_name or user.name or 'לא צוין'}
+            extra_data={
+                "user_id": user_id,
+                "name": user.full_name or user.name or 'לא צוין',
+                "has_rejection_note": bool(rejection_note),
+            }
         )
 
+        note_suffix = f"\nהערה: {rejection_note}" if rejection_note else ""
         return ApprovalResult(
             True,
-            f"❌ נהג {user_id} ({user.full_name or user.name or 'לא צוין'}) נדחה.",
+            f"❌ נהג {user_id} ({user.full_name or user.name or 'לא צוין'}) נדחה.{note_suffix}",
             user
         )
 
@@ -130,6 +138,7 @@ class CourierApprovalService:
         admin_name: str,
         send_telegram_fn: Optional[Callable[..., Awaitable]] = None,
         send_whatsapp_fn: Optional[Callable[..., Awaitable]] = None,
+        rejection_note: Optional[str] = None,
     ) -> None:
         """
         שליחת הודעות לאחר החלטת אישור/דחייה:
@@ -151,10 +160,24 @@ class CourierApprovalService:
 
 כתוב *תפריט* כדי להתחיל."""
         else:
-            tg_msg = """😔 <b>לצערנו, בקשתך להצטרף כשליח נדחתה.</b>
+            # הודעת דחייה עם הערת מנהל (אם קיימת)
+            note = rejection_note or user.rejection_note
+            if note:
+                tg_msg = f"""😔 <b>לצערנו, בקשתך להצטרף כשליח נדחתה.</b>
+
+📝 <b>הערת המנהל:</b> {note}
 
 אם אתה חושב שזו טעות, אנא צור קשר עם התמיכה."""
-            wa_msg = """😔 *לצערנו, בקשתך להצטרף כשליח נדחתה.*
+                wa_msg = f"""😔 *לצערנו, בקשתך להצטרף כשליח נדחתה.*
+
+📝 *הערת המנהל:* {note}
+
+אם אתה חושב שזו טעות, אנא צור קשר עם התמיכה."""
+            else:
+                tg_msg = """😔 <b>לצערנו, בקשתך להצטרף כשליח נדחתה.</b>
+
+אם אתה חושב שזו טעות, אנא צור קשר עם התמיכה."""
+                wa_msg = """😔 *לצערנו, בקשתך להצטרף כשליח נדחתה.*
 
 אם אתה חושב שזו טעות, אנא צור קשר עם התמיכה."""
 
@@ -179,4 +202,5 @@ class CourierApprovalService:
             user.platform or 'telegram',
             decision,
             admin_name,
+            rejection_note=note if action != "approve" else None,
         )

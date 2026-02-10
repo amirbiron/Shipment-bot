@@ -56,6 +56,7 @@ class User(Base):
     vehicle_category = Column(String(50), nullable=True)  # קטגוריית רכב (4 מקומות / 7 מקומות / טנדר / אופנוע)
     vehicle_photo_file_id = Column(Text, nullable=True)  # צילום הרכב
     service_area = Column(String(100), nullable=True)  # Geographic area
+    rejection_note = Column(Text, nullable=True)  # הערת דחייה מהמנהל
     terms_accepted_at = Column(DateTime, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)

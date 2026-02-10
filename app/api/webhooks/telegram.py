@@ -30,6 +30,11 @@ logger = get_logger(__name__)
 
 router = APIRouter()
 
+# מילון ממתין להערות דחייה — ממפה admin_chat_id → courier_id
+# כאשר מנהל לוחץ "❌ דחה", שומרים כאן את ה-courier_id
+# וממתינים להודעת הטקסט הבאה מהמנהל כהערת דחייה
+_pending_rejection_notes: dict[str, int] = {}
+
 _SenderButtonHandler: TypeAlias = Callable[
     [User, AsyncSession, StateManager, str, str | None],
     Awaitable[tuple[MessageResponse, str | None]],
@@ -691,23 +696,29 @@ async def telegram_webhook(
 
                 if action == "approve":
                     result = await CourierApprovalService.approve(db, courier_id)
+
+                    # שליחת תוצאה למנהל (בצ'אט שבו לחץ)
+                    background_tasks.add_task(send_telegram_message, send_chat_id, result.message)
+
+                    # אם הפעולה הצליחה - הודעה לשליח וסיכום לקבוצה
+                    if result.success and result.user:
+                        from app.api.webhooks.whatsapp import send_whatsapp_message
+
+                        background_tasks.add_task(
+                            CourierApprovalService.notify_after_decision,
+                            result.user,
+                            action,
+                            admin_name,
+                            send_telegram_fn=send_telegram_message,
+                            send_whatsapp_fn=send_whatsapp_message,
+                        )
                 else:
-                    result = await CourierApprovalService.reject(db, courier_id)
-
-                # שליחת תוצאה למנהל (בצ'אט שבו לחץ)
-                background_tasks.add_task(send_telegram_message, send_chat_id, result.message)
-
-                # אם הפעולה הצליחה - הודעה לשליח וסיכום לקבוצה
-                if result.success and result.user:
-                    from app.api.webhooks.whatsapp import send_whatsapp_message
-
+                    # דחייה — שומרים את ה-courier_id וממתינים להערת המנהל
+                    _pending_rejection_notes[send_chat_id] = courier_id
                     background_tasks.add_task(
-                        CourierApprovalService.notify_after_decision,
-                        result.user,
-                        action,
-                        admin_name,
-                        send_telegram_fn=send_telegram_message,
-                        send_whatsapp_fn=send_whatsapp_message,
+                        send_telegram_message,
+                        send_chat_id,
+                        f"📝 כתוב הערת דחייה לנהג {courier_id} (או שלח <b>ללא</b> לדחייה ללא הערה):",
                     )
 
                 return {"ok": True, "admin_action": action, "courier_id": courier_id}
@@ -787,6 +798,30 @@ async def telegram_webhook(
                 "delivery_id": delivery_id,
                 "success": success,
             }
+
+    # טיפול בהערת דחייה ממתינה — מנהל שלחץ "❌ דחה" ושלח הערה
+    if send_chat_id in _pending_rejection_notes and not event.is_callback:
+        courier_id = _pending_rejection_notes.pop(send_chat_id)
+        admin_name = name or "מנהל"
+        rejection_note = text.strip() if text.strip() != "ללא" else None
+
+        result = await CourierApprovalService.reject(db, courier_id, rejection_note=rejection_note)
+        background_tasks.add_task(send_telegram_message, send_chat_id, result.message)
+
+        if result.success and result.user:
+            from app.api.webhooks.whatsapp import send_whatsapp_message
+
+            background_tasks.add_task(
+                CourierApprovalService.notify_after_decision,
+                result.user,
+                "reject",
+                admin_name,
+                send_telegram_fn=send_telegram_message,
+                send_whatsapp_fn=send_whatsapp_message,
+                rejection_note=rejection_note,
+            )
+
+        return {"ok": True, "admin_action": "reject", "courier_id": courier_id}
 
     # Get or create user (מזהה לפי from_user.id כשאפשר)
     user, is_new_user = await get_or_create_user(db, telegram_user_id, name)

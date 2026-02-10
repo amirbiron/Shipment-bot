@@ -505,29 +505,29 @@ class TestApprovalCommandMatching:
 
     @pytest.mark.unit
     def test_approve_basic(self):
-        assert _match_approval_command("אשר 123") == ("approve", 123)
+        assert _match_approval_command("אשר 123") == ("approve", 123, None)
 
     @pytest.mark.unit
     def test_approve_with_emoji(self):
-        assert _match_approval_command("✅ אשר 456") == ("approve", 456)
+        assert _match_approval_command("✅ אשר 456") == ("approve", 456, None)
 
     @pytest.mark.unit
     def test_approve_with_ishur(self):
         """אישור כחלופה לאשר"""
-        assert _match_approval_command("אישור 789") == ("approve", 789)
+        assert _match_approval_command("אישור 789") == ("approve", 789, None)
 
     @pytest.mark.unit
     def test_reject_basic(self):
-        assert _match_approval_command("דחה 100") == ("reject", 100)
+        assert _match_approval_command("דחה 100") == ("reject", 100, None)
 
     @pytest.mark.unit
     def test_reject_dchiya(self):
         """דחייה כחלופה לדחה"""
-        assert _match_approval_command("דחייה 200") == ("reject", 200)
+        assert _match_approval_command("דחייה 200") == ("reject", 200, None)
 
     @pytest.mark.unit
     def test_reject_with_emoji_and_bold(self):
-        assert _match_approval_command("*❌ דחה 300*") == ("reject", 300)
+        assert _match_approval_command("*❌ דחה 300*") == ("reject", 300, None)
 
     @pytest.mark.unit
     def test_no_match(self):
@@ -537,13 +537,23 @@ class TestApprovalCommandMatching:
     def test_approve_with_zero_width_chars(self):
         """טקסט עם תווי Unicode בלתי-נראים (zero-width space, RTL mark) עדיין מזוהה"""
         # \u200b = zero-width space, \u200f = RTL mark
-        assert _match_approval_command("✅\u200b אשר\u200f 42") == ("approve", 42)
+        assert _match_approval_command("✅\u200b אשר\u200f 42") == ("approve", 42, None)
 
     @pytest.mark.unit
     def test_approve_with_bidi_marks(self):
         """סימני כיוון (LTR/RTL embedding) לא שוברים את הזיהוי"""
         # \u202b = RTL embedding, \u202c = pop directional formatting
-        assert _match_approval_command("\u202bאשר 55\u202c") == ("approve", 55)
+        assert _match_approval_command("\u202bאשר 55\u202c") == ("approve", 55, None)
+
+    @pytest.mark.unit
+    def test_reject_with_note(self):
+        """דחייה עם הערה"""
+        assert _match_approval_command("דחה 100 התמונות לא ברורות") == ("reject", 100, "התמונות לא ברורות")
+
+    @pytest.mark.unit
+    def test_reject_with_emoji_and_note(self):
+        """דחייה עם אמוג'י והערה"""
+        assert _match_approval_command("*❌ דחה שליח 300 חסר מסמך*") == ("reject", 300, "חסר מסמך")
 
 
 # ============================================================================

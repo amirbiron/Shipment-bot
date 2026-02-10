@@ -920,8 +920,11 @@ class CourierStateHandler:
             return response, CourierState.PENDING_APPROVAL.value, {}
 
         if user.approval_status == ApprovalStatus.REJECTED:
+            # הצגת הערת דחייה אם קיימת
+            note_line = f"\n📝 הערת המנהל: {user.rejection_note}" if user.rejection_note else ""
             response = MessageResponse(
-                "לצערנו, בקשתך להצטרף כשליח נדחתה. לפרטים נוספים, פנה להנהלה.\n\n"
+                f"לצערנו, בקשתך להצטרף כשליח נדחתה.{note_line}\n"
+                "לפרטים נוספים, פנה להנהלה.\n\n"
                 "💡 לחזרה לתפריט הראשי (כשולח חבילות) לחצו על #"
             )
             return response, CourierState.PENDING_APPROVAL.value, {}
@@ -1140,8 +1143,11 @@ class CourierStateHandler:
             return response, CourierState.PENDING_APPROVAL.value, {}
 
         if user.approval_status == ApprovalStatus.REJECTED:
+            # הצגת הערת דחייה אם קיימת
+            note_line = f"\n📝 הערת המנהל: {user.rejection_note}" if user.rejection_note else ""
             response = MessageResponse(
-                "לצערנו, בקשתך להצטרף כשליח נדחתה. לפרטים נוספים, פנה להנהלה.\n\n"
+                f"לצערנו, בקשתך להצטרף כשליח נדחתה.{note_line}\n"
+                "לפרטים נוספים, פנה להנהלה.\n\n"
                 "💡 לחזרה לתפריט הראשי (כשולח חבילות) לחצו על #"
             )
             return response, CourierState.PENDING_APPROVAL.value, {}

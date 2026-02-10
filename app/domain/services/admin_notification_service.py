@@ -266,6 +266,7 @@ class AdminNotificationService:
         platform: str,
         decision: str,
         decided_by: str,
+        rejection_note: Optional[str] = None,
     ) -> bool:
         """
         שליחת סיכום החלטת אישור/דחייה לקבוצת מנהלים.
@@ -284,6 +285,10 @@ class AdminNotificationService:
             status_icon = "❌"
             status_text = "נדחה"
 
+        # שורת הערת דחייה (אם קיימת)
+        wa_note_line = f"\n📝 *הערה:* {rejection_note}" if rejection_note else ""
+        tg_note_line = f"\n📝 <b>הערה:</b> {rejection_note}" if rejection_note else ""
+
         # שליחה לקבוצת וואטסאפ
         if settings.WHATSAPP_ADMIN_GROUP_ID:
             wa_msg = f"""{status_icon} *כרטיס נהג #{user_id} - {status_text}*
@@ -294,7 +299,7 @@ class AdminNotificationService:
 • רכב: {vehicle_display}
 • פלטפורמה: {platform}
 
-📌 *סטטוס:* {status_text}
+📌 *סטטוס:* {status_text}{wa_note_line}
 👤 *על ידי:* {decided_by}"""
 
             wa_success = await AdminNotificationService._send_whatsapp_admin_message(
@@ -312,7 +317,7 @@ class AdminNotificationService:
 • רכב: {vehicle_display}
 • פלטפורמה: {platform}
 
-📌 <b>סטטוס:</b> {status_text}
+📌 <b>סטטוס:</b> {status_text}{tg_note_line}
 👤 <b>על ידי:</b> {decided_by}"""
 
             tg_success = await AdminNotificationService._send_telegram_message(

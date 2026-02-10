@@ -628,10 +628,11 @@ async def _handle_whatsapp_delivery_approval(
     return msg
 
 
-def _match_approval_command(text: str) -> tuple[str, int] | None:
+def _match_approval_command(text: str) -> tuple[str, int, str | None] | None:
     """
     זיהוי פקודת אישור/דחייה בטקסט.
-    מחזיר (action, user_id) או None.
+    מחזיר (action, user_id, rejection_note) או None.
+    rejection_note קיים רק בדחייה כשמנהל מוסיף טקסט אחרי המזהה.
     תומך באמוג'י שונים (✅✔️☑️), רווחים מרובים, וניקוד (כוכביות מ-WhatsApp).
     """
     # ניקוי: הסרת כוכביות (bold של WhatsApp), תווים בלתי-נראים (zero-width, RTL/LTR marks),
@@ -642,11 +643,14 @@ def _match_approval_command(text: str) -> tuple[str, int] | None:
 
     approve_match = re.match(r'^[✅✔️☑️\s]*(?:אשר|אישור)(?:\s+(?:שליח|נהג))?\s+(\d+)\s*$', text)
     if approve_match:
-        return ("approve", int(approve_match.group(1)))
+        return ("approve", int(approve_match.group(1)), None)
 
-    reject_match = re.match(r'^[❌✖️\s]*(?:דחה|דחייה|דחיה)(?:\s+(?:שליח|נהג))?\s+(\d+)\s*$', text)
+    # דחייה — תמיכה בהערה אופציונלית אחרי המזהה
+    reject_match = re.match(r'^[❌✖️\s]*(?:דחה|דחייה|דחיה)(?:\s+(?:שליח|נהג))?\s+(\d+)(?:\s+(.+))?\s*$', text)
     if reject_match:
-        return ("reject", int(reject_match.group(1)))
+        note = reject_match.group(2)
+        note = note.strip() if note else None
+        return ("reject", int(reject_match.group(1)), note)
 
     return None
 
@@ -657,6 +661,7 @@ async def _handle_whatsapp_approval(
     courier_id: int,
     admin_name: str,
     background_tasks: BackgroundTasks = None,
+    rejection_note: str | None = None,
 ) -> str:
     """
     ביצוע אישור/דחייה + שליחת הודעה לשליח + סיכום לקבוצה.
@@ -665,7 +670,7 @@ async def _handle_whatsapp_approval(
     if action == "approve":
         result = await CourierApprovalService.approve(db, courier_id)
     else:
-        result = await CourierApprovalService.reject(db, courier_id)
+        result = await CourierApprovalService.reject(db, courier_id, rejection_note=rejection_note)
 
     if not result.success:
         return result.message
@@ -681,6 +686,7 @@ async def _handle_whatsapp_approval(
             admin_name,
             send_telegram_fn=send_telegram_message,
             send_whatsapp_fn=send_whatsapp_message,
+            rejection_note=rejection_note,
         )
     else:
         await CourierApprovalService.notify_after_decision(
@@ -689,6 +695,7 @@ async def _handle_whatsapp_approval(
             admin_name,
             send_telegram_fn=send_telegram_message,
             send_whatsapp_fn=send_whatsapp_message,
+            rejection_note=rejection_note,
         )
 
     return result.message
@@ -707,13 +714,14 @@ async def handle_admin_group_command(
     if not parsed:
         return None
 
-    action, user_id = parsed
+    action, user_id, rejection_note = parsed
     return await _handle_whatsapp_approval(
         db,
         action,
         user_id,
         admin_name="מנהל (קבוצה)",
         background_tasks=background_tasks,
+        rejection_note=rejection_note,
     )
 
 
@@ -730,13 +738,14 @@ async def handle_admin_private_command(
     if not parsed:
         return None
 
-    action, user_id = parsed
+    action, user_id, rejection_note = parsed
     return await _handle_whatsapp_approval(
         db,
         action,
         user_id,
         admin_name=admin_name,
         background_tasks=background_tasks,
+        rejection_note=rejection_note,
     )
 
 

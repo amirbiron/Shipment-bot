@@ -945,15 +945,175 @@ class TestWhatsAppAdminApproval:
         from app.api.webhooks.whatsapp import _match_approval_command
 
         # אישור
-        assert _match_approval_command("אשר 123") == ("approve", 123)
-        assert _match_approval_command("✅ אשר 456") == ("approve", 456)
-        assert _match_approval_command("אשר שליח 789") == ("approve", 789)
+        assert _match_approval_command("אשר 123") == ("approve", 123, None)
+        assert _match_approval_command("✅ אשר 456") == ("approve", 456, None)
+        assert _match_approval_command("אשר שליח 789") == ("approve", 789, None)
 
         # דחייה
-        assert _match_approval_command("דחה 123") == ("reject", 123)
-        assert _match_approval_command("❌ דחה 456") == ("reject", 456)
-        assert _match_approval_command("דחה שליח 789") == ("reject", 789)
+        assert _match_approval_command("דחה 123") == ("reject", 123, None)
+        assert _match_approval_command("❌ דחה 456") == ("reject", 456, None)
+        assert _match_approval_command("דחה שליח 789") == ("reject", 789, None)
+
+        # דחייה עם הערה
+        assert _match_approval_command("דחה 123 התמונות לא ברורות") == ("reject", 123, "התמונות לא ברורות")
+        assert _match_approval_command("❌ דחה שליח 456 חסר מסמך") == ("reject", 456, "חסר מסמך")
+        assert _match_approval_command("דחייה 789 צריך לשלוח תמונה חדשה") == ("reject", 789, "צריך לשלוח תמונה חדשה")
 
         # לא תקין
         assert _match_approval_command("שלום") is None
         assert _match_approval_command("הודעה אחרת") is None
+
+
+class TestRejectionNote:
+    """בדיקות להערת דחייה - שמירה, הצגה והעברה לנהג"""
+
+    @pytest.mark.asyncio
+    async def test_reject_with_note_saves_to_db(self, db_session, user_factory):
+        """דחייה עם הערה שומרת את ההערה ב-DB"""
+        user = await user_factory(
+            phone_number="tg:80001",
+            name="Note Courier",
+            role=UserRole.COURIER,
+            platform="telegram",
+            telegram_chat_id="80001",
+            approval_status=ApprovalStatus.PENDING,
+        )
+        result = await CourierApprovalService.reject(
+            db_session, user.id, rejection_note="התמונות לא ברורות"
+        )
+        assert result.success is True
+        assert result.user.rejection_note == "התמונות לא ברורות"
+        assert "הערה" in result.message
+        assert "התמונות לא ברורות" in result.message
+
+    @pytest.mark.asyncio
+    async def test_reject_without_note_no_note_in_db(self, db_session, user_factory):
+        """דחייה ללא הערה - אין הערה ב-DB (תאימות לאחור)"""
+        user = await user_factory(
+            phone_number="tg:80002",
+            name="No Note Courier",
+            role=UserRole.COURIER,
+            platform="telegram",
+            telegram_chat_id="80002",
+            approval_status=ApprovalStatus.PENDING,
+        )
+        result = await CourierApprovalService.reject(db_session, user.id)
+        assert result.success is True
+        assert result.user.rejection_note is None
+        assert "הערה" not in result.message
+
+    @pytest.mark.asyncio
+    async def test_rejected_courier_sees_note_in_pending_approval(self, db_session, user_factory):
+        """נהג שנדחה רואה את הערת הדחייה בהודעת pending_approval"""
+        user = await user_factory(
+            phone_number="tg:80003",
+            name="Rejected Courier",
+            role=UserRole.COURIER,
+            platform="telegram",
+            telegram_chat_id="80003",
+            approval_status=ApprovalStatus.PENDING,
+        )
+        # דחייה עם הערה
+        await CourierApprovalService.reject(
+            db_session, user.id, rejection_note="צילום הרכב לא ברור"
+        )
+
+        # סימולציה של הודעה מהנהג - אמור לראות את ההערה
+        handler = CourierStateHandler(db_session)
+        response, new_state, _ = await handler._handle_pending_approval(user, "שלום", {}, None)
+        assert "צילום הרכב לא ברור" in response.text
+        assert "הערת המנהל" in response.text
+
+    @pytest.mark.asyncio
+    async def test_rejected_courier_without_note_no_note_line(self, db_session, user_factory):
+        """נהג שנדחה ללא הערה - לא מוצגת שורת הערה"""
+        user = await user_factory(
+            phone_number="tg:80004",
+            name="Rejected No Note",
+            role=UserRole.COURIER,
+            platform="telegram",
+            telegram_chat_id="80004",
+            approval_status=ApprovalStatus.PENDING,
+        )
+        await CourierApprovalService.reject(db_session, user.id)
+
+        handler = CourierStateHandler(db_session)
+        response, new_state, _ = await handler._handle_pending_approval(user, "שלום", {}, None)
+        assert "הערת המנהל" not in response.text
+        assert "נדחתה" in response.text
+
+    @pytest.mark.asyncio
+    async def test_telegram_reject_button_asks_for_note(
+        self, test_client: AsyncClient, user_factory, mock_telegram_api
+    ):
+        """כפתור דחייה בטלגרם מבקש הערה במקום לדחות מיד"""
+        from app.api.webhooks.telegram import _pending_rejection_notes
+
+        courier = await user_factory(
+            phone_number="tg:80005",
+            name="TG Reject Note",
+            role=UserRole.COURIER,
+            platform="telegram",
+            telegram_chat_id="80005",
+            approval_status=ApprovalStatus.PENDING,
+        )
+        admin_chat_id = "99990"
+        with (
+            patch.object(settings, "TELEGRAM_ADMIN_CHAT_IDS", admin_chat_id),
+            patch.object(settings, "TELEGRAM_ADMIN_CHAT_ID", admin_chat_id),
+            patch.object(settings, "TELEGRAM_BOT_TOKEN", "fake-token"),
+            patch.object(settings, "WHATSAPP_ADMIN_GROUP_ID", None),
+            patch.object(settings, "WHATSAPP_ADMIN_NUMBERS", ""),
+            patch.object(settings, "WHATSAPP_GATEWAY_URL", ""),
+        ):
+            resp = await test_client.post(
+                "/api/telegram/webhook",
+                json={
+                    "update_id": 100,
+                    "callback_query": {
+                        "id": "cb_note1",
+                        "from": {"id": 99990, "first_name": "Admin"},
+                        "message": {
+                            "message_id": 100,
+                            "chat": {"id": 99990, "type": "private"},
+                            "from": {"id": 99990, "first_name": "Admin"},
+                            "date": 1700000000,
+                            "text": "כרטיס נהג",
+                        },
+                        "data": f"reject_courier_{courier.id}",
+                    },
+                },
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data.get("admin_action") == "reject"
+            # הנהג עדיין לא נדחה - ממתינים להערה
+            assert admin_chat_id in _pending_rejection_notes
+            assert _pending_rejection_notes[admin_chat_id] == courier.id
+
+        # ניקוי
+        _pending_rejection_notes.pop(admin_chat_id, None)
+
+    @pytest.mark.asyncio
+    async def test_whatsapp_reject_with_note(self):
+        """פקודת דחייה עם הערה בוואטסאפ"""
+        from app.api.webhooks.whatsapp import _match_approval_command
+
+        result = _match_approval_command("דחה 123 התמונות לא ברורות")
+        assert result is not None
+        action, user_id, note = result
+        assert action == "reject"
+        assert user_id == 123
+        assert note == "התמונות לא ברורות"
+
+    @pytest.mark.asyncio
+    async def test_whatsapp_reject_without_note_backwards_compatible(self):
+        """פקודת דחייה ללא הערה - תאימות לאחור"""
+        from app.api.webhooks.whatsapp import _match_approval_command
+
+        result = _match_approval_command("דחה 123")
+        assert result is not None
+        action, user_id, note = result
+        assert action == "reject"
+        assert user_id == 123
+        assert note is None
