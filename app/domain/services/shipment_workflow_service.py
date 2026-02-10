@@ -164,7 +164,17 @@ class ShipmentWorkflowService:
         )
 
         if not success:
-            return False, f"שגיאה בתפיסת המשלוח: {msg}", None
+            # לוג עם פרטים מלאים — לא חושפים יתרת ארנק לסדרן
+            logger.warning(
+                "Delivery capture failed during approval",
+                extra_data={
+                    "delivery_id": delivery_id,
+                    "courier_id": courier_id,
+                    "dispatcher_id": dispatcher_id,
+                    "capture_error": msg,
+                }
+            )
+            return False, "❌ לא ניתן לאשר את המשלוח כרגע. יש לבדוק את יתרת השליח.", None
 
         # עדכון שדות אישור — באותה טרנזקציה עם התפיסה וחיוב הארנק
         await self.db.refresh(delivery)
