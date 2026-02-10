@@ -254,25 +254,63 @@ class StationService:
         import re as _re
         return _re.sub(r"\s+", " ", name.strip())
 
+    async def _resolve_courier_id_by_name(self, driver_name: str) -> int | None:
+        """ניסיון best-effort לזהות שליח לפי שם — מחזיר courier_id אם נמצא שליח יחיד תואם."""
+        from app.db.models.user import UserRole
+        normalized = self._normalize_driver_name(driver_name).lower()
+        result = await self.db.execute(
+            select(User).where(
+                User.role == UserRole.COURIER,
+                User.is_active == True,  # noqa: E712
+            )
+        )
+        couriers = list(result.scalars().all())
+
+        # חיפוש התאמה מדויקת (case-insensitive)
+        matches = [
+            c for c in couriers
+            if (c.full_name and c.full_name.lower() == normalized)
+            or (c.name and c.name.lower() == normalized)
+        ]
+        if len(matches) == 1:
+            return matches[0].id
+        return None
+
     async def create_manual_charge(
         self,
         station_id: int,
         dispatcher_id: int,
         driver_name: str,
         amount: float,
-        description: str = ""
+        description: str = "",
+        courier_id: int | None = None
     ) -> ManualCharge:
-        """יצירת חיוב ידני ע"י סדרן"""
+        """יצירת חיוב ידני ע"י סדרן
+
+        Args:
+            courier_id: מזהה שליח - אם לא סופק, ינסה לזהות אוטומטית לפי שם
+        """
         if amount <= 0:
             raise ValidationException("סכום החיוב חייב להיות חיובי", field="amount")
 
         normalized_name = self._normalize_driver_name(driver_name)
+
+        # ניסיון best-effort לזהות שליח אם לא סופק courier_id
+        if courier_id is None:
+            courier_id = await self._resolve_courier_id_by_name(normalized_name)
+            if courier_id:
+                logger.info(
+                    "זיהוי אוטומטי של שליח לחיוב ידני",
+                    extra_data={"courier_id": courier_id, "driver_name": normalized_name}
+                )
+
         charge = ManualCharge(
             station_id=station_id,
             dispatcher_id=dispatcher_id,
             driver_name=normalized_name,
             amount=amount,
             description=description,
+            courier_id=courier_id,
         )
         self.db.add(charge)
 
@@ -336,9 +374,17 @@ class StationService:
         self,
         station_id: int,
         delivery_id: int,
-        fee: float
+        fee: float,
+        auto_commit: bool = True
     ) -> None:
-        """זיכוי עמלת תחנה (10% מהמשלוח)"""
+        """זיכוי עמלת תחנה (10% מהמשלוח)
+
+        Args:
+            station_id: מזהה התחנה
+            delivery_id: מזהה המשלוח
+            fee: עמלת המשלוח
+            auto_commit: האם לבצע commit - False כשהמתקשר מנהל את הטרנזקציה
+        """
         if fee <= 0:
             raise ValidationException("עמלת משלוח חייבת להיות חיובית", field="fee")
 
@@ -356,7 +402,10 @@ class StationService:
             description=f"עמלה ממשלוח #{delivery_id}",
         )
         self.db.add(ledger_entry)
-        await self.db.commit()
+        if auto_commit:
+            await self.db.commit()
+        else:
+            await self.db.flush()
 
     async def get_station_ledger(
         self, station_id: int, limit: int = 20
@@ -525,11 +574,12 @@ class StationService:
         """
         cycle_start = self._get_billing_cycle_start()
 
-        # קבלת חיובים ממחזור החיוב הנוכחי בלבד
+        # קבלת חיובים שלא שולמו ממחזור החיוב הנוכחי בלבד
         result = await self.db.execute(
             select(ManualCharge).where(
                 ManualCharge.station_id == station_id,
                 ManualCharge.created_at >= cycle_start,
+                ManualCharge.is_paid == False,  # noqa: E712 — שלב 5: סינון חיובים ששולמו
             ).order_by(ManualCharge.created_at.desc())
         )
         charges = list(result.scalars().all())
@@ -546,3 +596,91 @@ class StationService:
             for name, total in report.items()
             if total > 0
         ]
+
+    # ==================== שלב 5: חסימה אוטומטית ====================
+
+    @staticmethod
+    def _get_previous_billing_cycle_start() -> datetime:
+        """חישוב תחילת מחזור החיוב הקודם (28 לחודש שלפני)"""
+        current_cycle = StationService._get_billing_cycle_start()
+        if current_cycle.month == 1:
+            return current_cycle.replace(year=current_cycle.year - 1, month=12)
+        return current_cycle.replace(month=current_cycle.month - 1)
+
+    async def auto_block_unpaid_drivers(
+        self, station_id: int
+    ) -> List[dict]:
+        """חסימה אוטומטית של נהגים שלא שילמו חודשיים רצופים לתחנה.
+
+        בודק חיובים ידניים שלא שולמו ב-2 מחזורי חיוב רצופים (הנוכחי והקודם).
+        רק חיובים עם courier_id ידוע נלקחים בחשבון.
+
+        Returns:
+            רשימת נהגים שנחסמו, כל אחד כ-dict עם courier_id ו-driver_name.
+        """
+        current_cycle_start = self._get_billing_cycle_start()
+        previous_cycle_start = self._get_previous_billing_cycle_start()
+
+        # שליפת כל החיובים שלא שולמו עם courier_id ידוע ב-2 המחזורים האחרונים
+        result = await self.db.execute(
+            select(ManualCharge).where(
+                ManualCharge.station_id == station_id,
+                ManualCharge.courier_id.isnot(None),
+                ManualCharge.is_paid == False,  # noqa: E712
+                ManualCharge.created_at >= previous_cycle_start,
+            )
+        )
+        charges = list(result.scalars().all())
+
+        if not charges:
+            return []
+
+        # קיבוץ לפי courier_id ובדיקת נוכחות ב-2 מחזורים
+        courier_cycles: dict[int, set[str]] = {}
+        courier_names: dict[int, str] = {}
+        for charge in charges:
+            cid = charge.courier_id
+            if cid not in courier_cycles:
+                courier_cycles[cid] = set()
+                courier_names[cid] = charge.driver_name
+
+            if charge.created_at >= current_cycle_start:
+                courier_cycles[cid].add("current")
+            else:
+                courier_cycles[cid].add("previous")
+
+        # חסימת נהגים שמופיעים ב-2 מחזורים רצופים
+        blocked_drivers: List[dict] = []
+        for courier_id, cycles in courier_cycles.items():
+            if len(cycles) < 2:
+                continue  # חוב רק במחזור אחד - לא חוסמים
+
+            # בדיקה אם כבר חסום בתחנה
+            if await self.is_blacklisted(station_id, courier_id):
+                continue
+
+            entry = StationBlacklist(
+                station_id=station_id,
+                courier_id=courier_id,
+                reason="חסימה אוטומטית - אי תשלום חודשיים רצופים",
+                consecutive_unpaid_months=2,
+            )
+            self.db.add(entry)
+
+            blocked_drivers.append({
+                "courier_id": courier_id,
+                "driver_name": courier_names.get(courier_id, "לא ידוע"),
+            })
+
+            logger.info(
+                "נהג נחסם אוטומטית בתחנה עקב אי תשלום",
+                extra_data={
+                    "station_id": station_id,
+                    "courier_id": courier_id,
+                }
+            )
+
+        if blocked_drivers:
+            await self.db.commit()
+
+        return blocked_drivers

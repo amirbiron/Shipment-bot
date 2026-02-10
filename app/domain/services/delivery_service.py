@@ -8,6 +8,9 @@ from sqlalchemy import select
 
 from app.db.models.delivery import Delivery, DeliveryStatus
 from app.domain.services.outbox_service import OutboxService
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class DeliveryService:
@@ -103,14 +106,62 @@ class DeliveryService:
         return list(result.scalars().all())
 
     async def mark_delivered(self, delivery_id: int) -> Optional[Delivery]:
-        """Mark a delivery as delivered"""
+        """סימון משלוח כנמסר וזיכוי עמלת תחנה (10%) אם שייך לתחנה.
+
+        מעברי סטטוס מותרים: CAPTURED → DELIVERED, IN_PROGRESS → DELIVERED.
+        הזיכוי מתבצע באותה טרנזקציה עם שינוי הסטטוס לאטומיות.
+        """
         delivery = await self.get_delivery(delivery_id)
-        if delivery and delivery.status == DeliveryStatus.CAPTURED:
+        if not delivery:
+            return None
+
+        # ולידציה של סטטוס נוכחי לפני מעבר
+        valid_statuses = (DeliveryStatus.CAPTURED, DeliveryStatus.IN_PROGRESS)
+        if delivery.status not in valid_statuses:
+            logger.warning(
+                "ניסיון לסמן משלוח כנמסר מסטטוס לא תקין",
+                extra_data={
+                    "delivery_id": delivery_id,
+                    "current_status": delivery.status.value,
+                }
+            )
+            return None
+
+        try:
             delivery.status = DeliveryStatus.DELIVERED
             delivery.delivered_at = datetime.utcnow()
+
+            # שלב 5: זיכוי עמלת תחנה אם המשלוח שייך לתחנה
+            if delivery.station_id and delivery.fee and delivery.fee > 0:
+                from app.domain.services.station_service import StationService
+                station_service = StationService(self.db)
+                await station_service.credit_station_commission(
+                    station_id=delivery.station_id,
+                    delivery_id=delivery.id,
+                    fee=delivery.fee,
+                    auto_commit=False,
+                )
+                logger.info(
+                    "עמלת תחנה זוכתה בעת סימון משלוח כנמסר",
+                    extra_data={
+                        "delivery_id": delivery_id,
+                        "station_id": delivery.station_id,
+                        "fee": delivery.fee,
+                    }
+                )
+
             await self.db.commit()
             await self.db.refresh(delivery)
-        return delivery
+            return delivery
+
+        except Exception as e:
+            logger.error(
+                "כשלון בסימון משלוח כנמסר",
+                extra_data={"delivery_id": delivery_id, "error": str(e)},
+                exc_info=True,
+            )
+            await self.db.rollback()
+            return None
 
     async def cancel_delivery(self, delivery_id: int) -> Optional[Delivery]:
         """Cancel a delivery"""
