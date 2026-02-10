@@ -522,46 +522,29 @@ class StationService:
         דוח גבייה - רשימת נהגים שחייבים כסף לתחנה במחזור הנוכחי.
 
         מחזור חיוב: מה-28 בחודש הקודם עד ה-28 בחודש הנוכחי.
+        מדליגט ל-get_collection_report_for_period למניעת כפילות קוד.
         """
         cycle_start = self.get_billing_cycle_start()
-
-        # קבלת חיובים ממחזור החיוב הנוכחי בלבד
-        result = await self.db.execute(
-            select(ManualCharge).where(
-                ManualCharge.station_id == station_id,
-                ManualCharge.created_at >= cycle_start,
-            ).order_by(ManualCharge.created_at.desc())
-        )
-        charges = list(result.scalars().all())
-
-        # קיבוץ לפי שם נהג
-        report: dict[str, float] = {}
-        for charge in charges:
-            if charge.driver_name not in report:
-                report[charge.driver_name] = 0.0
-            report[charge.driver_name] += charge.amount
-
-        return [
-            {"driver_name": name, "total_debt": total}
-            for name, total in report.items()
-            if total > 0
-        ]
+        return await self.get_collection_report_for_period(station_id, cycle_start)
 
     async def get_collection_report_for_period(
-        self, station_id: int, cycle_start: datetime, cycle_end: datetime,
+        self, station_id: int, cycle_start: datetime, cycle_end: Optional[datetime] = None,
     ) -> List[dict]:
         """
-        דוח גבייה לתקופה מותאמת — רשימת נהגים שחייבים כסף לתחנה.
+        דוח גבייה לתקופה — רשימת נהגים שחייבים כסף לתחנה.
 
         מחזיר רשימה עם driver_name, total_debt, charge_count.
+        אם cycle_end לא סופק — ללא גבול עליון.
         """
-        result = await self.db.execute(
-            select(ManualCharge).where(
-                ManualCharge.station_id == station_id,
-                ManualCharge.created_at >= cycle_start,
-                ManualCharge.created_at < cycle_end,
-            ).order_by(ManualCharge.created_at.desc())
+        query = select(ManualCharge).where(
+            ManualCharge.station_id == station_id,
+            ManualCharge.created_at >= cycle_start,
         )
+        if cycle_end is not None:
+            query = query.where(ManualCharge.created_at < cycle_end)
+        query = query.order_by(ManualCharge.created_at.desc())
+
+        result = await self.db.execute(query)
         charges = list(result.scalars().all())
 
         # קיבוץ לפי שם נהג
