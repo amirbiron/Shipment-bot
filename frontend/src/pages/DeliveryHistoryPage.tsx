@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { type ColumnDef } from "@tanstack/react-table";
@@ -53,6 +53,13 @@ export default function DeliveryHistoryPage() {
   const [localStatus, setLocalStatus] = useState(statusFilter);
   const [localDateFrom, setLocalDateFrom] = useState(dateFrom);
   const [localDateTo, setLocalDateTo] = useState(dateTo);
+
+  // סנכרון state מקומי כש-URL params משתנים (ניווט back/forward)
+  useEffect(() => {
+    setLocalStatus(statusFilter);
+    setLocalDateFrom(dateFrom);
+    setLocalDateTo(dateTo);
+  }, [statusFilter, dateFrom, dateTo]);
 
   const updateParams = (updates: Record<string, string>) => {
     const params = new URLSearchParams(searchParams);
