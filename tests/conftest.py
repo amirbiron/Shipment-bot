@@ -292,5 +292,48 @@ def reset_circuit_breakers():
     CircuitBreaker.reset_all()
 
 
+class FakeRedis:
+    """תחליף ל-Redis לבדיקות — in-memory dict עם ממשק תואם ומעקב TTL."""
+
+    def __init__(self) -> None:
+        self._store: dict[str, str] = {}
+        self._ttls: dict[str, int] = {}
+
+    async def ping(self) -> bool:
+        return True
+
+    async def get(self, key: str) -> str | None:
+        return self._store.get(key)
+
+    async def setex(self, key: str, ttl: int, value: str) -> None:
+        self._store[key] = value
+        self._ttls[key] = ttl
+
+    async def getdel(self, key: str) -> str | None:
+        self._ttls.pop(key, None)
+        return self._store.pop(key, None)
+
+    async def delete(self, *keys: str) -> None:
+        for key in keys:
+            self._store.pop(key, None)
+            self._ttls.pop(key, None)
+
+    async def aclose(self) -> None:
+        self._store.clear()
+        self._ttls.clear()
+
+
+@pytest.fixture(autouse=True)
+def fake_redis():
+    """מחליף את get_redis ב-FakeRedis לכל הבדיקות."""
+    _fake = FakeRedis()
+
+    async def _get_fake_redis():
+        return _fake
+
+    with patch("app.core.redis_client.get_redis", _get_fake_redis):
+        yield _fake
+
+
 # הערה: אין צורך ב-autouse fixture לניקוי WebhookEvent (idempotency) —
 # כל בדיקה מקבלת DB in-memory חדש דרך async_engine (function-scoped).

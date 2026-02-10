@@ -112,6 +112,9 @@ async def startup() -> None:
 async def shutdown() -> None:
     """Cleanup on shutdown"""
     logger.info("Shutting down application")
+    # סגירת חיבור Redis
+    from app.core.redis_client import close_redis
+    await close_redis()
     # סגירת חיבורי מסד הנתונים למניעת connection pool exhaustion
     await engine.dispose()
     logger.info("Database connections disposed")
