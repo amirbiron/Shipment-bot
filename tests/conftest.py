@@ -331,8 +331,26 @@ def fake_redis():
     async def _get_fake_redis():
         return _fake
 
-    with patch("app.core.redis_client.get_redis", _get_fake_redis):
+    with patch("app.core.redis_client.get_redis", _get_fake_redis), \
+         patch("app.core.auth.get_redis", _get_fake_redis):
         yield _fake
+
+
+# ============================================================================
+# JWT Secret for panel tests
+# ============================================================================
+
+_TEST_JWT_SECRET = "test-jwt-secret-key-for-testing-only-do-not-use-in-production"
+
+
+@pytest.fixture(autouse=True)
+def set_jwt_secret():
+    """מגדיר JWT_SECRET_KEY לבדיקות פאנל"""
+    with patch.object(settings, "JWT_SECRET_KEY", _TEST_JWT_SECRET), \
+         patch.object(settings, "JWT_ALGORITHM", "HS256"), \
+         patch.object(settings, "JWT_ACCESS_TOKEN_EXPIRE_MINUTES", 480), \
+         patch.object(settings, "OTP_EXPIRE_SECONDS", 300):
+        yield
 
 
 # הערה: אין צורך ב-autouse fixture לניקוי WebhookEvent (idempotency) —
