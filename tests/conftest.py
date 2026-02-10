@@ -313,6 +313,18 @@ class FakeRedis:
         self._ttls.pop(key, None)
         return self._store.pop(key, None)
 
+    async def incr(self, key: str) -> int:
+        """INCR אטומי — מגדיל ב-1, מאתחל ל-1 אם לא קיים"""
+        current = self._store.get(key)
+        new_val = int(current) + 1 if current is not None else 1
+        self._store[key] = str(new_val)
+        return new_val
+
+    async def expire(self, key: str, ttl: int) -> None:
+        """הגדרת TTL למפתח קיים"""
+        if key in self._store:
+            self._ttls[key] = ttl
+
     async def delete(self, *keys: str) -> None:
         for key in keys:
             self._store.pop(key, None)

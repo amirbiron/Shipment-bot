@@ -112,20 +112,23 @@ async def check_otp_attempts(user_id: int) -> bool:
     return True
 
 
-async def _increment_otp_attempts(user_id: int) -> None:
-    """הגדלת מונה ניסיונות אימות"""
+async def _increment_and_check_otp_attempts(user_id: int) -> bool:
+    """הגדלה אטומית של מונה ניסיונות + בדיקת מגבלה — True אם עדיין מותר"""
     redis = await get_redis()
     attempts_key = f"{_OTP_ATTEMPTS_PREFIX}:{user_id}"
-    count = await redis.get(attempts_key)
-    new_count = int(count) + 1 if count else 1
-    # TTL = זמן חיי ה-OTP; המונה נמחק ב-store_otp כשמבקשים OTP חדש
-    await redis.setex(attempts_key, settings.OTP_EXPIRE_SECONDS, str(new_count))
+    # INCR אטומי — מונע race condition בבקשות מקבילות
+    new_count = await redis.incr(attempts_key)
+    if new_count == 1:
+        # מפתח חדש — מגדירים TTL כזמן חיי ה-OTP
+        await redis.expire(attempts_key, settings.OTP_EXPIRE_SECONDS)
+    return new_count <= OTP_MAX_ATTEMPTS
 
 
 async def verify_otp(user_id: int, otp: str) -> bool:
-    """אימות OTP — מוחק לאחר שימוש (one-time), עם מגבלת ניסיונות"""
-    # בדיקת מגבלת ניסיונות
-    if not await check_otp_attempts(user_id):
+    """אימות OTP — מוחק לאחר שימוש (one-time), עם מגבלת ניסיונות אטומית"""
+    # הגדלה אטומית + בדיקת מגבלה — פעולה אחת, ללא TOCTOU
+    allowed = await _increment_and_check_otp_attempts(user_id)
+    if not allowed:
         logger.warning("OTP max attempts exceeded", extra_data={"user_id": user_id})
         return False
 
@@ -140,7 +143,5 @@ async def verify_otp(user_id: int, otp: str) -> bool:
         logger.info("OTP verified successfully", extra_data={"user_id": user_id})
         return True
 
-    # ניסיון כושל — מגדיל מונה
-    await _increment_otp_attempts(user_id)
     logger.warning("OTP verification failed", extra_data={"user_id": user_id})
     return False
