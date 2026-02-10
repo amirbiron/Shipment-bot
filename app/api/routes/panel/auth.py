@@ -217,7 +217,7 @@ async def verify_otp_endpoint(
     user = result.scalar_one_or_none()
 
     # תשובה אחידה לכל כשלון — מונע user-enumeration
-    if not user or not user.is_active:
+    if not user or not user.is_active or user.role != UserRole.STATION_OWNER:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="קוד שגוי או פג תוקף",
