@@ -188,6 +188,8 @@ class ShipmentWorkflowService:
         )
 
         if not success:
+            # rollback למניעת שינויים חלקיים (למשל ארנק חדש שנוצר ב-flush)
+            await self.db.rollback()
             # לוג עם פרטים מלאים — לא חושפים יתרת ארנק לסדרן
             logger.warning(
                 "Delivery capture failed during approval",

@@ -7,6 +7,7 @@ reliable message delivery without blocking the main transaction.
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from html import escape
 from typing import List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -106,8 +107,8 @@ class OutboxService:
             "fee": delivery.fee,
             "message_text": (
                 f"🚚 משלוח חדש זמין!\n\n"
-                f"📍 איסוף: {delivery.pickup_address}\n"
-                f"🎯 יעד: {delivery.dropoff_address}\n"
+                f"📍 איסוף: {escape(delivery.pickup_address)}\n"
+                f"🎯 יעד: {escape(delivery.dropoff_address)}\n"
                 f"💰 עמלה: {delivery.fee}₪\n\n"
                 f"לתפיסת המשלוח הקלידו: /capture {delivery.token}"
             )
