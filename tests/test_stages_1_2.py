@@ -1585,25 +1585,29 @@ class TestPropertyBasedDiscoveries:
         assert user.rejection_note == "צילום לא ברור"
 
     @pytest.mark.asyncio
-    async def test_empty_rejection_note_stored_as_none(self, db_session, user_factory):
+    @pytest.mark.parametrize("empty_note", [None, "", "   "])
+    async def test_empty_rejection_note_stored_as_none(self, empty_note, db_session, user_factory):
         """
-        הערת דחייה ריקה (None) — נשמרת כ-None, לא כמחרוזת ריקה.
-        נמצא ע"י hypothesis — rejection_note חייב להיות None או מחרוזת לא-ריקה.
+        הערת דחייה ריקה (None / "" / רווחים) — נשמרת כ-None, לא כמחרוזת ריקה.
+        באג שנמצא ע"י hypothesis: העברת "" ל-reject() גרמה לשמירת מחרוזת ריקה ב-DB.
         """
+        uid = f"tg:disc_003_{hash(str(empty_note))}"
         user = await user_factory(
-            phone_number="tg:disc_003",
+            phone_number=uid,
             name="Empty Note",
             role=UserRole.COURIER,
             platform="telegram",
-            telegram_chat_id="disc_003",
+            telegram_chat_id=uid,
             approval_status=ApprovalStatus.PENDING,
         )
         result = await CourierApprovalService.reject(
-            db_session, user.id, rejection_note=None
+            db_session, user.id, rejection_note=empty_note
         )
         assert result.success is True
         await db_session.refresh(user)
-        assert user.rejection_note is None
+        assert user.rejection_note is None, (
+            f"rejection_note עם קלט {empty_note!r} אמור להיות None, קיבלנו: {user.rejection_note!r}"
+        )
 
     @pytest.mark.unit
     def test_approval_command_with_unicode_surrogates_does_not_crash(self):

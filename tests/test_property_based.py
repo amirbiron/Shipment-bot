@@ -214,10 +214,9 @@ class TestApprovalWorkflowProperties:
             elif action == "reject":
                 await CourierApprovalService.reject(db_session, user.id)
             elif action == "reject_with_note":
-                # שימוש בהערה שנוצרה ע"י hypothesis
-                actual_note = note if note else None
+                # העברת הערה כמות שהיא — כולל "" — כדי לבדוק שהשירות מתמודד נכון
                 await CourierApprovalService.reject(
-                    db_session, user.id, rejection_note=actual_note
+                    db_session, user.id, rejection_note=note
                 )
 
             await db_session.refresh(user)
