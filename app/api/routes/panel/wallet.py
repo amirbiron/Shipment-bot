@@ -1,7 +1,6 @@
 """
 ארנק תחנה — יתרה, היסטוריית תנועות עם pagination וסינון
 """
-from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -14,6 +13,7 @@ from app.api.dependencies.auth import get_current_station_owner
 from app.db.database import get_db
 from app.db.models.station_ledger import StationLedger, StationLedgerEntryType
 from app.domain.services.station_service import StationService
+from app.api.routes.panel.schemas import parse_date_param
 
 router = APIRouter()
 
@@ -102,27 +102,13 @@ async def get_ledger(
                 detail=f"סוג תנועה לא תקין: {entry_type}",
             )
 
-    if date_from:
-        try:
-            dt_from = datetime.strptime(date_from, "%Y-%m-%d")
-            base_where.append(StationLedger.created_at >= dt_from)
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="פורמט תאריך לא תקין",
-            )
+    dt_from = parse_date_param(date_from, "date_from")
+    if dt_from:
+        base_where.append(StationLedger.created_at >= dt_from)
 
-    if date_to:
-        try:
-            dt_to = datetime.strptime(date_to, "%Y-%m-%d").replace(
-                hour=23, minute=59, second=59,
-            )
-            base_where.append(StationLedger.created_at <= dt_to)
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="פורמט תאריך לא תקין",
-            )
+    dt_to = parse_date_param(date_to, "date_to", end_of_day=True)
+    if dt_to:
+        base_where.append(StationLedger.created_at <= dt_to)
 
     # ספירה
     count_result = await db.execute(

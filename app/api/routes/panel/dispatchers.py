@@ -57,10 +57,24 @@ class BulkAddDispatchersRequest(BaseModel):
 
     @field_validator("phone_numbers")
     @classmethod
-    def validate_phones(cls, v: List[str]) -> List[str]:
+    def validate_and_normalize(cls, v: List[str]) -> List[str]:
         if len(v) > 50:
             raise ValueError("מקסימום 50 סדרנים בפעולה אחת")
-        return v
+        # strip + normalize + הסרת כפילויות (שמירה על סדר)
+        seen: set[str] = set()
+        result: list[str] = []
+        for phone in v:
+            stripped = phone.strip()
+            if not stripped:
+                continue
+            if PhoneNumberValidator.validate(stripped):
+                normalized = PhoneNumberValidator.normalize(stripped)
+                if normalized not in seen:
+                    seen.add(normalized)
+                    result.append(normalized)
+            else:
+                result.append(stripped)
+        return result
 
 
 class BulkAddResponse(BaseModel):

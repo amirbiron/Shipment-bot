@@ -28,6 +28,7 @@ from app.db.models.user import User, UserRole
 from app.domain.services.outbox_service import OutboxService
 from app.domain.services.station_service import StationService
 from app.api.dependencies.auth import get_current_station_owner
+from app.api.routes.panel.schemas import ActionResponse
 
 logger = get_logger(__name__)
 
@@ -88,14 +89,16 @@ class MeResponse(BaseModel):
 # ==================== Endpoints ====================
 
 
+_OTP_GENERIC_RESPONSE = "אם המספר רשום במערכת ויש לו הרשאה, קוד כניסה יישלח בקרוב"
+
+
 @router.post(
     "/request-otp",
+    response_model=ActionResponse,
     summary="בקשת קוד כניסה",
-    description="שולח קוד OTP לבעל התחנה. הקוד נשלח דרך הבוט (Telegram/WhatsApp).",
+    description="שולח קוד OTP לבעל התחנה. תשובה גנרית למניעת חשיפת מידע.",
     responses={
-        200: {"description": "OTP נשלח בהצלחה"},
-        403: {"description": "המשתמש אינו בעל תחנה"},
-        404: {"description": "משתמש לא נמצא"},
+        200: {"description": "בקשה התקבלה"},
         429: {"description": "בקשת OTP מוקדמת מדי — נא להמתין"},
     },
     tags=["Panel - אימות"],
@@ -103,43 +106,43 @@ class MeResponse(BaseModel):
 async def request_otp(
     data: OTPRequest,
     db: AsyncSession = Depends(get_db),
-) -> dict[str, str]:
-    """בקשת קוד כניסה — שולח OTP דרך הבוט"""
+) -> ActionResponse:
+    """בקשת קוד כניסה — תשובה גנרית למניעת user-enumeration"""
     # חיפוש המשתמש
     result = await db.execute(
         select(User).where(User.phone_number == data.phone_number)
     )
     user = result.scalar_one_or_none()
+
+    # תשובה גנרית אם המשתמש לא קיים / לא פעיל / לא בעל תחנה
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="משתמש לא נמצא עם מספר הטלפון הזה",
-        )
+        logger.info("OTP request for unknown phone", extra_data={
+            "phone": PhoneNumberValidator.mask(data.phone_number),
+        })
+        return ActionResponse(success=True, message=_OTP_GENERIC_RESPONSE)
 
-    # בדיקה שהמשתמש פעיל
     if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="חשבון המשתמש אינו פעיל",
-        )
+        logger.info("OTP request for inactive user", extra_data={
+            "user_id": user.id,
+        })
+        return ActionResponse(success=True, message=_OTP_GENERIC_RESPONSE)
 
-    # ולידציה שהוא בעל תחנה
     if user.role != UserRole.STATION_OWNER:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="הגישה לפאנל מותרת לבעלי תחנות בלבד",
-        )
+        logger.info("OTP request for non-owner", extra_data={
+            "user_id": user.id, "role": str(user.role),
+        })
+        return ActionResponse(success=True, message=_OTP_GENERIC_RESPONSE)
 
     # ולידציה שיש לו תחנה פעילה
     station_service = StationService(db)
     station = await station_service.get_station_by_owner(user.id)
     if not station:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="לא נמצאה תחנה פעילה למשתמש",
-        )
+        logger.info("OTP request for owner without station", extra_data={
+            "user_id": user.id,
+        })
+        return ActionResponse(success=True, message=_OTP_GENERIC_RESPONSE)
 
-    # Rate limiting — cooldown בין בקשות
+    # Rate limiting — cooldown בין בקשות (זו השגיאה היחידה שנחשף — לא חושפת מידע)
     if not await check_otp_cooldown(user.id):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -185,7 +188,7 @@ async def request_otp(
         },
     )
 
-    return {"message": "קוד כניסה נשלח אליך דרך הבוט"}
+    return ActionResponse(success=True, message=_OTP_GENERIC_RESPONSE)
 
 
 @router.post(
@@ -195,8 +198,7 @@ async def request_otp(
     description="אימות קוד OTP וקבלת JWT token לגישה לפאנל.",
     responses={
         200: {"description": "התחברות הצליחה"},
-        401: {"description": "קוד שגוי או פג תוקף"},
-        404: {"description": "משתמש לא נמצא"},
+        401: {"description": "קוד שגוי, פג תוקף, או משתמש לא זוהה"},
     },
     tags=["Panel - אימות"],
 )
@@ -210,17 +212,12 @@ async def verify_otp_endpoint(
         select(User).where(User.phone_number == data.phone_number)
     )
     user = result.scalar_one_or_none()
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="משתמש לא נמצא",
-        )
 
-    # בדיקה שהמשתמש פעיל
-    if not user.is_active:
+    # תשובה אחידה לכל כשלון — מונע user-enumeration
+    if not user or not user.is_active:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="חשבון המשתמש אינו פעיל",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="קוד שגוי או פג תוקף",
         )
 
     # אימות OTP (כולל בדיקת מגבלת ניסיונות)

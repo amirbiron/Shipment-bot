@@ -42,6 +42,17 @@ async def get_current_station_owner(
             detail="טוקן לא תקין או פג תוקף",
         )
 
+    # ולידציה שהטוקן שייך לבעל תחנה (מונע שימוש חוזר בטוקנים מסוג אחר)
+    if token_data.role != "station_owner":
+        logger.warning(
+            "Panel access denied — wrong role in token",
+            extra_data={"user_id": token_data.user_id, "role": token_data.role},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="אין הרשאה — טוקן לא מתאים לפאנל",
+        )
+
     # ולידציה שהמשתמש עדיין פעיל
     user_result = await db.execute(
         select(User).where(User.id == token_data.user_id)

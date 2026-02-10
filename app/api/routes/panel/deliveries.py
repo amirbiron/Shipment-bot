@@ -1,7 +1,6 @@
 """
 משלוחים — פעילים, היסטוריה, פרטי משלוח בודד (עם pagination וסינון)
 """
-from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -11,9 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
 from app.core.auth import TokenPayload
+from app.core.validation import PhoneNumberValidator
 from app.api.dependencies.auth import get_current_station_owner
 from app.db.database import get_db
 from app.db.models.delivery import Delivery, DeliveryStatus
+from app.api.routes.panel.schemas import parse_date_param
 
 router = APIRouter()
 
@@ -44,7 +45,12 @@ class PaginatedDeliveriesResponse(BaseModel):
 
 
 class DeliveryDetailResponse(BaseModel):
-    """פרטי משלוח מלאים"""
+    """
+    פרטי משלוח מלאים.
+
+    שדות pickup_contact_phone / dropoff_contact_phone ממוסכים (4 ספרות אחרונות מוסתרות).
+    מידע זה זמין לבעל תחנה בלבד לצורך תיאום — אין להציג למשתמשים אחרים.
+    """
     id: int
     pickup_address: str
     pickup_contact_name: Optional[str] = None
@@ -157,27 +163,13 @@ async def list_delivery_history(
             DeliveryStatus.CANCELLED,
         ]))
 
-    if date_from:
-        try:
-            dt_from = datetime.strptime(date_from, "%Y-%m-%d")
-            base_where.append(Delivery.created_at >= dt_from)
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="פורמט תאריך לא תקין. יש להשתמש ב-YYYY-MM-DD",
-            )
+    dt_from = parse_date_param(date_from, "date_from")
+    if dt_from:
+        base_where.append(Delivery.created_at >= dt_from)
 
-    if date_to:
-        try:
-            dt_to = datetime.strptime(date_to, "%Y-%m-%d").replace(
-                hour=23, minute=59, second=59,
-            )
-            base_where.append(Delivery.created_at <= dt_to)
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="פורמט תאריך לא תקין. יש להשתמש ב-YYYY-MM-DD",
-            )
+    dt_to = parse_date_param(date_to, "date_to", end_of_day=True)
+    if dt_to:
+        base_where.append(Delivery.created_at <= dt_to)
 
     # ספירה
     count_result = await db.execute(
@@ -240,10 +232,16 @@ async def get_delivery_detail(
         id=delivery.id,
         pickup_address=delivery.pickup_address,
         pickup_contact_name=delivery.pickup_contact_name,
-        pickup_contact_phone=delivery.pickup_contact_phone,
+        pickup_contact_phone=(
+            PhoneNumberValidator.mask(delivery.pickup_contact_phone)
+            if delivery.pickup_contact_phone else None
+        ),
         dropoff_address=delivery.dropoff_address,
         dropoff_contact_name=delivery.dropoff_contact_name,
-        dropoff_contact_phone=delivery.dropoff_contact_phone,
+        dropoff_contact_phone=(
+            PhoneNumberValidator.mask(delivery.dropoff_contact_phone)
+            if delivery.dropoff_contact_phone else None
+        ),
         status=delivery.status.value,
         fee=delivery.fee,
         courier_name=(

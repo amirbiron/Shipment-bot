@@ -4,7 +4,7 @@
 import calendar
 import csv
 import io
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -19,6 +19,7 @@ from app.db.database import get_db
 from app.db.models.station_ledger import StationLedger, StationLedgerEntryType
 from app.db.models.manual_charge import ManualCharge
 from app.domain.services.station_service import StationService
+from app.api.routes.panel.schemas import parse_date_param
 
 router = APIRouter()
 
@@ -70,15 +71,8 @@ async def get_collection_report(
     station_id = auth.station_id
 
     # חישוב תחילת מחזור
-    if cycle_start:
-        try:
-            cs = datetime.strptime(cycle_start, "%Y-%m-%d")
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="פורמט תאריך לא תקין",
-            )
-    else:
+    cs = parse_date_param(cycle_start, "cycle_start")
+    if not cs:
         cs = StationService._get_billing_cycle_start()
 
     # סוף מחזור — תחילת החודש הבא (מותאם ליום האחרון בחודש)
@@ -190,22 +184,14 @@ async def get_revenue_report(
     """דוח הכנסות — סיכום לפי סוגי תנועה"""
     station_id = auth.station_id
 
-    # ברירת מחדל — 30 ימים אחרונים
-    now = datetime.utcnow()
-    if date_from:
-        try:
-            dt_from = datetime.strptime(date_from, "%Y-%m-%d")
-        except ValueError:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="פורמט תאריך לא תקין")
-    else:
+    # ברירת מחדל — תחילת החודש עד עכשיו
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    dt_from = parse_date_param(date_from, "date_from")
+    if not dt_from:
         dt_from = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-    if date_to:
-        try:
-            dt_to = datetime.strptime(date_to, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
-        except ValueError:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="פורמט תאריך לא תקין")
-    else:
+    dt_to = parse_date_param(date_to, "date_to", end_of_day=True)
+    if not dt_to:
         dt_to = now
 
     # סיכום לפי סוג תנועה

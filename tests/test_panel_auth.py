@@ -106,11 +106,11 @@ class TestPanelAuthEndpoints:
             "phone_number": "0501234567",
         })
         assert response.status_code == 200
-        assert "קוד כניסה נשלח" in response.json()["message"]
+        assert response.json()["success"] is True
 
     @pytest.mark.asyncio
-    async def test_request_otp_non_owner_rejected(self, test_client, user_factory):
-        """בקשת OTP למשתמש רגיל — נדחה"""
+    async def test_request_otp_non_owner_generic_response(self, test_client, user_factory):
+        """בקשת OTP למשתמש רגיל — תשובה גנרית (מניעת user-enumeration)"""
         await user_factory(
             phone_number="+972501234567",
             name="שולח רגיל",
@@ -119,15 +119,19 @@ class TestPanelAuthEndpoints:
         response = await test_client.post("/api/panel/auth/request-otp", json={
             "phone_number": "0501234567",
         })
-        assert response.status_code == 403
+        # תשובה גנרית — לא חושפת שהמשתמש קיים אבל אינו בעל תחנה
+        assert response.status_code == 200
+        assert response.json()["success"] is True
 
     @pytest.mark.asyncio
-    async def test_request_otp_unknown_phone(self, test_client):
-        """בקשת OTP לטלפון לא קיים — 404"""
+    async def test_request_otp_unknown_phone_generic_response(self, test_client):
+        """בקשת OTP לטלפון לא קיים — תשובה גנרית (מניעת user-enumeration)"""
         response = await test_client.post("/api/panel/auth/request-otp", json={
             "phone_number": "0509999999",
         })
-        assert response.status_code == 404
+        # תשובה גנרית — לא חושפת שהמספר לא קיים
+        assert response.status_code == 200
+        assert response.json()["success"] is True
 
     @pytest.mark.asyncio
     async def test_verify_otp_returns_jwt(
@@ -281,10 +285,10 @@ class TestDeactivatedUser:
     """בדיקות שמשתמש לא פעיל נחסם בכל שלבי האימות"""
 
     @pytest.mark.asyncio
-    async def test_inactive_user_request_otp_rejected(
+    async def test_inactive_user_request_otp_generic(
         self, test_client, user_factory, db_session,
     ):
-        """משתמש לא פעיל לא יכול לבקש OTP — 403"""
+        """משתמש לא פעיל — תשובה גנרית (מניעת user-enumeration)"""
         user = await user_factory(
             phone_number="+972503333333",
             name="מושבת",
@@ -301,8 +305,9 @@ class TestDeactivatedUser:
         response = await test_client.post("/api/panel/auth/request-otp", json={
             "phone_number": "0503333333",
         })
-        assert response.status_code == 403
-        assert "אינו פעיל" in response.json()["detail"]
+        # תשובה גנרית — לא חושפת שהמשתמש מושבת
+        assert response.status_code == 200
+        assert response.json()["success"] is True
 
     @pytest.mark.asyncio
     async def test_inactive_user_dashboard_rejected(
