@@ -7,6 +7,7 @@ reliable message delivery without blocking the main transaction.
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from html import escape
 from typing import List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -14,6 +15,8 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.db.models.outbox_message import OutboxMessage, MessagePlatform, MessageStatus
 from app.db.models.delivery import Delivery
+from app.db.models.station import Station
+from app.db.models.user import User
 
 
 def _calculate_backoff_seconds(
@@ -84,14 +87,18 @@ class OutboxService:
         self.db.add(message)
         return message
 
-    async def queue_delivery_broadcast(self, delivery: Delivery) -> List[OutboxMessage]:
+    async def queue_delivery_broadcast(
+        self, delivery: Delivery, station: Station | None = None
+    ) -> List[OutboxMessage]:
         """
-        Queue broadcast messages for a new delivery to all couriers.
-        Called within the delivery creation transaction.
+        שידור משלוח חדש.
+
+        שלב 4: אם למשלוח יש תחנה עם קבוצה ציבורית — שידור לקבוצה.
+        אחרת — שידור פרטני לכל השליחים (תואם לאחור).
         """
         messages = []
 
-        # Create broadcast message content using secure token for smart links
+        # תוכן השידור עם קישור חכם
         content = {
             "delivery_id": delivery.id,
             "token": delivery.token,
@@ -100,14 +107,28 @@ class OutboxService:
             "fee": delivery.fee,
             "message_text": (
                 f"🚚 משלוח חדש זמין!\n\n"
-                f"📍 איסוף: {delivery.pickup_address}\n"
-                f"🎯 יעד: {delivery.dropoff_address}\n"
+                f"📍 איסוף: {escape(delivery.pickup_address)}\n"
+                f"🎯 יעד: {escape(delivery.dropoff_address)}\n"
                 f"💰 עמלה: {delivery.fee}₪\n\n"
                 f"לתפיסת המשלוח הקלידו: /capture {delivery.token}"
             )
         }
 
-        # Queue for WhatsApp broadcast (placeholder recipient - actual recipients resolved by worker)
+        # שלב 4: שידור לקבוצה ציבורית של התחנה
+        if station and station.public_group_chat_id:
+            platform = MessagePlatform(
+                station.public_group_platform or "telegram"
+            )
+            msg = await self.queue_message(
+                platform=platform,
+                recipient_id=station.public_group_chat_id,
+                message_type="delivery_broadcast",
+                message_content=content,
+            )
+            messages.append(msg)
+            return messages
+
+        # fallback: שידור פרטני לכל השליחים
         whatsapp_msg = await self.queue_message(
             platform=MessagePlatform.WHATSAPP,
             recipient_id="BROADCAST_COURIERS",
@@ -116,7 +137,6 @@ class OutboxService:
         )
         messages.append(whatsapp_msg)
 
-        # Queue for Telegram broadcast
         telegram_msg = await self.queue_message(
             platform=MessagePlatform.TELEGRAM,
             recipient_id="BROADCAST_COURIERS",
@@ -135,6 +155,25 @@ class OutboxService:
         """Queue notifications when a delivery is captured"""
         messages = []
 
+        # שליפת פרטי השולח לקביעת פלטפורמה ומזהה נמען
+        sender_result = await self.db.execute(
+            select(User).where(User.id == delivery.sender_id)
+        )
+        sender = sender_result.scalar_one_or_none()
+        if not sender:
+            return messages
+
+        # קביעת פלטפורמה ומזהה נמען לפי פרטי השולח
+        if sender.telegram_chat_id:
+            platform = MessagePlatform.TELEGRAM
+            recipient = sender.telegram_chat_id
+        else:
+            platform = MessagePlatform.WHATSAPP
+            recipient = sender.phone_number
+
+        if not recipient:
+            return messages
+
         content = {
             "delivery_id": delivery.id,
             "courier_id": courier_id,
@@ -145,15 +184,117 @@ class OutboxService:
             )
         }
 
-        # Notify sender
         sender_msg = await self.queue_message(
-            platform=MessagePlatform.WHATSAPP,  # Determine from sender preferences
-            recipient_id=str(delivery.sender_id),
+            platform=platform,
+            recipient_id=recipient,
             message_type="capture_notification_sender",
             message_content=content
         )
         messages.append(sender_msg)
 
+        return messages
+
+    # ==================== שלב 4: מתודות זרימת אישור ====================
+
+    async def queue_delivery_request_to_dispatchers(
+        self, delivery: Delivery, courier: User, station_id: int
+    ) -> List[OutboxMessage]:
+        """שלב 4: הודעה לסדרנים על בקשת נהג עם כפתורי אישור/דחייה"""
+        from html import escape
+
+        courier_name = escape(
+            courier.full_name or courier.name or "לא צוין"
+        )
+        message_text = (
+            f"📬 <b>בקשת משלוח חדשה!</b>\n\n"
+            f"📦 משלוח #{delivery.id}\n"
+            f"📍 איסוף: {escape(delivery.pickup_address)}\n"
+            f"🎯 יעד: {escape(delivery.dropoff_address)}\n"
+            f"💰 עמלה: {delivery.fee:.0f}₪\n\n"
+            f"🚚 נהג מבקש: {courier_name}\n\n"
+            f"לאישור: אשר משלוח {delivery.id}\n"
+            f"לדחייה: דחה משלוח {delivery.id}"
+        )
+
+        content = {
+            "delivery_id": delivery.id,
+            "courier_id": courier.id,
+            "station_id": station_id,
+            "message_type": "delivery_request_notification",
+            "message_text": message_text,
+            # כפתורי inline לטלגרם
+            "inline_keyboard": [
+                [
+                    {"text": "✅ אשר", "callback_data": f"approve_delivery_{delivery.id}"},
+                    {"text": "❌ דחה", "callback_data": f"reject_delivery_{delivery.id}"},
+                ]
+            ],
+        }
+
+        messages = []
+        for platform in [MessagePlatform.TELEGRAM, MessagePlatform.WHATSAPP]:
+            msg = await self.queue_message(
+                platform=platform,
+                recipient_id=f"BROADCAST_DISPATCHERS_{station_id}",
+                message_type="delivery_request_notification",
+                message_content=content,
+            )
+            messages.append(msg)
+        return messages
+
+    async def queue_delivery_decision_notification(
+        self, delivery: Delivery, courier: User, message_text: str
+    ) -> List[OutboxMessage]:
+        """שלב 4: הודעה לשליח על החלטת הסדרן (אישור/דחייה)"""
+        messages = []
+        content = {
+            "delivery_id": delivery.id,
+            "message_text": message_text,
+        }
+
+        # שליחה לפלטפורמה של השליח
+        platform_str = courier.platform or "telegram"
+        platform = MessagePlatform(platform_str)
+
+        recipient_id = (
+            courier.telegram_chat_id
+            if platform == MessagePlatform.TELEGRAM
+            else courier.phone_number
+        )
+
+        if recipient_id:
+            msg = await self.queue_message(
+                platform=platform,
+                recipient_id=str(recipient_id),
+                message_type="delivery_decision_notification",
+                message_content=content,
+            )
+            messages.append(msg)
+        return messages
+
+    async def queue_closed_card(
+        self, station: Station, card_text: str
+    ) -> List[OutboxMessage]:
+        """שלב 4: שליחת כרטיס סגור לקבוצה פרטית של התחנה"""
+        messages = []
+
+        if not station.private_group_chat_id:
+            return messages
+
+        platform = MessagePlatform(
+            station.private_group_platform or "telegram"
+        )
+        content = {
+            "message_text": card_text,
+        }
+
+        msg = await self.queue_message(
+            platform=platform,
+            recipient_id=station.private_group_chat_id,
+            message_type="closed_shipment_card",
+            message_content=content,
+        )
+        messages.append(msg)
         return messages
 
     async def get_pending_messages(self, limit: int = 100) -> List[OutboxMessage]:

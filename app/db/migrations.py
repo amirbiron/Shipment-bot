@@ -227,6 +227,40 @@ async def run_migration_005(conn: AsyncConnection) -> None:
     """))
 
 
+async def run_migration_006(conn: AsyncConnection) -> None:
+    """מיגרציה 006 - שלב 4: זרימת אישור משלוח וכרטיס סגור."""
+
+    # הוספת שדות אישור משלוח לטבלת deliveries
+    await conn.execute(text("""
+        ALTER TABLE deliveries
+            ADD COLUMN IF NOT EXISTS requesting_courier_id BIGINT REFERENCES users(id),
+            ADD COLUMN IF NOT EXISTS requested_at TIMESTAMP,
+            ADD COLUMN IF NOT EXISTS approved_by_id BIGINT REFERENCES users(id),
+            ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP,
+            ADD COLUMN IF NOT EXISTS approval_decision VARCHAR(20);
+    """))
+
+    # אינדקס על שליח מבקש
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_deliveries_requesting_courier
+        ON deliveries(requesting_courier_id);
+    """))
+
+    # הוספת שדות קבוצות לטבלת תחנות
+    await conn.execute(text("""
+        ALTER TABLE stations
+            ADD COLUMN IF NOT EXISTS public_group_chat_id VARCHAR(100),
+            ADD COLUMN IF NOT EXISTS private_group_chat_id VARCHAR(100),
+            ADD COLUMN IF NOT EXISTS public_group_platform VARCHAR(20),
+            ADD COLUMN IF NOT EXISTS private_group_platform VARCHAR(20);
+    """))
+
+    # הרחבת recipient_id ב-outbox — מזהי קבוצות יכולים לחרוג מ-50 תווים
+    await conn.execute(text("""
+        ALTER TABLE outbox_messages ALTER COLUMN recipient_id TYPE VARCHAR(100);
+    """))
+
+
 async def add_enum_values(engine: AsyncEngine) -> None:
     """
     הוספת ערכים חדשים ל-enum types קיימים.
@@ -245,6 +279,13 @@ async def add_enum_values(engine: AsyncEngine) -> None:
         ))
         logger.info("Ensured 'STATION_OWNER' exists in userrole enum")
 
+        # שלב 4: הוספת PENDING_APPROVAL לסטטוס משלוח
+        # SQLEnum(DeliveryStatus) ללא values_callable שולח את שם ה-member (uppercase)
+        await conn.execute(text(
+            "ALTER TYPE deliverystatus ADD VALUE IF NOT EXISTS 'PENDING_APPROVAL'"
+        ))
+        logger.info("Ensured 'PENDING_APPROVAL' exists in deliverystatus enum")
+
 
 async def run_all_migrations(conn: AsyncConnection) -> None:
     """הרצת כל המיגרציות ברצף (ללא ALTER TYPE — ראה add_enum_values)."""
@@ -258,3 +299,5 @@ async def run_all_migrations(conn: AsyncConnection) -> None:
     await run_migration_004(conn)
     logger.info("Running migration 005...")
     await run_migration_005(conn)
+    logger.info("Running migration 006...")
+    await run_migration_006(conn)

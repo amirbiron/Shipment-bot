@@ -718,6 +718,76 @@ async def telegram_webhook(
             )
             return {"ok": True}
 
+    # שלב 4: טיפול בכפתורי אישור/דחיית משלוח (סדרנים בלבד)
+    if event.is_callback:
+        delivery_action = re.match(r"^(approve|reject)_delivery_(\d+)$", text)
+        if delivery_action:
+            action = delivery_action.group(1)
+            delivery_id = int(delivery_action.group(2))
+
+            # זיהוי הלוחץ
+            user, _ = await get_or_create_user(db, telegram_user_id, name)
+
+            # שליפת המשלוח לבדיקת תחנה
+            from app.domain.services.station_service import StationService
+            station_service = StationService(db)
+
+            from app.db.models.delivery import Delivery
+            delivery_result = await db.execute(
+                select(Delivery).where(Delivery.id == delivery_id)
+            )
+            target_delivery = delivery_result.scalar_one_or_none()
+
+            if not target_delivery or not target_delivery.station_id:
+                background_tasks.add_task(
+                    send_telegram_message, send_chat_id,
+                    "❌ המשלוח לא נמצא."
+                )
+                return {"ok": True}
+
+            # בדיקה שהסדרן שייך לתחנה של המשלוח הספציפי
+            is_disp = await station_service.is_dispatcher_of_station(
+                user.id, target_delivery.station_id
+            )
+
+            if not is_disp:
+                background_tasks.add_task(
+                    send_telegram_message, send_chat_id,
+                    "❌ אין לך הרשאה לאשר/לדחות משלוחים בתחנה זו."
+                )
+                return {"ok": True}
+
+            from app.domain.services.shipment_workflow_service import ShipmentWorkflowService
+            workflow = ShipmentWorkflowService(db)
+
+            try:
+                if action == "approve":
+                    success, msg, delivery = await workflow.approve_delivery(
+                        delivery_id, user.id
+                    )
+                else:
+                    success, msg, delivery = await workflow.reject_delivery(
+                        delivery_id, user.id
+                    )
+            except Exception as e:
+                # rollback למניעת שינויים חלקיים (flush ללא commit) שנשארים בסשן
+                await db.rollback()
+                logger.error(
+                    "Delivery approval/rejection failed",
+                    extra_data={"delivery_id": delivery_id, "error": str(e)},
+                    exc_info=True,
+                )
+                msg = "❌ שגיאה בעיבוד הבקשה. נסה שוב."
+                success = False
+
+            background_tasks.add_task(send_telegram_message, send_chat_id, msg)
+            return {
+                "ok": True,
+                "delivery_action": action,
+                "delivery_id": delivery_id,
+                "success": success,
+            }
+
     # Get or create user (מזהה לפי from_user.id כשאפשר)
     user, is_new_user = await get_or_create_user(db, telegram_user_id, name)
 

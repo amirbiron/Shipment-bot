@@ -48,7 +48,7 @@ class CaptureService:
 
         This is the preferred method as it prevents ID guessing attacks.
         """
-        # First, get the delivery by token
+        # שליפת משלוח לפי טוקן
         result = await self.db.execute(
             select(Delivery).where(Delivery.token == token)
         )
@@ -57,16 +57,27 @@ class CaptureService:
         if not delivery:
             return False, "המשלוח לא נמצא (קישור לא תקין)", None
 
-        # Delegate to the ID-based capture
+        # שלב 4: משלוח של תחנה עובר דרך זרימת אישור
+        if delivery.station_id:
+            from app.domain.services.shipment_workflow_service import ShipmentWorkflowService
+            workflow = ShipmentWorkflowService(self.db)
+            return await workflow.request_delivery(delivery.id, courier_id)
+
+        # משלוח ישיר (ללא תחנה) - תפיסה ישירה
         return await self.capture_delivery(delivery.id, courier_id)
 
     async def capture_delivery(
         self,
         delivery_id: int,
-        courier_id: int
+        courier_id: int,
+        auto_commit: bool = True,
     ) -> Tuple[bool, str, Optional[Delivery]]:
         """
         Atomically capture a delivery for a courier.
+
+        Args:
+            auto_commit: אם False, לא עושה commit — מאפשר לקוד הקורא לנהל
+                טרנזקציה אחת (למשל approve_delivery ב-ShipmentWorkflowService).
 
         Returns:
             Tuple of (success, message, delivery)
@@ -84,9 +95,20 @@ class CaptureService:
             if not delivery:
                 return False, "המשלוח לא נמצא", None
 
-            # 2. Verify status is OPEN
-            if delivery.status != DeliveryStatus.OPEN:
+            # 2. Verify status is OPEN or PENDING_APPROVAL (שלב 4: אחרי אישור סדרן)
+            if delivery.status not in (
+                DeliveryStatus.OPEN, DeliveryStatus.PENDING_APPROVAL
+            ):
                 return False, "המשלוח כבר נתפס על ידי שליח אחר", None
+
+            # שלב 4: משלוח של תחנה חייב לעבור דרך זרימת אישור — אסור לתפוס ישירות
+            if delivery.station_id and delivery.status == DeliveryStatus.OPEN:
+                return False, "משלוח של תחנה חייב לעבור אישור סדרן", None
+
+            # שלב 4: אם הסטטוס PENDING_APPROVAL — לוודא שהשליח הוא מי שביקש
+            if delivery.status == DeliveryStatus.PENDING_APPROVAL:
+                if delivery.requesting_courier_id != courier_id:
+                    return False, "המשלוח ממתין לאישור עבור שליח אחר", None
 
             # 3. Lock courier wallet
             wallet_result = await self.db.execute(
@@ -135,14 +157,21 @@ class CaptureService:
             # Queue notification messages via outbox
             await self.outbox_service.queue_capture_notification(delivery, courier_id)
 
-            # 8. Commit transaction
-            await self.db.commit()
-            await self.db.refresh(delivery)
+            # 8. Commit או flush — כשנקרא מ-workflow, הקורא מנהל את הטרנזקציה
+            if auto_commit:
+                await self.db.commit()
+                await self.db.refresh(delivery)
+            else:
+                # flush כותב ל-DB בתוך הטרנזקציה (ללא commit)
+                # כך ש-refresh מהקורא יראה את השינויים
+                await self.db.flush()
 
             return True, f"המשלוח נתפס בהצלחה! עמלה: {fee}₪, יתרה חדשה: {future_balance}₪", delivery
 
         except Exception as e:
-            await self.db.rollback()
+            # rollback רק כש-auto_commit=True — אחרת הקורא מנהל את הטרנזקציה
+            if auto_commit:
+                await self.db.rollback()
             raise CaptureError(f"שגיאה בתפיסת המשלוח: {str(e)}")
 
     async def release_delivery(

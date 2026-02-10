@@ -53,8 +53,15 @@ class DeliveryService:
         self.db.add(delivery)
         await self.db.flush()  # Get delivery ID
 
-        # Queue broadcast messages via outbox (transactional)
-        await self.outbox_service.queue_delivery_broadcast(delivery)
+        # שלב 4: שליפת תחנה אם קיימת — לשידור לקבוצה ציבורית
+        station = None
+        if station_id:
+            from app.domain.services.station_service import StationService
+            station_service = StationService(self.db)
+            station = await station_service.get_station(station_id)
+
+        # שידור דרך outbox (לקבוצת תחנה או ברודקאסט פרטני)
+        await self.outbox_service.queue_delivery_broadcast(delivery, station)
 
         await self.db.commit()
         await self.db.refresh(delivery)

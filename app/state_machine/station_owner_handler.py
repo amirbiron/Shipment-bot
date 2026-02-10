@@ -79,6 +79,11 @@ class StationOwnerStateHandler:
             StationOwnerState.ADD_BLACKLIST_PHONE.value: self._handle_add_blacklist_phone,
             StationOwnerState.ADD_BLACKLIST_REASON.value: self._handle_add_blacklist_reason,
             StationOwnerState.REMOVE_BLACKLIST_SELECT.value: self._handle_remove_blacklist,
+
+            # שלב 4: הגדרות קבוצות
+            StationOwnerState.GROUP_SETTINGS.value: self._handle_group_settings,
+            StationOwnerState.SET_PUBLIC_GROUP.value: self._handle_set_public_group,
+            StationOwnerState.SET_PRIVATE_GROUP.value: self._handle_set_private_group,
         }
         return handlers.get(state, self._handle_unknown)
 
@@ -99,6 +104,7 @@ class StationOwnerStateHandler:
             keyboard=[
                 ["👥 ניהול סדרנים", "💰 ארנק תחנה"],
                 ["📊 דוח גבייה", "🚫 רשימה שחורה"],
+                ["⚙️ הגדרות קבוצות"],
             ],
             inline=True
         )
@@ -119,6 +125,9 @@ class StationOwnerStateHandler:
 
         if "רשימה שחורה" in msg or "חסימה" in msg or "שחורה" in msg:
             return await self._show_blacklist(user, context)
+
+        if "הגדרות קבוצות" in msg or "קבוצות" in msg:
+            return await self._show_group_settings(user, context)
 
         return await self._show_menu(user, context)
 
@@ -484,6 +493,124 @@ class StationOwnerStateHandler:
             keyboard=[["🔙 חזרה"]]
         )
         return response, StationOwnerState.REMOVE_BLACKLIST_SELECT.value, {}
+
+    # ==================== שלב 4: הגדרות קבוצות ====================
+
+    async def _show_group_settings(self, user: User, context: dict):
+        """הצגת הגדרות קבוצות תחנה"""
+        from app.db.models.station import Station
+
+        result = await self.db.execute(
+            select(Station).where(Station.id == self.station_id)
+        )
+        station = result.scalar_one_or_none()
+
+        public_id = station.public_group_chat_id if station else None
+        private_id = station.private_group_chat_id if station else None
+
+        text = "⚙️ <b>הגדרות קבוצות</b>\n\n"
+        text += f"📢 קבוצה ציבורית (שידור): {escape(public_id or 'לא מוגדרת')}\n"
+        text += f"🔒 קבוצה פרטית (כרטיסים סגורים): {escape(private_id or 'לא מוגדרת')}\n\n"
+        text += "בחר פעולה:"
+
+        response = MessageResponse(
+            text,
+            keyboard=[
+                ["📢 הגדרת קבוצה ציבורית", "🔒 הגדרת קבוצה פרטית"],
+                ["🔙 חזרה לתפריט"],
+            ]
+        )
+        return response, StationOwnerState.GROUP_SETTINGS.value, {}
+
+    async def _handle_group_settings(
+        self, user: User, message: str, context: dict
+    ):
+        """תפריט הגדרות קבוצות"""
+        if "חזרה" in message:
+            return await self._show_menu(user, context)
+
+        if "ציבורית" in message:
+            response = MessageResponse(
+                "📢 <b>הגדרת קבוצה ציבורית</b>\n\n"
+                "הזן את מזהה הקבוצה (Chat ID).\n\n"
+                "💡 כדי לקבל את מזהה הקבוצה:\n"
+                "1. הוסף את הבוט לקבוצה\n"
+                "2. שלח הודעה בקבוצה\n"
+                "3. המזהה יופיע בלוגים של הבוט\n\n"
+                "הזן מזהה (לדוגמה: -1001234567890):"
+            )
+            return response, StationOwnerState.SET_PUBLIC_GROUP.value, {}
+
+        if "פרטית" in message:
+            response = MessageResponse(
+                "🔒 <b>הגדרת קבוצה פרטית</b>\n\n"
+                "הזן את מזהה הקבוצה הפרטית (Chat ID).\n"
+                "כרטיסים סגורים ישלחו לקבוצה זו.\n\n"
+                "הזן מזהה (לדוגמה: -1001234567890):"
+            )
+            return response, StationOwnerState.SET_PRIVATE_GROUP.value, {}
+
+        return await self._show_group_settings(user, context)
+
+    async def _handle_set_public_group(
+        self, user: User, message: str, context: dict
+    ):
+        """קבלת מזהה קבוצה ציבורית"""
+        if "חזרה" in message:
+            return await self._show_group_settings(user, context)
+
+        chat_id = message.strip()
+        # ולידציה בסיסית — מזהה קבוצה הוא מספר (שלילי בטלגרם) או מחרוזת
+        if not chat_id:
+            response = MessageResponse("מזהה קבוצה ריק. אנא הזן מזהה תקין:")
+            return response, StationOwnerState.SET_PUBLIC_GROUP.value, {}
+
+        # זיהוי פלטפורמה — מזהי טלגרם מתחילים ב-"-" או ספרות, WhatsApp מכיל "@g.us"
+        platform = "whatsapp" if "@g.us" in chat_id else "telegram"
+
+        success, msg = await self.station_service.update_station_groups(
+            self.station_id,
+            public_group_chat_id=chat_id,
+            public_group_platform=platform,
+        )
+
+        response = MessageResponse(
+            msg,
+            keyboard=[
+                ["📢 הגדרת קבוצה ציבורית", "🔒 הגדרת קבוצה פרטית"],
+                ["🔙 חזרה לתפריט"],
+            ]
+        )
+        return response, StationOwnerState.GROUP_SETTINGS.value, {}
+
+    async def _handle_set_private_group(
+        self, user: User, message: str, context: dict
+    ):
+        """קבלת מזהה קבוצה פרטית"""
+        if "חזרה" in message:
+            return await self._show_group_settings(user, context)
+
+        chat_id = message.strip()
+        if not chat_id:
+            response = MessageResponse("מזהה קבוצה ריק. אנא הזן מזהה תקין:")
+            return response, StationOwnerState.SET_PRIVATE_GROUP.value, {}
+
+        platform = "whatsapp" if "@g.us" in chat_id else "telegram"
+
+        success, msg = await self.station_service.update_station_groups(
+            self.station_id,
+            private_group_chat_id=chat_id,
+            private_group_platform=platform,
+        )
+
+        response = MessageResponse(
+            msg,
+            keyboard=[
+                ["📢 הגדרת קבוצה ציבורית", "🔒 הגדרת קבוצה פרטית"],
+                ["🔙 חזרה לתפריט"],
+            ]
+        )
+        return response, StationOwnerState.GROUP_SETTINGS.value, {}
 
     # ==================== Unknown ====================
 

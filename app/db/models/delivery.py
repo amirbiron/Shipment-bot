@@ -17,6 +17,7 @@ def generate_secure_token():
 
 class DeliveryStatus(str, enum.Enum):
     OPEN = "open"
+    PENDING_APPROVAL = "pending_approval"  # שלב 4: ממתין לאישור סדרן
     CAPTURED = "captured"
     IN_PROGRESS = "in_progress"
     DELIVERED = "delivered"
@@ -55,6 +56,13 @@ class Delivery(Base):
     # תחנה שיצרה את המשלוח (nullable - משלוחים ישירים לא שייכים לתחנה)
     station_id = Column(Integer, ForeignKey("stations.id"), nullable=True, index=True)
 
+    # שלב 4: שדות זרימת אישור משלוח
+    requesting_courier_id = Column(BigInteger, ForeignKey("users.id"), nullable=True)  # שליח שביקש את המשלוח
+    requested_at = Column(DateTime, nullable=True)  # מתי הוגשה הבקשה
+    approved_by_id = Column(BigInteger, ForeignKey("users.id"), nullable=True)  # סדרן שאישר/דחה
+    approved_at = Column(DateTime, nullable=True)  # מתי התקבלה ההחלטה
+    approval_decision = Column(String(20), nullable=True)  # "approved" / "rejected"
+
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
     captured_at = Column(DateTime, nullable=True)
@@ -64,3 +72,5 @@ class Delivery(Base):
     # Relationships
     sender = relationship("User", foreign_keys=[sender_id])
     courier = relationship("User", foreign_keys=[courier_id])
+    requesting_courier = relationship("User", foreign_keys=[requesting_courier_id])
+    approved_by = relationship("User", foreign_keys=[approved_by_id])

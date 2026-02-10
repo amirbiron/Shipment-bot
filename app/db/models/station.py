@@ -24,6 +24,12 @@ class Station(Base):
 
     is_active = Column(Boolean, default=True)
 
+    # שלב 4: קבוצות תחנה לשידור וכרטיסים סגורים
+    public_group_chat_id = Column(String(100), nullable=True)  # קבוצה ציבורית לשידור משלוחים
+    private_group_chat_id = Column(String(100), nullable=True)  # קבוצה פרטית לכרטיסים סגורים
+    public_group_platform = Column(String(20), nullable=True)  # "telegram" / "whatsapp"
+    private_group_platform = Column(String(20), nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

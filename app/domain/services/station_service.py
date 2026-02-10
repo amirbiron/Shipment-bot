@@ -196,6 +196,22 @@ class StationService:
         )
         return result.scalar_one_or_none() is not None
 
+    async def is_dispatcher_of_station(
+        self, user_id: int, station_id: int
+    ) -> bool:
+        """בדיקה אם המשתמש הוא סדרן פעיל בתחנה ספציפית"""
+        result = await self.db.execute(
+            select(StationDispatcher).join(
+                Station, StationDispatcher.station_id == Station.id
+            ).where(
+                StationDispatcher.user_id == user_id,
+                StationDispatcher.station_id == station_id,
+                StationDispatcher.is_active == True,  # noqa: E712
+                Station.is_active == True,  # noqa: E712
+            ).limit(1)
+        )
+        return result.scalar_one_or_none() is not None
+
     # ==================== משלוחי תחנה [3.2] ====================
 
     async def get_station_active_deliveries(
@@ -207,6 +223,7 @@ class StationService:
                 Delivery.station_id == station_id,
                 Delivery.status.in_([
                     DeliveryStatus.OPEN,
+                    DeliveryStatus.PENDING_APPROVAL,  # שלב 4
                     DeliveryStatus.CAPTURED,
                     DeliveryStatus.IN_PROGRESS,
                 ])
@@ -447,6 +464,40 @@ class StationService:
             )
         )
         return result.scalar_one_or_none() is not None
+
+    # ==================== שלב 4: הגדרות קבוצות ====================
+
+    async def update_station_groups(
+        self,
+        station_id: int,
+        public_group_chat_id: str | None = None,
+        public_group_platform: str | None = None,
+        private_group_chat_id: str | None = None,
+        private_group_platform: str | None = None,
+    ) -> tuple[bool, str]:
+        """עדכון מזהי קבוצות של תחנה"""
+        station = await self.get_station(station_id)
+        if not station:
+            return False, "התחנה לא נמצאה."
+
+        if public_group_chat_id is not None:
+            station.public_group_chat_id = public_group_chat_id
+            station.public_group_platform = public_group_platform or "telegram"
+        if private_group_chat_id is not None:
+            station.private_group_chat_id = private_group_chat_id
+            station.private_group_platform = private_group_platform or "telegram"
+
+        await self.db.commit()
+
+        logger.info(
+            "Station groups updated",
+            extra_data={
+                "station_id": station_id,
+                "public_group": public_group_chat_id,
+                "private_group": private_group_chat_id,
+            }
+        )
+        return True, "✅ הגדרות הקבוצה עודכנו בהצלחה."
 
     # ==================== דוח גבייה [3.3] ====================
 

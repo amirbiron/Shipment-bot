@@ -8,6 +8,7 @@ from app.domain.services.outbox_service import OutboxService
 from app.domain.services.admin_notification_service import AdminNotificationService
 from app.domain.services.courier_approval_service import CourierApprovalService
 from app.domain.services.station_service import StationService
+from app.domain.services.shipment_workflow_service import ShipmentWorkflowService
 
 __all__ = [
     "DeliveryService",
@@ -17,4 +18,5 @@ __all__ = [
     "AdminNotificationService",
     "CourierApprovalService",
     "StationService",
+    "ShipmentWorkflowService",
 ]

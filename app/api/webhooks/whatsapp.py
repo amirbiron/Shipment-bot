@@ -570,6 +570,64 @@ def _resolve_admin_send_target(
     return reply_to
 
 
+def _match_delivery_approval_command(text: str) -> tuple[str, int] | None:
+    """
+    שלב 4: זיהוי פקודת אישור/דחיית משלוח בטקסט.
+    מחזיר (action, delivery_id) או None.
+    תומך ב: "אשר משלוח 123", "דחה משלוח 123"
+    """
+    text = text.strip().replace("*", "")
+    text = re.sub(r'[\u200b\u200c\u200d\u200e\u200f\u202a-\u202e\ufeff]', '', text)
+    text = re.sub(r'\s+', ' ', text)
+
+    approve_match = re.match(
+        r'^[✅✔️☑️\s]*(?:אשר|אישור)\s+משלוח\s+(\d+)\s*$', text
+    )
+    if approve_match:
+        return ("approve", int(approve_match.group(1)))
+
+    reject_match = re.match(
+        r'^[❌✖️\s]*(?:דחה|דחייה|דחיה)\s+משלוח\s+(\d+)\s*$', text
+    )
+    if reject_match:
+        return ("reject", int(reject_match.group(1)))
+
+    return None
+
+
+async def _handle_whatsapp_delivery_approval(
+    db: AsyncSession,
+    action: str,
+    delivery_id: int,
+    dispatcher_id: int,
+) -> str:
+    """שלב 4: ביצוע אישור/דחיית משלוח + הודעות"""
+    from app.domain.services.shipment_workflow_service import ShipmentWorkflowService
+
+    workflow = ShipmentWorkflowService(db)
+
+    try:
+        if action == "approve":
+            success, msg, delivery = await workflow.approve_delivery(
+                delivery_id, dispatcher_id
+            )
+        else:
+            success, msg, delivery = await workflow.reject_delivery(
+                delivery_id, dispatcher_id
+            )
+    except Exception as e:
+        # rollback למניעת שינויים חלקיים (flush ללא commit) שנשארים בסשן
+        await db.rollback()
+        logger.error(
+            "Delivery approval/rejection failed",
+            extra_data={"delivery_id": delivery_id, "error": str(e)},
+            exc_info=True,
+        )
+        msg = "❌ שגיאה בעיבוד הבקשה. נסה שוב."
+
+    return msg
+
+
 def _match_approval_command(text: str) -> tuple[str, int] | None:
     """
     זיהוי פקודת אישור/דחייה בטקסט.
@@ -928,7 +986,66 @@ async def whatsapp_webhook(
                         "admin_command": True
                     })
                     continue
-    
+
+            # שלב 4: טיפול בפקודות אישור/דחיית משלוח (סדרנים)
+            if text and not is_new_user:
+                delivery_approval = _match_delivery_approval_command(text)
+                if delivery_approval:
+                    action, delivery_id = delivery_approval
+
+                    # שליפת המשלוח לבדיקת תחנה
+                    from app.domain.services.station_service import StationService
+                    from app.db.models.delivery import Delivery
+                    station_service = StationService(db)
+
+                    delivery_result = await db.execute(
+                        select(Delivery).where(Delivery.id == delivery_id)
+                    )
+                    target_delivery = delivery_result.scalar_one_or_none()
+
+                    # בדיקה שהמשלוח קיים ושייך לתחנה
+                    if not target_delivery or not target_delivery.station_id:
+                        background_tasks.add_task(
+                            send_whatsapp_message, reply_to,
+                            "❌ המשלוח לא נמצא."
+                        )
+                        responses.append({
+                            "from": sender_id,
+                            "response": "❌ המשלוח לא נמצא.",
+                            "delivery_approval": True,
+                        })
+                        continue
+
+                    # בדיקה שהסדרן שייך לתחנה של המשלוח הספציפי
+                    is_disp = await station_service.is_dispatcher_of_station(
+                        user.id, target_delivery.station_id
+                    )
+                    if not is_disp:
+                        background_tasks.add_task(
+                            send_whatsapp_message, reply_to,
+                            "❌ אין לך הרשאה לאשר/לדחות משלוחים בתחנה זו."
+                        )
+                        responses.append({
+                            "from": sender_id,
+                            "response": "❌ אין לך הרשאה לאשר/לדחות משלוחים בתחנה זו.",
+                            "delivery_approval": True,
+                        })
+                        continue
+
+                    approval_msg = await _handle_whatsapp_delivery_approval(
+                        db, action, delivery_id,
+                        dispatcher_id=user.id,
+                    )
+                    background_tasks.add_task(
+                        send_whatsapp_message, reply_to, approval_msg
+                    )
+                    responses.append({
+                        "from": sender_id,
+                        "response": approval_msg,
+                        "delivery_approval": True,
+                    })
+                    continue
+
             # Initialize state manager
             state_manager = StateManager(db)
     

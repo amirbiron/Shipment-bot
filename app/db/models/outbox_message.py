@@ -28,7 +28,7 @@ class OutboxMessage(Base):
     id = Column(Integer, primary_key=True, index=True)
 
     platform = Column(SQLEnum(MessagePlatform), nullable=False)
-    recipient_id = Column(String(50), nullable=False)  # Phone or chat ID
+    recipient_id = Column(String(100), nullable=False)  # Phone, chat ID, or group ID
 
     message_type = Column(String(50), nullable=False)  # e.g., "delivery_broadcast", "confirmation"
     message_content = Column(JSON, nullable=False)
