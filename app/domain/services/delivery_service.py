@@ -56,11 +56,9 @@ class DeliveryService:
         # שלב 4: שליפת תחנה אם קיימת — לשידור לקבוצה ציבורית
         station = None
         if station_id:
-            from app.db.models.station import Station
-            station_result = await self.db.execute(
-                select(Station).where(Station.id == station_id)
-            )
-            station = station_result.scalar_one_or_none()
+            from app.domain.services.station_service import StationService
+            station_service = StationService(self.db)
+            station = await station_service.get_station(station_id)
 
         # שידור דרך outbox (לקבוצת תחנה או ברודקאסט פרטני)
         await self.outbox_service.queue_delivery_broadcast(delivery, station)
