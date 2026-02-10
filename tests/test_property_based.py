@@ -373,7 +373,7 @@ class TestApprovalCommandParsingProperties:
     @h_settings(max_examples=100, deadline=None)
     def test_reject_with_note_preserves_note_content(self, user_id: int, note_text: str):
         """
-        אינווריאנט: הערת הדחייה נשמרת כפי שהוזנה (אחרי strip).
+        אינווריאנט: הערת הדחייה נשמרת כפי שהוזנה (אחרי נרמול).
         """
         # מסננים מקרים שבהם ה-note מכיל תווים שמפריעים לרגקס
         assume("\n" not in note_text)
@@ -385,9 +385,13 @@ class TestApprovalCommandParsingProperties:
         if result is not None:
             action, parsed_id, parsed_note = result
             if action == "reject" and parsed_id == user_id and parsed_note is not None:
-                # ההערה אמורה להתחיל עם אותו תוכן (אחרי נרמול רווחים)
+                # נרמול זהה לפונקציה: הסרת zero-width chars + כיווץ רווחים
                 import re
-                normalized_input = re.sub(r'\s+', ' ', note_text).strip()
+                normalized_input = re.sub(
+                    r'[\u200b\u200c\u200d\u200e\u200f\u202a-\u202e\ufeff]',
+                    '', note_text,
+                )
+                normalized_input = re.sub(r'\s+', ' ', normalized_input).strip()
                 assert parsed_note == normalized_input, (
                     f"הערה השתנתה: '{normalized_input}' -> '{parsed_note}'"
                 )
