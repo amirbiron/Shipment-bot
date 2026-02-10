@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.db.models.delivery import Delivery, DeliveryStatus
 from app.domain.services.outbox_service import OutboxService
@@ -160,7 +161,7 @@ class DeliveryService:
             await self.db.refresh(delivery)
             return delivery
 
-        except Exception as e:
+        except SQLAlchemyError as e:
             logger.error(
                 "כשלון בסימון משלוח כנמסר",
                 extra_data={"delivery_id": delivery_id, "error": str(e)},
