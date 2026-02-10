@@ -110,9 +110,8 @@ class CourierApprovalService:
             )
 
         user.approval_status = ApprovalStatus.REJECTED
-        # שמירת הערת דחייה (אם סופקה)
-        if rejection_note:
-            user.rejection_note = rejection_note
+        # שמירת הערת דחייה — תמיד מעדכנים (גם None) למניעת הערה ישנה שנשארת
+        user.rejection_note = rejection_note
         await db.commit()
 
         logger.info(
