@@ -218,6 +218,9 @@ class ShipmentWorkflowService:
         if delivery.status != DeliveryStatus.PENDING_APPROVAL:
             return False, "המשלוח לא ממתין לאישור.", None
 
+        if not delivery.requesting_courier_id:
+            return False, "אין שליח מבקש למשלוח זה.", None
+
         # אימות שהסדרן שייך לתחנה (is_dispatcher_of_station תומך בסדרן מרובה-תחנות)
         if delivery.station_id:
             is_disp = await self.station_service.is_dispatcher_of_station(
