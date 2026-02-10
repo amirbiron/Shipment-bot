@@ -54,14 +54,15 @@ def approval_command_text(draw):
     """יוצר טקסט פקודת אישור/דחייה אקראית תקינה"""
     action = draw(sampled_from(["approve", "reject"]))
     user_id = draw(integers(min_value=1, max_value=999999))
-    emoji = draw(sampled_from(["", "✅ ", "✔️ ", "☑️ ", "❌ ", "✖️ "]))
     prefix = draw(sampled_from(["", "שליח ", "נהג "]))
     bold = draw(sampled_from(["", "*"]))
 
     if action == "approve":
+        emoji = draw(sampled_from(["", "✅ ", "✔️ ", "☑️ "]))
         verb = draw(sampled_from(["אשר", "אישור"]))
         return f"{bold}{emoji}{verb} {prefix}{user_id}{bold}"
     else:
+        emoji = draw(sampled_from(["", "❌ ", "✖️ "]))
         verb = draw(sampled_from(["דחה", "דחייה", "דחיה"]))
         note = draw(one_of(just(""), just(" התמונות לא ברורות"), just(" חסר מסמך")))
         return f"{bold}{emoji}{verb} {prefix}{user_id}{note}{bold}"
