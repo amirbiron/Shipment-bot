@@ -69,5 +69,8 @@ htmlcov/
 # pytest
 .pytest_cache/
 
+# hypothesis
+.hypothesis/
+
 # mypy
 .mypy_cache/
