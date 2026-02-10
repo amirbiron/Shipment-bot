@@ -149,9 +149,8 @@ async def request_otp(
         })
         return ActionResponse(success=True, message=_OTP_GENERIC_RESPONSE)
 
-    # יצירת ושמירת OTP
+    # יצירת OTP
     otp = generate_otp()
-    await store_otp(user.id, otp)
 
     # שליחת OTP דרך הבוט — לפי הפלטפורמה של המשתמש
     otp_message = (
@@ -177,6 +176,9 @@ async def request_otp(
         message_content={"message_text": otp_message},
     )
     await db.commit()
+
+    # שמירת OTP ב-Redis רק אחרי commit מוצלח — מבטיח שההודעה באמת תישלח
+    await store_otp(user.id, otp)
 
     logger.info(
         "OTP requested for panel login",
