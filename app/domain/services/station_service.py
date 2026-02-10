@@ -550,7 +550,7 @@ class StationService:
     # ==================== דוח גבייה [3.3] ====================
 
     @staticmethod
-    def _get_billing_cycle_start() -> datetime:
+    def get_billing_cycle_start() -> datetime:
         """חישוב תחילת מחזור החיוב הנוכחי (28 לחודש)"""
         now = datetime.utcnow()
         if now.day >= 28:
@@ -570,30 +570,45 @@ class StationService:
         דוח גבייה - רשימת נהגים שחייבים כסף לתחנה במחזור הנוכחי.
 
         מחזור חיוב: מה-28 בחודש הקודם עד ה-28 בחודש הנוכחי.
+        מדליגט ל-get_collection_report_for_period למניעת כפילות קוד.
         """
-        cycle_start = self._get_billing_cycle_start()
+        cycle_start = self.get_billing_cycle_start()
+        return await self.get_collection_report_for_period(station_id, cycle_start)
 
-        # קבלת חיובים שלא שולמו ממחזור החיוב הנוכחי בלבד
-        result = await self.db.execute(
-            select(ManualCharge).where(
-                ManualCharge.station_id == station_id,
-                ManualCharge.created_at >= cycle_start,
-                ManualCharge.is_paid == False,  # noqa: E712 — שלב 5: סינון חיובים ששולמו
-            ).order_by(ManualCharge.created_at.desc())
+    async def get_collection_report_for_period(
+        self, station_id: int, cycle_start: datetime, cycle_end: Optional[datetime] = None,
+    ) -> List[dict]:
+        """
+        דוח גבייה לתקופה — רשימת נהגים שחייבים כסף לתחנה.
+
+        מחזיר רשימה עם driver_name, total_debt, charge_count.
+        אם cycle_end לא סופק — ללא גבול עליון.
+        """
+        query = select(ManualCharge).where(
+            ManualCharge.station_id == station_id,
+            ManualCharge.created_at >= cycle_start,
+            ManualCharge.is_paid == False,  # noqa: E712 — שלב 5: סינון חיובים ששולמו
         )
+        if cycle_end is not None:
+            query = query.where(ManualCharge.created_at < cycle_end)
+        query = query.order_by(ManualCharge.created_at.desc())
+
+        result = await self.db.execute(query)
         charges = list(result.scalars().all())
 
         # קיבוץ לפי שם נהג
-        report: dict[str, float] = {}
+        report: dict[str, dict] = {}
         for charge in charges:
-            if charge.driver_name not in report:
-                report[charge.driver_name] = 0.0
-            report[charge.driver_name] += charge.amount
+            name = charge.driver_name
+            if name not in report:
+                report[name] = {"total_debt": 0.0, "charge_count": 0}
+            report[name]["total_debt"] += charge.amount
+            report[name]["charge_count"] += 1
 
         return [
-            {"driver_name": name, "total_debt": total}
-            for name, total in report.items()
-            if total > 0
+            {"driver_name": name, "total_debt": data["total_debt"], "charge_count": data["charge_count"]}
+            for name, data in report.items()
+            if data["total_debt"] > 0
         ]
 
     # ==================== שלב 5: חסימה אוטומטית ====================
@@ -605,7 +620,7 @@ class StationService:
         מקבל current_cycle כדי למנוע חוסר עקביות בקריאות utcnow נפרדות.
         """
         if current_cycle is None:
-            current_cycle = StationService._get_billing_cycle_start()
+            current_cycle = StationService.get_billing_cycle_start()
         if current_cycle.month == 1:
             return current_cycle.replace(year=current_cycle.year - 1, month=12)
         return current_cycle.replace(month=current_cycle.month - 1)
@@ -621,7 +636,7 @@ class StationService:
         Returns:
             רשימת נהגים שנחסמו, כל אחד כ-dict עם courier_id ו-driver_name.
         """
-        current_cycle_start = self._get_billing_cycle_start()
+        current_cycle_start = self.get_billing_cycle_start()
         previous_cycle_start = self._get_previous_billing_cycle_start(current_cycle_start)
 
         # שליפת כל החיובים שלא שולמו עם courier_id ידוע ב-2 המחזורים האחרונים

@@ -1,0 +1,26 @@
+"""
+Panel API Routes — פאנל ניהול תחנה בווב
+
+כל ה-endpoints דורשים אימות JWT (get_current_station_owner).
+"""
+from fastapi import APIRouter
+
+from app.api.routes.panel.auth import router as auth_router
+from app.api.routes.panel.dashboard import router as dashboard_router
+from app.api.routes.panel.dispatchers import router as dispatchers_router
+from app.api.routes.panel.deliveries import router as deliveries_router
+from app.api.routes.panel.wallet import router as wallet_router
+from app.api.routes.panel.blacklist import router as blacklist_router
+from app.api.routes.panel.reports import router as reports_router
+from app.api.routes.panel.groups import router as groups_router
+
+router = APIRouter()
+
+router.include_router(auth_router, prefix="/auth", tags=["Panel - אימות"])
+router.include_router(dashboard_router, prefix="/dashboard", tags=["Panel - דשבורד"])
+router.include_router(dispatchers_router, prefix="/dispatchers", tags=["Panel - סדרנים"])
+router.include_router(deliveries_router, prefix="/deliveries", tags=["Panel - משלוחים"])
+router.include_router(wallet_router, prefix="/wallet", tags=["Panel - ארנק"])
+router.include_router(blacklist_router, prefix="/blacklist", tags=["Panel - רשימה שחורה"])
+router.include_router(reports_router, prefix="/reports", tags=["Panel - דוחות"])
+router.include_router(groups_router, prefix="/groups", tags=["Panel - קבוצות"])

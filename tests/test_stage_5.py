@@ -298,7 +298,7 @@ class TestAutoBlocking:
         service = StationService(db_session)
 
         # חישוב תאריכים — נוצרים חיובים בשני מחזורים
-        current_cycle = service._get_billing_cycle_start()
+        current_cycle = service.get_billing_cycle_start()
         previous_cycle = service._get_previous_billing_cycle_start()
 
         # חיוב במחזור הקודם
@@ -351,7 +351,7 @@ class TestAutoBlocking:
         )
 
         service = StationService(db_session)
-        current_cycle = service._get_billing_cycle_start()
+        current_cycle = service.get_billing_cycle_start()
 
         # חיוב רק במחזור הנוכחי
         await manual_charge_factory(
@@ -389,7 +389,7 @@ class TestAutoBlocking:
         )
 
         service = StationService(db_session)
-        current_cycle = service._get_billing_cycle_start()
+        current_cycle = service.get_billing_cycle_start()
         previous_cycle = service._get_previous_billing_cycle_start()
 
         # חיובים בשני מחזורים — אבל שולמו
@@ -446,7 +446,7 @@ class TestAutoBlocking:
         await db_session.commit()
 
         service = StationService(db_session)
-        current_cycle = service._get_billing_cycle_start()
+        current_cycle = service.get_billing_cycle_start()
         previous_cycle = service._get_previous_billing_cycle_start()
 
         await manual_charge_factory(
@@ -486,7 +486,7 @@ class TestAutoBlocking:
         )
 
         service = StationService(db_session)
-        current_cycle = service._get_billing_cycle_start()
+        current_cycle = service.get_billing_cycle_start()
         previous_cycle = service._get_previous_billing_cycle_start()
 
         # חיובים ללא courier_id (ישנים לפני שלב 5)
@@ -534,7 +534,7 @@ class TestAutoBlocking:
         )
 
         service = StationService(db_session)
-        current_cycle = service._get_billing_cycle_start()
+        current_cycle = service.get_billing_cycle_start()
         previous_cycle = service._get_previous_billing_cycle_start()
 
         # חיובים ב-2 מחזורים בתחנה א בלבד
@@ -576,21 +576,21 @@ class TestBillingCycle:
         """אחרי ה-28 — מחזור התחיל ב-28 בחודש הנוכחי"""
         with patch("app.domain.services.station_service.datetime") as mock_dt:
             mock_dt.utcnow.return_value = datetime(2025, 3, 29, 12, 0, 0)
-            result = StationService._get_billing_cycle_start()
+            result = StationService.get_billing_cycle_start()
             assert result == datetime(2025, 3, 28, 0, 0, 0)
 
     def test_billing_cycle_start_before_28th(self):
         """לפני ה-28 — מחזור התחיל ב-28 בחודש הקודם"""
         with patch("app.domain.services.station_service.datetime") as mock_dt:
             mock_dt.utcnow.return_value = datetime(2025, 3, 15, 12, 0, 0)
-            result = StationService._get_billing_cycle_start()
+            result = StationService.get_billing_cycle_start()
             assert result == datetime(2025, 2, 28, 0, 0, 0)
 
     def test_billing_cycle_january_wraps_to_december(self):
         """ינואר לפני 28 — מחזור התחיל בדצמבר של שנה קודמת"""
         with patch("app.domain.services.station_service.datetime") as mock_dt:
             mock_dt.utcnow.return_value = datetime(2025, 1, 15, 12, 0, 0)
-            result = StationService._get_billing_cycle_start()
+            result = StationService.get_billing_cycle_start()
             assert result == datetime(2024, 12, 28, 0, 0, 0)
 
     def test_previous_billing_cycle_start(self):
