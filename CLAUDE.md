@@ -72,6 +72,24 @@ safe_text = TextSanitizer.sanitize(user_input)
 is_safe, pattern = TextSanitizer.check_for_injection(user_input)
 ```
 
+### הרשאות ומעברי סטטוס
+**חובה לבדוק authorization לפני כל פעולה:**
+
+```python
+# נכון - בדיקת הרשאה מפורשת
+if delivery.sender_id != current_user.id:
+    raise ValidationException("אין הרשאה לבצע פעולה זו")
+
+# נכון - ולידציה של מעבר סטטוס לפני עדכון
+if delivery.status != DeliveryStatus.PENDING:
+    raise ValidationException(
+        f"אי אפשר לאשר משלוח בסטטוס {delivery.status}"
+    )
+```
+
+- **אסור לבצע פעולה בלי לוודא שהמשתמש מורשה** (בעלות על המשאב, תפקיד מתאים)
+- **חובה לוולידציה של סטטוס נוכחי** לפני כל מעבר סטטוס - אל תסמוך על הצד הלקוח
+
 ### מודלים של Pydantic
 **חובה להוסיף field validators לכל מודל Pydantic:**
 
@@ -106,6 +124,29 @@ raise DeliveryNotFoundError(delivery_id=123)
 
 # לא נכון - exception גנרי
 raise Exception("Delivery not found")
+```
+
+**כללים נוספים לטיפול בשגיאות:**
+- **אסור `except Exception: pass`** - חובה לעשות log לכל שגיאה, גם אם ממשיכים
+- **החזר הודעת שגיאה ברורה למשתמש בעברית** - לא traceback או הודעה באנגלית
+- **בכשלון קריטי** (למשל DB + notification) - rollback את כל הטרנזקציה ושלח התראה לאדמין
+
+```python
+# לא נכון - בולע שגיאות
+try:
+    await process_delivery(delivery_id)
+except Exception:
+    pass
+
+# נכון - לוג + הודעה למשתמש + rollback
+try:
+    await process_delivery(delivery_id)
+except Exception as e:
+    logger.error("כשלון בעיבוד משלוח", extra_data={
+        "delivery_id": delivery_id, "error": str(e)
+    }, exc_info=True)
+    await session.rollback()
+    return "אירעה שגיאה, נסה שוב מאוחר יותר"
 ```
 
 ### שירותים חיצוניים
@@ -164,6 +205,32 @@ async def create_delivery(...) -> DeliveryResponse:
     - **pickup_address**: Full address for pickup
     """
 ```
+
+### ביצועים (Performance)
+**אסור N+1 queries** - להשתמש ב-eager loading:
+
+```python
+# לא נכון - N+1: שליפה נפרדת לכל משלוח
+deliveries = await session.execute(select(Delivery))
+for d in deliveries:
+    print(d.sender.name)  # query נוסף לכל שורה
+
+# נכון - eager loading
+from sqlalchemy.orm import joinedload, selectinload
+
+query = select(Delivery).options(
+    joinedload(Delivery.sender),       # יחס one-to-one / many-to-one
+    selectinload(Delivery.status_logs) # יחס one-to-many
+)
+```
+
+- **חובה indexes** על שדות בשימוש תכוף ב-WHERE, JOIN, ORDER BY
+- **להעדיף batch operations** במקום לולאות עם queries בודדים
+
+### ארגון קוד
+- כל endpoint/handler חייב להיות **קצר וקריא**
+- הפרד לוגיקה עסקית לפונקציות נפרדות בשכבת ה-services
+- אסור "פונקציית ענק" - אם handler ארוך מ-~30 שורות, פצל אותו
 
 ---
 
@@ -307,6 +374,16 @@ if not _is_in_multi_step_flow:
 
 ---
 
+## צ'קליסט לפני PR
+
+1. **Self-review** - האם כל הסטנדרטים בקובץ הזה מולאו?
+2. **Concurrency** - מה קורה אם שני משתמשים עושים את אותה פעולה במקביל?
+3. **לוגים** - האם יש מספיק מידע בלוגים כדי לדבג בעיות בפרודקשן?
+4. **הודעות שגיאה** - האם המשתמש מקבל הודעה ברורה בעברית בכל מקרה כשלון?
+5. **בדיקות** - האם יש בדיקות ל-edge cases ול-happy path?
+
+---
+
 ## אסור!
 
 1. **אסור להשתמש ב-`print()`** - להשתמש ב-`logger`
@@ -319,3 +396,7 @@ if not _is_in_multi_step_flow:
 8. **אסור `else` גנרי בניתוב לפי תפקיד** - לטפל בכל `UserRole` במפורש
 9. **אסור `"keyword" in text` ללא guard** - לבדוק `_is_in_multi_step_flow` קודם
 10. **אסור read-modify-write על ארנק בלי `with_for_update()`**
+11. **אסור `except Exception: pass`** - חובה לעשות log לכל שגיאה
+12. **אסור לבצע פעולה בלי בדיקת authorization** - לוודא שהמשתמש מורשה
+13. **אסור מעבר סטטוס בלי ולידציה** - לבדוק סטטוס נוכחי לפני עדכון
+14. **אסור N+1 queries** - להשתמש ב-`joinedload`/`selectinload`
