@@ -85,6 +85,18 @@ class Settings(BaseSettings):
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 480  # 8 שעות
     OTP_EXPIRE_SECONDS: int = 300  # 5 דקות
 
+    @field_validator("JWT_SECRET_KEY", mode="after")
+    @classmethod
+    def validate_jwt_secret(cls, v: str) -> str:
+        """חובה להגדיר JWT_SECRET_KEY בפרודקשן — ערך ריק מאפשר זיוף טוקנים"""
+        if not v:
+            import warnings
+            warnings.warn(
+                "JWT_SECRET_KEY ריק — הפאנל לא יעבוד. הגדר בסביבת הייצור: openssl rand -hex 32",
+                stacklevel=2,
+            )
+        return v
+
     # File Upload
     UPLOAD_DIR: str = "./uploads"
     MAX_FILE_SIZE: int = 10 * 1024 * 1024  # 10MB

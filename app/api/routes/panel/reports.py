@@ -1,6 +1,7 @@
 """
 דוחות — דוח גבייה, דוח הכנסות, ייצוא CSV
 """
+import calendar
 import csv
 import io
 from datetime import datetime
@@ -80,11 +81,14 @@ async def get_collection_report(
     else:
         cs = StationService._get_billing_cycle_start()
 
-    # סוף מחזור — 28 ימים אחרי ההתחלה (בערך)
+    # סוף מחזור — תחילת החודש הבא (מותאם ליום האחרון בחודש)
     if cs.month == 12:
-        ce = cs.replace(year=cs.year + 1, month=1)
+        next_month, next_year = 1, cs.year + 1
     else:
-        ce = cs.replace(month=cs.month + 1)
+        next_month, next_year = cs.month + 1, cs.year
+    # מוודאים שהיום לא חורג מהמקסימום בחודש הבא
+    max_day = calendar.monthrange(next_year, next_month)[1]
+    ce = cs.replace(year=next_year, month=next_month, day=min(cs.day, max_day))
 
     # שליפת חיובים בטווח
     result = await db.execute(

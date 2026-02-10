@@ -33,6 +33,8 @@ class TokenPayload(BaseModel):
 
 def create_access_token(user_id: int, station_id: int, role: str) -> str:
     """יצירת JWT token לפאנל"""
+    if not settings.JWT_SECRET_KEY:
+        raise ValueError("JWT_SECRET_KEY לא מוגדר — אי אפשר ליצור טוקן")
     expire = datetime.utcnow() + timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
     payload = {
         "user_id": user_id,
@@ -50,6 +52,9 @@ def create_access_token(user_id: int, station_id: int, role: str) -> str:
 
 def verify_token(token: str) -> Optional[TokenPayload]:
     """אימות JWT token — מחזיר None אם לא תקין או פג תוקף"""
+    if not settings.JWT_SECRET_KEY:
+        logger.error("JWT_SECRET_KEY ריק — טוקנים לא יאומתו")
+        return None
     try:
         payload = pyjwt.decode(
             token,
@@ -57,7 +62,11 @@ def verify_token(token: str) -> Optional[TokenPayload]:
             algorithms=[settings.JWT_ALGORITHM],
         )
         return TokenPayload(**payload)
-    except (pyjwt.InvalidTokenError, Exception):
+    except pyjwt.InvalidTokenError:
+        logger.warning("JWT token invalid or expired")
+        return None
+    except (KeyError, ValueError) as e:
+        logger.warning("JWT payload malformed", extra_data={"error": str(e)})
         return None
 
 

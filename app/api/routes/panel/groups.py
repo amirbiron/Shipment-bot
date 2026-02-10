@@ -3,7 +3,7 @@
 """
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -102,4 +102,9 @@ async def update_group_settings(
         private_group_chat_id=data.private_group_chat_id,
         private_group_platform=data.private_group_platform,
     )
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=message,
+        )
     return ActionResponse(success=success, message=message)
