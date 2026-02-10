@@ -220,9 +220,9 @@ class TestApprovalWorkflowProperties:
                 )
 
             await db_session.refresh(user)
-            # אם הסטטוס נדחה, ה-rejection_note חייב להיות None או לא-ריק
+            # אם הסטטוס נדחה, ה-rejection_note חייב להיות None או לא-ריק (אחרי strip)
             if user.approval_status == ApprovalStatus.REJECTED:
-                assert user.rejection_note is None or len(user.rejection_note) > 0, (
+                assert user.rejection_note is None or len(user.rejection_note.strip()) > 0, (
                     f"rejection_note לא חוקי: '{user.rejection_note}' "
                     f"(אמור להיות None או מחרוזת לא-ריקה)"
                 )
