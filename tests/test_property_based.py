@@ -149,23 +149,24 @@ class TestApprovalWorkflowProperties:
         suppress_health_check=[HealthCheck.function_scoped_fixture],
         deadline=None,
     )
-    async def test_no_simultaneous_approved_and_rejected(
+    async def test_approved_courier_cannot_become_rejected(
         self, actions: list[str], db_session, user_factory
     ):
         """
-        אינווריאנט: לא ייתכן שמשתמש יהיה גם APPROVED וגם REJECTED.
-        approval_status הוא ערך יחיד ולא אוסף.
+        אינווריאנט: שליח שאושר לא יכול לעבור ל-REJECTED
+        דרך פעולות אישור/דחייה רגילות (ללא חסימת אדמין).
         """
         uid = next(_prop_counter)
         user = await user_factory(
             phone_number=f"tg:sim_{uid}",
-            name="Simultaneous Check",
+            name="No Rollback Check",
             role=UserRole.COURIER,
             platform="telegram",
             telegram_chat_id=f"sim_{uid}",
             approval_status=ApprovalStatus.PENDING,
         )
 
+        was_approved = False
         for action in actions:
             if action == "approve":
                 await CourierApprovalService.approve(db_session, user.id)
@@ -174,11 +175,13 @@ class TestApprovalWorkflowProperties:
                 await CourierApprovalService.reject(db_session, user.id, rejection_note=note)
 
             await db_session.refresh(user)
-            # הסטטוס חייב להיות אחד מהם — לא שניהם בו-זמנית
-            assert not (
-                user.approval_status == ApprovalStatus.APPROVED
-                and user.approval_status == ApprovalStatus.REJECTED
-            ), "סטטוס אמור להיות ערך יחיד, לא שני ערכים בו-זמנית"
+            if user.approval_status == ApprovalStatus.APPROVED:
+                was_approved = True
+            # ברגע שהשליח אושר, הוא לא יכול לחזור ל-REJECTED
+            if was_approved:
+                assert user.approval_status != ApprovalStatus.REJECTED, (
+                    f"שליח שאושר עבר ל-REJECTED אחרי פעולה {action}"
+                )
 
     @pytest.mark.asyncio
     @given(actions=ACTION_SEQUENCES, note=REJECTION_NOTES)
