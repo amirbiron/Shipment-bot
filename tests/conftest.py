@@ -173,6 +173,7 @@ def user_factory(db_session: AsyncSession):
     async def _create_user(
         phone_number: str = "+972501234567",
         name: str = "Test User",
+        full_name: str | None = None,
         role: UserRole = UserRole.SENDER,
         platform: str = "whatsapp",
         telegram_chat_id: str | None = None,
@@ -184,6 +185,7 @@ def user_factory(db_session: AsyncSession):
             id=id if id is not None else _get_next_test_id(),
             phone_number=phone_number,
             name=name,
+            full_name=full_name,
             role=role,
             platform=platform,
             telegram_chat_id=telegram_chat_id,

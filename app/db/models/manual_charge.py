@@ -5,7 +5,7 @@ Manual Charge Model - חיוב ידני
 כולל: שם הנהג, סכום, פרטי המשלוח.
 """
 from datetime import datetime
-from sqlalchemy import Column, Integer, BigInteger, Float, DateTime, ForeignKey, String, Text
+from sqlalchemy import Column, Integer, BigInteger, Float, DateTime, ForeignKey, String, Text, Boolean
 
 from app.db.database import Base
 
@@ -19,9 +19,15 @@ class ManualCharge(Base):
     station_id = Column(Integer, ForeignKey("stations.id"), nullable=False, index=True)
     dispatcher_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
 
+    # קישור לשליח במערכת (nullable - חיובים ישנים ללא קישור)
+    courier_id = Column(BigInteger, ForeignKey("users.id"), nullable=True, index=True)
+
     # פרטי החיוב
     driver_name = Column(String(200), nullable=False)
     amount = Column(Float, nullable=False)
     description = Column(Text, nullable=True)
+
+    # סימון תשלום - לצורך מעקב גבייה וחסימה אוטומטית
+    is_paid = Column(Boolean, default=False, nullable=False)
 
     created_at = Column(DateTime, default=datetime.utcnow)

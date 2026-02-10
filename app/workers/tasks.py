@@ -496,3 +496,56 @@ def cleanup_old_webhook_events(days: int = 7):
             return {"deleted": deleted}
 
     return run_async(_cleanup())
+
+
+@celery_app.task(name="app.workers.tasks.process_billing_cycle_blocking")
+def process_billing_cycle_blocking():
+    """
+    שלב 5: בדיקה יומית — חסימת נהגים שלא שילמו חודשיים רצופים.
+
+    רץ יומית (idempotent) — בודק כל תחנה פעילה ומחסים אוטומטית
+    נהגים עם חיובים שלא שולמו ב-2 מחזורי חיוב רצופים (28 ל-28).
+    """
+    from app.db.models.station import Station
+    from app.domain.services.station_service import StationService
+
+    async def _process():
+        async with get_task_session() as db:
+            result = await db.execute(
+                select(Station).where(Station.is_active == True)  # noqa: E712
+            )
+            stations = list(result.scalars().all())
+
+            total_blocked = 0
+            for station in stations:
+                try:
+                    station_service = StationService(db)
+                    blocked = await station_service.auto_block_unpaid_drivers(
+                        station.id
+                    )
+                    total_blocked += len(blocked)
+                except Exception as e:
+                    logger.error(
+                        "כשלון בבדיקת חסימה אוטומטית לתחנה",
+                        extra_data={
+                            "station_id": station.id,
+                            "error": str(e),
+                        },
+                        exc_info=True,
+                    )
+                    # rollback למניעת דליפת אובייקטים מתחנה שנכשלה לתחנה הבאה
+                    await db.rollback()
+
+            logger.info(
+                "סיום בדיקת חסימה אוטומטית",
+                extra_data={
+                    "stations_processed": len(stations),
+                    "drivers_blocked": total_blocked,
+                }
+            )
+            return {
+                "stations_processed": len(stations),
+                "drivers_blocked": total_blocked,
+            }
+
+    return run_async(_process())

@@ -40,4 +40,9 @@ celery_app.conf.beat_schedule = {
         "task": "app.workers.tasks.cleanup_old_webhook_events",
         "schedule": 86400.0,  # 24 hours
     },
+    # שלב 5: חסימה אוטומטית — בדיקה יומית (idempotent) לנהגים שלא שילמו חודשיים רצופים
+    "process-billing-cycle-blocking-daily": {
+        "task": "app.workers.tasks.process_billing_cycle_blocking",
+        "schedule": 86400.0,  # 24 שעות
+    },
 }

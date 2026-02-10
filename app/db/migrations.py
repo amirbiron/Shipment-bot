@@ -287,6 +287,36 @@ async def add_enum_values(engine: AsyncEngine) -> None:
         logger.info("Ensured 'PENDING_APPROVAL' exists in deliverystatus enum")
 
 
+async def run_migration_007(conn: AsyncConnection) -> None:
+    """מיגרציה 007 - שלב 5: מדיניות פיננסית וחסימה אוטומטית.
+
+    הוספת courier_id ו-is_paid לטבלת חיובים ידניים לצורך:
+    - קישור אמין של חיובים לשליחים במערכת (לחסימה אוטומטית)
+    - מעקב סטטוס תשלום (לדוח גבייה מדויק)
+    """
+    # הוספת עמודת courier_id לחיובים ידניים
+    await conn.execute(text("""
+        ALTER TABLE manual_charges
+            ADD COLUMN IF NOT EXISTS courier_id BIGINT REFERENCES users(id);
+    """))
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_manual_charges_courier
+        ON manual_charges(courier_id);
+    """))
+
+    # הוספת עמודת is_paid למעקב תשלומים
+    await conn.execute(text("""
+        ALTER TABLE manual_charges
+            ADD COLUMN IF NOT EXISTS is_paid BOOLEAN DEFAULT FALSE NOT NULL;
+    """))
+
+    # אינדקס חלקי על חיובים שלא שולמו - לביצועי שאילתות דוח גבייה וחסימה
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_manual_charges_unpaid
+        ON manual_charges(station_id, courier_id) WHERE is_paid = FALSE;
+    """))
+
+
 async def run_all_migrations(conn: AsyncConnection) -> None:
     """הרצת כל המיגרציות ברצף (ללא ALTER TYPE — ראה add_enum_values)."""
     logger.info("Running migration 001...")
@@ -301,3 +331,5 @@ async def run_all_migrations(conn: AsyncConnection) -> None:
     await run_migration_005(conn)
     logger.info("Running migration 006...")
     await run_migration_006(conn)
+    logger.info("Running migration 007...")
+    await run_migration_007(conn)
