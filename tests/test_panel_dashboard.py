@@ -1,6 +1,9 @@
 """
 בדיקות דשבורד פאנל
 """
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
 import pytest
 from app.core.auth import create_access_token
 from app.db.models.user import UserRole
@@ -88,3 +91,38 @@ class TestPanelDashboard:
         """גישה ללא token — 403"""
         response = await test_client.get("/api/panel/dashboard")
         assert response.status_code == 403
+
+
+class TestIsraelTimezone:
+    """בדיקות שעון ישראל — ZoneInfo תומך בשעון קיץ/חורף"""
+
+    @pytest.mark.unit
+    def test_zoneinfo_handles_summer_time(self):
+        """ZoneInfo מחזיר UTC+3 בקיץ (שעון קיץ)"""
+        # 15 ביולי — שעון קיץ בישראל (UTC+3)
+        summer = datetime(2025, 7, 15, 12, 0, tzinfo=ZoneInfo("Asia/Jerusalem"))
+        utc_offset_hours = summer.utcoffset().total_seconds() / 3600
+        assert utc_offset_hours == 3.0
+
+    @pytest.mark.unit
+    def test_zoneinfo_handles_winter_time(self):
+        """ZoneInfo מחזיר UTC+2 בחורף (שעון חורף)"""
+        # 15 בינואר — שעון חורף בישראל (UTC+2)
+        winter = datetime(2025, 1, 15, 12, 0, tzinfo=ZoneInfo("Asia/Jerusalem"))
+        utc_offset_hours = winter.utcoffset().total_seconds() / 3600
+        assert utc_offset_hours == 2.0
+
+    @pytest.mark.unit
+    def test_today_start_differs_by_season(self):
+        """חישוב תחילת היום ב-UTC שונה בין קיץ לחורף"""
+        israel_tz = ZoneInfo("Asia/Jerusalem")
+
+        # חורף: חצות ישראל = 22:00 UTC (UTC+2)
+        winter_midnight = datetime(2025, 1, 15, 0, 0, tzinfo=israel_tz)
+        winter_utc = winter_midnight.astimezone(timezone.utc)
+        assert winter_utc.hour == 22  # 22:00 UTC יום קודם
+
+        # קיץ: חצות ישראל = 21:00 UTC (UTC+3)
+        summer_midnight = datetime(2025, 7, 15, 0, 0, tzinfo=israel_tz)
+        summer_utc = summer_midnight.astimezone(timezone.utc)
+        assert summer_utc.hour == 21  # 21:00 UTC יום קודם

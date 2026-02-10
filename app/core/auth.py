@@ -90,12 +90,15 @@ async def check_otp_cooldown(user_id: int) -> bool:
 
 
 async def store_otp(user_id: int, otp: str) -> None:
-    """שמירת OTP ב-Redis עם TTL + cooldown"""
+    """שמירת OTP ב-Redis עם TTL + cooldown + איפוס מונה ניסיונות"""
     redis = await get_redis()
     key = f"{_OTP_KEY_PREFIX}:{user_id}"
     cooldown_key = f"{_OTP_COOLDOWN_PREFIX}:{user_id}"
+    attempts_key = f"{_OTP_ATTEMPTS_PREFIX}:{user_id}"
     await redis.setex(key, settings.OTP_EXPIRE_SECONDS, otp)
     await redis.setex(cooldown_key, OTP_COOLDOWN_SECONDS, "1")
+    # איפוס מונה ניסיונות — בקשת OTP חדש פותחת חלון ניסיונות מחדש
+    await redis.delete(attempts_key)
     logger.info("OTP stored", extra_data={"user_id": user_id})
 
 
@@ -115,7 +118,7 @@ async def _increment_otp_attempts(user_id: int) -> None:
     attempts_key = f"{_OTP_ATTEMPTS_PREFIX}:{user_id}"
     count = await redis.get(attempts_key)
     new_count = int(count) + 1 if count else 1
-    # TTL = זמן חיי ה-OTP, מתאפס כשמבקשים OTP חדש
+    # TTL = זמן חיי ה-OTP; המונה נמחק ב-store_otp כשמבקשים OTP חדש
     await redis.setex(attempts_key, settings.OTP_EXPIRE_SECONDS, str(new_count))
 
 

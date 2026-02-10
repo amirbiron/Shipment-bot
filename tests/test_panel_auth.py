@@ -321,3 +321,18 @@ class TestOTPRateLimiting:
         # אימות נכון
         result = await verify_otp(777, "123456")
         assert result is True
+
+    @pytest.mark.asyncio
+    async def test_new_otp_request_resets_attempts(self):
+        """בקשת OTP חדש מאפסת מונה ניסיונות — תיקון באג חסימה קבועה"""
+        await store_otp(user_id=666, otp="111111")
+        # 5 ניסיונות שגויים — נחסם
+        for _ in range(5):
+            await verify_otp(666, "000000")
+        result_blocked = await verify_otp(666, "111111")
+        assert result_blocked is False  # נחסם
+
+        # בקשת OTP חדש — חייבת לאפס מונה
+        await store_otp(user_id=666, otp="222222")
+        result_after_reset = await verify_otp(666, "222222")
+        assert result_after_reset is True  # עובד שוב
