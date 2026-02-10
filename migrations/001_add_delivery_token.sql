@@ -2,6 +2,9 @@
 -- Date: 2026-01-29
 -- Description: Adds a unique token for smart links (prevents ID guessing)
 
+-- Step 0: Enable pgcrypto extension (needed for gen_random_bytes)
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 -- Step 1: Add the column (nullable first for existing rows)
 ALTER TABLE deliveries
 ADD COLUMN IF NOT EXISTS token VARCHAR(32);
