@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { type ColumnDef } from "@tanstack/react-table";
 import {
@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/use-toast";
 import { formatDate } from "@/lib/format";
 import { Trash2, UserPlus, Users } from "lucide-react";
@@ -66,6 +67,9 @@ export default function DispatchersPage() {
       toast({ title: result.success ? "הסדרן הוסר" : "שגיאה", description: result.message });
       queryClient.invalidateQueries({ queryKey: ["dispatchers"] });
     },
+    onError: () => {
+      toast({ title: "שגיאה", description: "אירעה שגיאה בהסרת הסדרן", variant: "destructive" });
+    },
   });
 
   const handleBulkAdd = () => {
@@ -81,7 +85,7 @@ export default function DispatchersPage() {
     bulkMutation.mutate(phones);
   };
 
-  const columns: ColumnDef<Dispatcher, unknown>[] = [
+  const columns = useMemo<ColumnDef<Dispatcher, unknown>[]>(() => [
     { accessorKey: "name", header: "שם" },
     { accessorKey: "phone_masked", header: "טלפון", cell: ({ row }) => (
       <span dir="ltr">{row.original.phone_masked}</span>
@@ -104,7 +108,7 @@ export default function DispatchersPage() {
         </Button>
       ),
     },
-  ];
+  ], []);
 
   return (
     <div className="space-y-6">
@@ -162,13 +166,13 @@ export default function DispatchersPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            <textarea
+            <Textarea
               placeholder="מספר טלפון אחד בכל שורה (מקסימום 50)"
               value={bulkText}
               onChange={(e) => setBulkText(e.target.value)}
               dir="ltr"
               rows={4}
-              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring resize-none"
+              className="resize-none"
             />
             <Button
               onClick={handleBulkAdd}

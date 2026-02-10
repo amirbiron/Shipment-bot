@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { type ColumnDef } from "@tanstack/react-table";
 import {
@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/use-toast";
 import { formatDate } from "@/lib/format";
 import { Trash2, Ban, Users } from "lucide-react";
@@ -75,6 +76,9 @@ export default function BlacklistPage() {
       toast({ title: result.success ? "הוסר מהרשימה השחורה" : "שגיאה", description: result.message });
       queryClient.invalidateQueries({ queryKey: ["blacklist"] });
     },
+    onError: () => {
+      toast({ title: "שגיאה", description: "אירעה שגיאה בהסרה מהרשימה השחורה", variant: "destructive" });
+    },
   });
 
   const handleBulkAdd = () => {
@@ -91,7 +95,7 @@ export default function BlacklistPage() {
     bulkMutation.mutate(entries);
   };
 
-  const columns: ColumnDef<BlacklistItem, unknown>[] = [
+  const columns = useMemo<ColumnDef<BlacklistItem, unknown>[]>(() => [
     { accessorKey: "name", header: "שם" },
     {
       accessorKey: "phone_masked",
@@ -121,7 +125,7 @@ export default function BlacklistPage() {
         </Button>
       ),
     },
-  ];
+  ], []);
 
   return (
     <div className="space-y-6">
@@ -190,12 +194,12 @@ export default function BlacklistPage() {
           <CardContent className="space-y-3">
             <div>
               <Label>מספרי טלפון (אחד בכל שורה, מקסימום 50)</Label>
-              <textarea
+              <Textarea
                 value={bulkText}
                 onChange={(e) => setBulkText(e.target.value)}
                 dir="ltr"
                 rows={4}
-                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring resize-none"
+                className="resize-none"
               />
             </div>
             <div>

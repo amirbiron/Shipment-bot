@@ -1,4 +1,7 @@
 import apiClient from "./client";
+import type { ActionResponse, BulkResultItem } from "./types";
+
+export type { ActionResponse, BulkResultItem };
 
 export interface Dispatcher {
   user_id: number;
@@ -6,17 +9,6 @@ export interface Dispatcher {
   phone_masked: string;
   is_active: boolean;
   created_at: string;
-}
-
-export interface ActionResponse {
-  success: boolean;
-  message: string;
-}
-
-export interface BulkResultItem {
-  phone_masked: string;
-  success: boolean;
-  message: string;
 }
 
 export interface BulkAddResponse {

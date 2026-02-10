@@ -14,13 +14,15 @@ export default function Pagination({
 }: PaginationProps) {
   if (totalPages <= 1) return null;
 
+  // ב-RTL: כיוון "הבא" הוא שמאלה (ChevronLeft), "הקודם" הוא ימינה (ChevronRight)
   return (
     <div className="flex items-center justify-center gap-3 mt-4">
       <Button
         variant="outline"
         size="sm"
-        onClick={() => onPageChange(page + 1)}
-        disabled={page >= totalPages}
+        onClick={() => onPageChange(page - 1)}
+        disabled={page <= 1}
+        aria-label="עמוד קודם"
       >
         <ChevronRight className="h-4 w-4" />
       </Button>
@@ -30,8 +32,9 @@ export default function Pagination({
       <Button
         variant="outline"
         size="sm"
-        onClick={() => onPageChange(page - 1)}
-        disabled={page <= 1}
+        onClick={() => onPageChange(page + 1)}
+        disabled={page >= totalPages}
+        aria-label="עמוד הבא"
       >
         <ChevronLeft className="h-4 w-4" />
       </Button>

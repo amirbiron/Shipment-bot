@@ -1,15 +1,13 @@
 import apiClient from "./client";
+import type { ActionResponse } from "./types";
+
+export type { ActionResponse };
 
 export interface GroupSettings {
   public_group_chat_id: string | null;
   public_group_platform: string | null;
   private_group_chat_id: string | null;
   private_group_platform: string | null;
-}
-
-export interface ActionResponse {
-  success: boolean;
-  message: string;
 }
 
 export interface UpdateGroupSettingsData {

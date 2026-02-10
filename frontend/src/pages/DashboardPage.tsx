@@ -19,6 +19,7 @@ export default function DashboardPage() {
     queryKey: ["dashboard"],
     queryFn: getDashboard,
     refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
   });
 
   if (isLoading) {

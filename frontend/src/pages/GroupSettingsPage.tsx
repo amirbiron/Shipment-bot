@@ -6,11 +6,17 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useToast } from "@/components/ui/use-toast";
 import { Settings } from "lucide-react";
 
 const PLATFORM_OPTIONS = [
-  { value: "", label: "לא הוגדר" },
   { value: "telegram", label: "Telegram" },
   { value: "whatsapp", label: "WhatsApp" },
 ];
@@ -23,21 +29,24 @@ export default function GroupSettingsPage() {
   const [publicPlatform, setPublicPlatform] = useState("");
   const [privateChatId, setPrivateChatId] = useState("");
   const [privatePlatform, setPrivatePlatform] = useState("");
+  const [isDirty, setIsDirty] = useState(false);
 
   const { data, isLoading } = useQuery({
     queryKey: ["groups"],
     queryFn: getGroupSettings,
   });
 
-  // טעינת ערכים מהשרת
+  // טעינת ערכים מהשרת — רק אם המשתמש לא ערך את הטופס
   useEffect(() => {
-    if (data) {
+    if (data && !isDirty) {
       setPublicChatId(data.public_group_chat_id || "");
       setPublicPlatform(data.public_group_platform || "");
       setPrivateChatId(data.private_group_chat_id || "");
       setPrivatePlatform(data.private_group_platform || "");
     }
-  }, [data]);
+  }, [data, isDirty]);
+
+  const markDirty = () => setIsDirty(true);
 
   const mutation = useMutation({
     mutationFn: () =>
@@ -53,6 +62,7 @@ export default function GroupSettingsPage() {
         description: result.message,
         variant: result.success ? "default" : "destructive",
       });
+      setIsDirty(false);
       queryClient.invalidateQueries({ queryKey: ["groups"] });
     },
     onError: () => {
@@ -98,24 +108,28 @@ export default function GroupSettingsPage() {
                     id="public-chat-id"
                     placeholder="מזהה קבוצה"
                     value={publicChatId}
-                    onChange={(e) => setPublicChatId(e.target.value)}
+                    onChange={(e) => { setPublicChatId(e.target.value); markDirty(); }}
                     dir="ltr"
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="public-platform">פלטפורמה</Label>
-                  <select
-                    id="public-platform"
-                    value={publicPlatform}
-                    onChange={(e) => setPublicPlatform(e.target.value)}
-                    className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                  <Label>פלטפורמה</Label>
+                  <Select
+                    value={publicPlatform || undefined}
+                    onValueChange={(v) => { setPublicPlatform(v === "__none__" ? "" : v); markDirty(); }}
                   >
-                    {PLATFORM_OPTIONS.map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
+                    <SelectTrigger>
+                      <SelectValue placeholder="לא הוגדר" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">לא הוגדר</SelectItem>
+                      {PLATFORM_OPTIONS.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
             </div>
@@ -130,24 +144,28 @@ export default function GroupSettingsPage() {
                     id="private-chat-id"
                     placeholder="מזהה קבוצה"
                     value={privateChatId}
-                    onChange={(e) => setPrivateChatId(e.target.value)}
+                    onChange={(e) => { setPrivateChatId(e.target.value); markDirty(); }}
                     dir="ltr"
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="private-platform">פלטפורמה</Label>
-                  <select
-                    id="private-platform"
-                    value={privatePlatform}
-                    onChange={(e) => setPrivatePlatform(e.target.value)}
-                    className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                  <Label>פלטפורמה</Label>
+                  <Select
+                    value={privatePlatform || undefined}
+                    onValueChange={(v) => { setPrivatePlatform(v === "__none__" ? "" : v); markDirty(); }}
                   >
-                    {PLATFORM_OPTIONS.map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
+                    <SelectTrigger>
+                      <SelectValue placeholder="לא הוגדר" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">לא הוגדר</SelectItem>
+                      {PLATFORM_OPTIONS.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
             </div>

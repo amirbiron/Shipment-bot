@@ -1,9 +1,7 @@
 import apiClient from "./client";
+import type { ActionResponse } from "./types";
 
-export interface ActionResponse {
-  success: boolean;
-  message: string;
-}
+export type { ActionResponse };
 
 export interface TokenResponse {
   access_token: string;

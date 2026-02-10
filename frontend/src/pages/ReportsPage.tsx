@@ -114,7 +114,7 @@ export default function ReportsPage() {
             />
 
             {collectionData && collectionData.items.length > 0 && (
-              <div className="text-left border-t border-border pt-3 font-medium">
+              <div className="text-start border-t border-border pt-3 font-medium">
                 סה&quot;כ חוב: {formatCurrency(collectionData.total_debt)}
               </div>
             )}

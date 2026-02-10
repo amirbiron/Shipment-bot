@@ -7,10 +7,18 @@ import DataTable from "@/components/shared/DataTable";
 import Pagination from "@/components/shared/Pagination";
 import StatusBadge from "@/components/shared/StatusBadge";
 import DateRangePicker from "@/components/shared/DateRangePicker";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { formatDate, formatCurrency } from "@/lib/format";
 
 const STATUS_OPTIONS = [
-  { value: "", label: "הכל" },
   { value: "open", label: "פתוח" },
   { value: "captured", label: "נתפס" },
   { value: "delivered", label: "נמסר" },
@@ -87,18 +95,23 @@ export default function DeliveryHistoryPage() {
 
       <div className="flex flex-wrap items-end gap-4 p-4 bg-white rounded-lg border border-border">
         <div className="space-y-1">
-          <label className="text-sm text-muted-foreground">סטטוס</label>
-          <select
-            value={localStatus}
-            onChange={(e) => setLocalStatus(e.target.value)}
-            className="h-9 rounded-md border border-input bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          <Label className="text-muted-foreground">סטטוס</Label>
+          <Select
+            value={localStatus || undefined}
+            onValueChange={(v) => setLocalStatus(v === "__all__" ? "" : v)}
           >
-            {STATUS_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger className="w-[140px]">
+              <SelectValue placeholder="הכל" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">הכל</SelectItem>
+              {STATUS_OPTIONS.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value}>
+                  {opt.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
         <DateRangePicker
           dateFrom={localDateFrom}
@@ -106,12 +119,9 @@ export default function DeliveryHistoryPage() {
           onDateFromChange={setLocalDateFrom}
           onDateToChange={setLocalDateTo}
         />
-        <button
-          onClick={applyFilters}
-          className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90"
-        >
+        <Button onClick={applyFilters}>
           סנן
-        </button>
+        </Button>
       </div>
 
       <DataTable

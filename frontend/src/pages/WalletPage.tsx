@@ -8,6 +8,14 @@ import DateRangePicker from "@/components/shared/DateRangePicker";
 import StatCard from "@/components/shared/StatCard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
 import { formatDateTime, formatCurrency } from "@/lib/format";
 import { Wallet, Percent } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -19,7 +27,6 @@ const ENTRY_TYPE_MAP: Record<string, string> = {
 };
 
 const ENTRY_TYPE_OPTIONS = [
-  { value: "", label: "הכל" },
   { value: "commission_credit", label: "עמלה" },
   { value: "manual_charge", label: "חיוב ידני" },
   { value: "withdrawal", label: "משיכה" },
@@ -102,21 +109,26 @@ export default function WalletPage() {
         <CardContent className="space-y-4">
           <div className="flex flex-wrap items-end gap-4">
             <div className="space-y-1">
-              <label className="text-sm text-muted-foreground">סוג</label>
-              <select
-                value={entryType}
-                onChange={(e) => {
-                  setEntryType(e.target.value);
+              <Label className="text-muted-foreground">סוג</Label>
+              <Select
+                value={entryType || undefined}
+                onValueChange={(v) => {
+                  setEntryType(v === "__all__" ? "" : v);
                   setPage(1);
                 }}
-                className="h-9 rounded-md border border-input bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
               >
-                {ENTRY_TYPE_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger className="w-[160px]">
+                  <SelectValue placeholder="הכל" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__all__">הכל</SelectItem>
+                  {ENTRY_TYPE_OPTIONS.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <DateRangePicker
               dateFrom={dateFrom}

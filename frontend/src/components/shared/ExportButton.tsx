@@ -1,5 +1,6 @@
 import { Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useToast } from "@/components/ui/use-toast";
 import { useState } from "react";
 
 interface ExportButtonProps {
@@ -11,12 +12,15 @@ export default function ExportButton({
   onExport,
   label = "ייצוא CSV",
 }: ExportButtonProps) {
+  const { toast } = useToast();
   const [loading, setLoading] = useState(false);
 
   const handleClick = async () => {
     setLoading(true);
     try {
       await onExport();
+    } catch {
+      toast({ title: "שגיאה בייצוא", variant: "destructive" });
     } finally {
       setLoading(false);
     }

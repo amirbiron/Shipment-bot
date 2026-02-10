@@ -33,6 +33,7 @@ export default function ActiveDeliveriesPage() {
     queryKey: ["deliveries", "active", page],
     queryFn: () => getActiveDeliveries(page),
     refetchInterval: 15_000,
+    refetchIntervalInBackground: false,
   });
 
   return (
