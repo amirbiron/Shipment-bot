@@ -616,6 +616,8 @@ async def _handle_whatsapp_delivery_approval(
                 delivery_id, dispatcher_id
             )
     except Exception as e:
+        # rollback למניעת שינויים חלקיים (flush ללא commit) שנשארים בסשן
+        await db.rollback()
         logger.error(
             "Delivery approval/rejection failed",
             extra_data={"delivery_id": delivery_id, "error": str(e)},
