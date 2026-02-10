@@ -2,8 +2,9 @@
 ייצור דיאגרמות Mermaid מ-state machine enums ו-transitions.
 
 שימוש:
-    python scripts/generate_state_diagrams.py              # הדפסה למסך
+    python scripts/generate_state_diagrams.py                     # הדפסה למסך
     python scripts/generate_state_diagrams.py --update-claude-md  # עדכון CLAUDE.md
+    python scripts/generate_state_diagrams.py --check             # בדיקה שהדיאגרמות מסונכרנות (ל-CI)
 """
 import argparse
 import re
@@ -117,7 +118,6 @@ def _sanitize_id(state_value: str) -> str:
 def generate_mermaid_from_transitions(
     transitions: dict[Any, list[Any]],
     labels: dict[str, str],
-    title: str,
 ) -> str:
     """
     ייצור דיאגרמת stateDiagram-v2 מ-transition dictionary.
@@ -125,7 +125,6 @@ def generate_mermaid_from_transitions(
     Args:
         transitions: מילון מעברים {state: [target_states]}
         labels: מילון תוויות {state_value: "תווית בעברית"}
-        title: כותרת הדיאגרמה
     """
     lines: list[str] = []
     lines.append("stateDiagram-v2")
@@ -205,16 +204,16 @@ def generate_all_diagrams() -> dict[str, str]:
     diagrams: dict[str, str] = {}
 
     diagrams["שולח (SenderState)"] = generate_mermaid_from_transitions(
-        SENDER_TRANSITIONS, SENDER_LABELS, "שולח"
+        SENDER_TRANSITIONS, SENDER_LABELS,
     )
     diagrams["שליח (CourierState)"] = generate_mermaid_from_transitions(
-        COURIER_TRANSITIONS, COURIER_LABELS, "שליח"
+        COURIER_TRANSITIONS, COURIER_LABELS,
     )
     diagrams["סדרן (DispatcherState)"] = generate_mermaid_from_transitions(
-        DISPATCHER_TRANSITIONS, DISPATCHER_LABELS, "סדרן"
+        DISPATCHER_TRANSITIONS, DISPATCHER_LABELS,
     )
     diagrams["בעל תחנה (StationOwnerState)"] = generate_mermaid_from_transitions(
-        STATION_OWNER_TRANSITIONS, STATION_OWNER_LABELS, "בעל תחנה"
+        STATION_OWNER_TRANSITIONS, STATION_OWNER_LABELS,
     )
     diagrams["סטטוס משלוח (DeliveryStatus)"] = generate_delivery_status_diagram()
     diagrams["סטטוס אישור שליח (ApprovalStatus)"] = generate_approval_status_diagram()
@@ -273,6 +272,43 @@ def update_claude_md(markdown_content: str) -> None:
     print(f"עודכן: {claude_md_path}")
 
 
+def check_claude_md(markdown_content: str) -> bool:
+    """
+    בדיקה שהדיאגרמות ב-CLAUDE.md מסונכרנות עם הקוד.
+
+    מחזיר True אם הכל מסונכרן, False אם יש הבדלים.
+    """
+    claude_md_path = Path(__file__).resolve().parent.parent / "CLAUDE.md"
+    content = claude_md_path.read_text(encoding="utf-8")
+
+    start_marker = "<!-- STATE_DIAGRAMS_START -->"
+    end_marker = "<!-- STATE_DIAGRAMS_END -->"
+
+    expected_section = f"{start_marker}\n\n### דיאגרמות מכונת מצבים\n\n{markdown_content}\n{end_marker}"
+
+    if start_marker not in content:
+        print("שגיאה: לא נמצאו סמני דיאגרמות ב-CLAUDE.md")
+        return False
+
+    pattern = re.compile(
+        re.escape(start_marker) + r".*?" + re.escape(end_marker),
+        re.DOTALL,
+    )
+    match = pattern.search(content)
+    if not match:
+        print("שגיאה: לא נמצא בלוק דיאגרמות ב-CLAUDE.md")
+        return False
+
+    current_section = match.group(0)
+    if current_section == expected_section:
+        print("הדיאגרמות מסונכרנות עם הקוד ✓")
+        return True
+
+    print("שגיאה: הדיאגרמות ב-CLAUDE.md אינן מסונכרנות עם הקוד!")
+    print("הרץ: python scripts/generate_state_diagrams.py --update-claude-md")
+    return False
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="ייצור דיאגרמות Mermaid ממכונות המצבים"
@@ -282,12 +318,20 @@ def main() -> None:
         action="store_true",
         help="עדכון אוטומטי של CLAUDE.md עם הדיאגרמות",
     )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="בדיקה שהדיאגרמות ב-CLAUDE.md מסונכרנות עם הקוד (ל-CI)",
+    )
     args = parser.parse_args()
 
     diagrams = generate_all_diagrams()
     markdown = format_diagrams_as_markdown(diagrams)
 
-    if args.update_claude_md:
+    if args.check:
+        is_synced = check_claude_md(markdown)
+        sys.exit(0 if is_synced else 1)
+    elif args.update_claude_md:
         update_claude_md(markdown)
     else:
         print(markdown)

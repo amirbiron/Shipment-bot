@@ -27,6 +27,10 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-asyncio aiosqlite
 
+      - name: Validate state diagrams
+        run: |
+          python scripts/generate_state_diagrams.py --check
+
       - name: Run tests
         run: |
           pytest

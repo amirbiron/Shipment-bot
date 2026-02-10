@@ -14,6 +14,7 @@ from scripts.generate_state_diagrams import (
     generate_approval_status_diagram,
     generate_all_diagrams,
     format_diagrams_as_markdown,
+    check_claude_md,
     _sanitize_id,
     SENDER_LABELS,
     COURIER_LABELS,
@@ -55,7 +56,7 @@ class TestSenderDiagram:
     def test_contains_all_sender_states(self) -> None:
         """כל ה-states של שולח חייבים להופיע בדיאגרמה"""
         mermaid = generate_mermaid_from_transitions(
-            SENDER_TRANSITIONS, SENDER_LABELS, "שולח"
+            SENDER_TRANSITIONS, SENDER_LABELS
         )
         # בודקים states שנמצאים ב-transitions (לא legacy)
         for state in SENDER_TRANSITIONS:
@@ -66,7 +67,7 @@ class TestSenderDiagram:
     def test_contains_all_sender_transitions(self) -> None:
         """כל המעברים חייבים להופיע בדיאגרמה"""
         mermaid = generate_mermaid_from_transitions(
-            SENDER_TRANSITIONS, SENDER_LABELS, "שולח"
+            SENDER_TRANSITIONS, SENDER_LABELS
         )
         for source, targets in SENDER_TRANSITIONS.items():
             source_id = _sanitize_id(source.value)
@@ -78,14 +79,14 @@ class TestSenderDiagram:
     @pytest.mark.unit
     def test_starts_with_state_diagram_v2(self) -> None:
         mermaid = generate_mermaid_from_transitions(
-            SENDER_TRANSITIONS, SENDER_LABELS, "שולח"
+            SENDER_TRANSITIONS, SENDER_LABELS
         )
         assert mermaid.startswith("stateDiagram-v2")
 
     @pytest.mark.unit
     def test_has_initial_state_arrow(self) -> None:
         mermaid = generate_mermaid_from_transitions(
-            SENDER_TRANSITIONS, SENDER_LABELS, "שולח"
+            SENDER_TRANSITIONS, SENDER_LABELS
         )
         assert "[*] --> INITIAL" in mermaid
 
@@ -93,7 +94,7 @@ class TestSenderDiagram:
     def test_has_hebrew_labels(self) -> None:
         """בדיקה שכל ה-states מקבלים תוויות בעברית"""
         mermaid = generate_mermaid_from_transitions(
-            SENDER_TRANSITIONS, SENDER_LABELS, "שולח"
+            SENDER_TRANSITIONS, SENDER_LABELS
         )
         assert "תפריט ראשי" in mermaid
         assert "עיר איסוף" in mermaid
@@ -117,7 +118,7 @@ class TestCourierDiagram:
     @pytest.mark.unit
     def test_contains_all_courier_states(self) -> None:
         mermaid = generate_mermaid_from_transitions(
-            COURIER_TRANSITIONS, COURIER_LABELS, "שליח"
+            COURIER_TRANSITIONS, COURIER_LABELS
         )
         for state in COURIER_TRANSITIONS:
             sanitized = _sanitize_id(state.value)
@@ -126,7 +127,7 @@ class TestCourierDiagram:
     @pytest.mark.unit
     def test_contains_all_courier_transitions(self) -> None:
         mermaid = generate_mermaid_from_transitions(
-            COURIER_TRANSITIONS, COURIER_LABELS, "שליח"
+            COURIER_TRANSITIONS, COURIER_LABELS
         )
         for source, targets in COURIER_TRANSITIONS.items():
             source_id = _sanitize_id(source.value)
@@ -139,7 +140,7 @@ class TestCourierDiagram:
     def test_registration_flow_is_linear(self) -> None:
         """בדיקה שזרימת הרישום היא ליניארית"""
         mermaid = generate_mermaid_from_transitions(
-            COURIER_TRANSITIONS, COURIER_LABELS, "שליח"
+            COURIER_TRANSITIONS, COURIER_LABELS
         )
         assert "COURIER_REGISTER_COLLECT_NAME --> COURIER_REGISTER_COLLECT_DOCUMENT" in mermaid
         assert "COURIER_REGISTER_COLLECT_DOCUMENT --> COURIER_REGISTER_COLLECT_SELFIE" in mermaid
@@ -162,7 +163,7 @@ class TestDispatcherDiagram:
     @pytest.mark.unit
     def test_contains_all_dispatcher_states(self) -> None:
         mermaid = generate_mermaid_from_transitions(
-            DISPATCHER_TRANSITIONS, DISPATCHER_LABELS, "סדרן"
+            DISPATCHER_TRANSITIONS, DISPATCHER_LABELS
         )
         for state in DISPATCHER_TRANSITIONS:
             sanitized = _sanitize_id(state.value)
@@ -171,7 +172,7 @@ class TestDispatcherDiagram:
     @pytest.mark.unit
     def test_contains_all_dispatcher_transitions(self) -> None:
         mermaid = generate_mermaid_from_transitions(
-            DISPATCHER_TRANSITIONS, DISPATCHER_LABELS, "סדרן"
+            DISPATCHER_TRANSITIONS, DISPATCHER_LABELS
         )
         for source, targets in DISPATCHER_TRANSITIONS.items():
             source_id = _sanitize_id(source.value)
@@ -197,7 +198,7 @@ class TestStationOwnerDiagram:
     @pytest.mark.unit
     def test_contains_all_station_states(self) -> None:
         mermaid = generate_mermaid_from_transitions(
-            STATION_OWNER_TRANSITIONS, STATION_OWNER_LABELS, "בעל תחנה"
+            STATION_OWNER_TRANSITIONS, STATION_OWNER_LABELS
         )
         for state in STATION_OWNER_TRANSITIONS:
             sanitized = _sanitize_id(state.value)
@@ -206,7 +207,7 @@ class TestStationOwnerDiagram:
     @pytest.mark.unit
     def test_contains_all_station_transitions(self) -> None:
         mermaid = generate_mermaid_from_transitions(
-            STATION_OWNER_TRANSITIONS, STATION_OWNER_LABELS, "בעל תחנה"
+            STATION_OWNER_TRANSITIONS, STATION_OWNER_LABELS
         )
         for source, targets in STATION_OWNER_TRANSITIONS.items():
             source_id = _sanitize_id(source.value)
@@ -311,3 +312,16 @@ class TestFormatAsMarkdown:
         assert "#### שליח (CourierState)" in markdown
         assert "#### סדרן (DispatcherState)" in markdown
         assert "#### בעל תחנה (StationOwnerState)" in markdown
+
+
+class TestCheckClaudeMd:
+    """בדיקות לפונקציית ולידציה של CLAUDE.md"""
+
+    @pytest.mark.unit
+    def test_check_returns_true_when_synced(self) -> None:
+        """בדיקה שהסנכרון מזוהה נכון כשהקובץ מעודכן"""
+        diagrams = generate_all_diagrams()
+        markdown = format_diagrams_as_markdown(diagrams)
+        # check_claude_md קורא את CLAUDE.md — אם הוא מעודכן צריך לחזור True
+        result = check_claude_md(markdown)
+        assert result is True
