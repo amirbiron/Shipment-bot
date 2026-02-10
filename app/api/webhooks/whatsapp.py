@@ -328,8 +328,10 @@ async def get_or_create_user(
                     },
                 )
             except IntegrityError:
-                # משתמש אחר כבר מחזיק את המספר הזה — ממשיכים עם ה-placeholder
-                await db.rollback()
+                # משתמש אחר כבר מחזיק את המספר הזה — ממשיכים עם ה-placeholder.
+                # אין צורך ב-db.rollback() — ה-savepoint כבר בוטל אוטומטית.
+                # rollback מלא היה מבטל את כל הטרנזקציה ומסיים expired objects.
+                await db.refresh(user_by_sender)
                 logger.warning(
                     "לא ניתן לעדכן phone_number — כבר קיים אצל משתמש אחר",
                     extra_data={
@@ -359,8 +361,8 @@ async def get_or_create_user(
         return user, True, normalized_phone
     except IntegrityError:
         # race condition — משתמש אחר נוצר במקביל עם אותו phone_number.
+        # אין צורך ב-db.rollback() — ה-savepoint כבר בוטל אוטומטית.
         # מבצעים חיפוש מחדש כדי להחזיר את המשתמש הקיים.
-        await db.rollback()
         logger.info(
             "IntegrityError ביצירת משתמש — כנראה נוצר במקביל, מנסה למצוא",
             extra_data={"phone": PhoneNumberValidator.mask(create_identifier)},
