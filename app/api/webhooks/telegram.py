@@ -2,7 +2,6 @@
 Telegram Webhook Handler - Bot Gateway Layer
 """
 import re
-import time
 import hashlib
 from dataclasses import dataclass
 from collections.abc import Awaitable, Callable
@@ -31,26 +30,68 @@ logger = get_logger(__name__)
 
 router = APIRouter()
 
-# ממתין להערות דחייה — ממפה admin_chat_id → (courier_id, timestamp)
-# כאשר מנהל לוחץ "❌ דחה", שומרים כאן את ה-courier_id
+# ממתין להערות דחייה — ממפה admin_chat_id → courier_id ב-Redis.
+# כאשר מנהל לוחץ "❌ דחה", שומרים ב-Redis את ה-courier_id
 # וממתינים להודעת הטקסט הבאה מהמנהל כהערת דחייה.
-# רשומות פגות תוקף אחרי 5 דקות.
-# TODO: בהרצה עם מספר instances (k8s), להעביר ל-Redis כדי שהסטייט ישותף בין תהליכים.
+# רשומות פגות תוקף אוטומטית אחרי 5 דקות (TTL של Redis).
 _REJECTION_NOTE_TTL_SECONDS = 300  # 5 דקות
-_pending_rejection_notes: dict[str, tuple[int, float]] = {}
+_PENDING_REJECTION_KEY_PREFIX = "pending_rejection:"
 
 
-def _get_pending_rejection(admin_chat_id: str) -> int | None:
-    """מחזיר courier_id אם יש דחייה ממתינה תקפה, אחרת None (+ ניקוי)."""
-    entry = _pending_rejection_notes.get(admin_chat_id)
-    if entry is None:
+async def _get_pending_rejection(admin_chat_id: str) -> int | None:
+    """מחזיר courier_id אם יש דחייה ממתינה ב-Redis, אחרת None."""
+    try:
+        from app.core.redis_client import get_redis
+        r = await get_redis()
+        val = await r.get(f"{_PENDING_REJECTION_KEY_PREFIX}{admin_chat_id}")
+        return int(val) if val is not None else None
+    except Exception as e:
+        logger.error("Redis get failed for pending rejection", extra_data={
+            "admin_chat_id": admin_chat_id, "error": str(e),
+        })
         return None
-    courier_id, created_at = entry
-    if time.monotonic() - created_at > _REJECTION_NOTE_TTL_SECONDS:
-        # פג תוקף — מנקים
-        _pending_rejection_notes.pop(admin_chat_id, None)
+
+
+async def _set_pending_rejection(admin_chat_id: str, courier_id: int) -> None:
+    """שומר דחייה ממתינה ב-Redis עם TTL אוטומטי."""
+    try:
+        from app.core.redis_client import get_redis
+        r = await get_redis()
+        await r.setex(
+            f"{_PENDING_REJECTION_KEY_PREFIX}{admin_chat_id}",
+            _REJECTION_NOTE_TTL_SECONDS,
+            str(courier_id),
+        )
+    except Exception as e:
+        logger.error("Redis set failed for pending rejection", extra_data={
+            "admin_chat_id": admin_chat_id, "courier_id": courier_id, "error": str(e),
+        })
+
+
+async def _pop_pending_rejection(admin_chat_id: str) -> int | None:
+    """מחזיר courier_id ומוחק את הרשומה מ-Redis, או None אם אין."""
+    try:
+        from app.core.redis_client import get_redis
+        r = await get_redis()
+        val = await r.getdel(f"{_PENDING_REJECTION_KEY_PREFIX}{admin_chat_id}")
+        return int(val) if val is not None else None
+    except Exception as e:
+        logger.error("Redis pop failed for pending rejection", extra_data={
+            "admin_chat_id": admin_chat_id, "error": str(e),
+        })
         return None
-    return courier_id
+
+
+async def _clear_pending_rejection(admin_chat_id: str) -> None:
+    """מוחק דחייה ממתינה מ-Redis (ללא החזרת ערך)."""
+    try:
+        from app.core.redis_client import get_redis
+        r = await get_redis()
+        await r.delete(f"{_PENDING_REJECTION_KEY_PREFIX}{admin_chat_id}")
+    except Exception as e:
+        logger.error("Redis delete failed for pending rejection", extra_data={
+            "admin_chat_id": admin_chat_id, "error": str(e),
+        })
 
 _SenderButtonHandler: TypeAlias = Callable[
     [User, AsyncSession, StateManager, str, str | None],
@@ -713,7 +754,7 @@ async def telegram_webhook(
 
                 if action == "approve":
                     # ניקוי דחייה ממתינה (אם המנהל לחץ דחה ואז אשר — מבטלים את הדחייה)
-                    _pending_rejection_notes.pop(send_chat_id, None)
+                    await _clear_pending_rejection(send_chat_id)
 
                     result = await CourierApprovalService.approve(db, courier_id)
 
@@ -734,16 +775,15 @@ async def telegram_webhook(
                         )
                 else:
                     # דחייה — אם יש כבר דחייה ממתינה (לחץ על דחייה פעמיים ברצף), דורסים
-                    prev = _pending_rejection_notes.get(send_chat_id)
-                    if prev is not None:
-                        prev_id, _ = prev
+                    prev_id = await _get_pending_rejection(send_chat_id)
+                    if prev_id is not None:
                         background_tasks.add_task(
                             send_telegram_message,
                             send_chat_id,
                             f"⚠️ הדחייה הקודמת (נהג {prev_id}) בוטלה. ממתין להערה על נהג {courier_id}.",
                         )
 
-                    _pending_rejection_notes[send_chat_id] = (courier_id, time.monotonic())
+                    await _set_pending_rejection(send_chat_id, courier_id)
                     background_tasks.add_task(
                         send_telegram_message,
                         send_chat_id,
@@ -835,9 +875,8 @@ async def telegram_webhook(
             }
 
     # טיפול בהערת דחייה ממתינה — מנהל שלחץ "❌ דחה" ושלח הערה
-    pending_courier_id = _get_pending_rejection(send_chat_id) if not event.is_callback else None
+    pending_courier_id = (await _pop_pending_rejection(send_chat_id)) if not event.is_callback else None
     if pending_courier_id is not None:
-        _pending_rejection_notes.pop(send_chat_id, None)
         admin_name = name or "מנהל"
         stripped = text.strip()
         rejection_note = stripped if stripped and stripped != "ללא" else None

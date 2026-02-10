@@ -5,7 +5,6 @@
 שלב 2: מוודא את כל זרימת ה-KYC: שם -> מסמך -> סלפי -> קטגוריית רכב -> תמונת רכב -> תקנון.
 כולל בדיקות לתהליך אישור/דחייה של שליחים.
 """
-import time
 import pytest
 from unittest.mock import AsyncMock, patch
 from httpx import AsyncClient
@@ -1045,10 +1044,10 @@ class TestRejectionNote:
 
     @pytest.mark.asyncio
     async def test_telegram_reject_button_asks_for_note(
-        self, test_client: AsyncClient, user_factory, mock_telegram_api
+        self, test_client: AsyncClient, user_factory, mock_telegram_api, fake_redis
     ):
         """כפתור דחייה בטלגרם מבקש הערה במקום לדחות מיד"""
-        from app.api.webhooks.telegram import _pending_rejection_notes
+        from app.api.webhooks.telegram import _PENDING_REJECTION_KEY_PREFIX
 
         courier = await user_factory(
             phone_number="tg:80005",
@@ -1088,13 +1087,10 @@ class TestRejectionNote:
             assert resp.status_code == 200
             data = resp.json()
             assert data.get("admin_action") == "reject_pending_note"
-            # הנהג עדיין לא נדחה - ממתינים להערה
-            assert admin_chat_id in _pending_rejection_notes
-            courier_id, created_at = _pending_rejection_notes[admin_chat_id]
-            assert courier_id == courier.id
-
-        # ניקוי
-        _pending_rejection_notes.pop(admin_chat_id, None)
+            # הנהג עדיין לא נדחה - ממתינים להערה ב-Redis
+            key = f"{_PENDING_REJECTION_KEY_PREFIX}{admin_chat_id}"
+            stored = fake_redis._store.get(key)
+            assert stored == str(courier.id)
 
     @pytest.mark.asyncio
     async def test_whatsapp_reject_with_note(self):
@@ -1138,39 +1134,52 @@ class TestRejectionNote:
         assert "כבר מאושר" in result.message
 
     @pytest.mark.asyncio
-    async def test_ttl_expiry_clears_pending_rejection(self):
-        """רשומת דחייה ממתינה פגת תוקף אחרי TTL — מוחזר None"""
-        from app.api.webhooks.telegram import (
-            _pending_rejection_notes,
-            _get_pending_rejection,
-            _REJECTION_NOTE_TTL_SECONDS,
-        )
+    async def test_redis_get_returns_none_when_missing(self, fake_redis):
+        """כשאין רשומה ב-Redis — _get_pending_rejection מחזיר None"""
+        from app.api.webhooks.telegram import _get_pending_rejection
 
-        admin_id = "admin_ttl_test"
-        # רשומה שנוצרה לפני TTL+1 שניות — פגת תוקף
-        _pending_rejection_notes[admin_id] = (999, time.monotonic() - _REJECTION_NOTE_TTL_SECONDS - 1)
-
-        result = _get_pending_rejection(admin_id)
+        result = await _get_pending_rejection("nonexistent_admin")
         assert result is None
-        # ניקוי אוטומטי — הרשומה נמחקה מהמילון
-        assert admin_id not in _pending_rejection_notes
 
     @pytest.mark.asyncio
-    async def test_ttl_not_expired_returns_courier_id(self):
-        """רשומת דחייה תקפה (בתוך TTL) — מחזירה courier_id"""
+    async def test_redis_set_and_get_pending_rejection(self, fake_redis):
+        """שמירה ושליפה מ-Redis — _set ו-_get עובדים נכון"""
         from app.api.webhooks.telegram import (
-            _pending_rejection_notes,
+            _set_pending_rejection,
             _get_pending_rejection,
         )
 
-        admin_id = "admin_ttl_valid"
-        _pending_rejection_notes[admin_id] = (555, time.monotonic())
-
-        result = _get_pending_rejection(admin_id)
+        await _set_pending_rejection("admin_123", 555)
+        result = await _get_pending_rejection("admin_123")
         assert result == 555
 
-        # ניקוי
-        _pending_rejection_notes.pop(admin_id, None)
+    @pytest.mark.asyncio
+    async def test_redis_pop_returns_and_deletes(self, fake_redis):
+        """_pop_pending_rejection מחזיר ומוחק אטומית"""
+        from app.api.webhooks.telegram import (
+            _set_pending_rejection,
+            _pop_pending_rejection,
+            _get_pending_rejection,
+        )
+
+        await _set_pending_rejection("admin_pop", 777)
+        result = await _pop_pending_rejection("admin_pop")
+        assert result == 777
+        # הרשומה נמחקה
+        assert await _get_pending_rejection("admin_pop") is None
+
+    @pytest.mark.asyncio
+    async def test_redis_clear_deletes_pending(self, fake_redis):
+        """_clear_pending_rejection מוחק רשומה קיימת"""
+        from app.api.webhooks.telegram import (
+            _set_pending_rejection,
+            _get_pending_rejection,
+            _clear_pending_rejection,
+        )
+
+        await _set_pending_rejection("admin_clear", 888)
+        await _clear_pending_rejection("admin_clear")
+        assert await _get_pending_rejection("admin_clear") is None
 
     @pytest.mark.asyncio
     async def test_html_escaping_in_rejection_note(self, db_session, user_factory):
@@ -1227,10 +1236,10 @@ class TestRejectionNote:
 
     @pytest.mark.asyncio
     async def test_double_reject_click_overwrites_pending(
-        self, db_session, user_factory, test_client
+        self, db_session, user_factory, test_client, fake_redis
     ):
         """מנהל שלוחץ דחה פעמיים — הלחיצה השנייה דורסת את הראשונה"""
-        from app.api.webhooks.telegram import _pending_rejection_notes
+        from app.api.webhooks.telegram import _PENDING_REJECTION_KEY_PREFIX
 
         courier1 = await user_factory(
             phone_number="tg:80030",
@@ -1249,6 +1258,7 @@ class TestRejectionNote:
             approval_status=ApprovalStatus.PENDING,
         )
         admin_chat_id = "99991"
+        key = f"{_PENDING_REJECTION_KEY_PREFIX}{admin_chat_id}"
         with (
             patch.object(settings, "TELEGRAM_ADMIN_CHAT_IDS", admin_chat_id),
             patch.object(settings, "TELEGRAM_ADMIN_CHAT_ID", admin_chat_id),
@@ -1277,9 +1287,7 @@ class TestRejectionNote:
                 },
             )
             assert resp1.status_code == 200
-            assert admin_chat_id in _pending_rejection_notes
-            stored_id_1, _ = _pending_rejection_notes[admin_chat_id]
-            assert stored_id_1 == courier1.id
+            assert fake_redis._store.get(key) == str(courier1.id)
 
             # לחיצה שנייה — דחיית שליח 2, דורסת את הראשונה
             resp2 = await test_client.post(
@@ -1302,18 +1310,14 @@ class TestRejectionNote:
             )
             assert resp2.status_code == 200
             # הרשומה הנוכחית היא של שליח 2
-            stored_id_2, _ = _pending_rejection_notes[admin_chat_id]
-            assert stored_id_2 == courier2.id
-
-        # ניקוי
-        _pending_rejection_notes.pop(admin_chat_id, None)
+            assert fake_redis._store.get(key) == str(courier2.id)
 
     @pytest.mark.asyncio
     async def test_approve_clears_pending_rejection(
-        self, db_session, user_factory, test_client
+        self, db_session, user_factory, test_client, fake_redis
     ):
         """לחיצת אשר אחרי דחה — מנקה את הדחייה הממתינה"""
-        from app.api.webhooks.telegram import _pending_rejection_notes
+        from app.api.webhooks.telegram import _PENDING_REJECTION_KEY_PREFIX
 
         courier1 = await user_factory(
             phone_number="tg:80040",
@@ -1332,6 +1336,7 @@ class TestRejectionNote:
             approval_status=ApprovalStatus.PENDING,
         )
         admin_chat_id = "99992"
+        key = f"{_PENDING_REJECTION_KEY_PREFIX}{admin_chat_id}"
         with (
             patch.object(settings, "TELEGRAM_ADMIN_CHAT_IDS", admin_chat_id),
             patch.object(settings, "TELEGRAM_ADMIN_CHAT_ID", admin_chat_id),
@@ -1360,7 +1365,7 @@ class TestRejectionNote:
                 },
             )
             assert resp1.status_code == 200
-            assert admin_chat_id in _pending_rejection_notes
+            assert key in fake_redis._store
 
             # שלב 2: לחיצה על אשר לשליח 2 — חייבת לנקות את הדחייה הממתינה
             resp2 = await test_client.post(
@@ -1383,7 +1388,4 @@ class TestRejectionNote:
             )
             assert resp2.status_code == 200
             # הדחייה הממתינה נמחקה — הטקסט הבא לא ידחה בטעות את שליח 1
-            assert admin_chat_id not in _pending_rejection_notes
-
-        # ניקוי למקרה שנכשל
-        _pending_rejection_notes.pop(admin_chat_id, None)
+            assert key not in fake_redis._store
