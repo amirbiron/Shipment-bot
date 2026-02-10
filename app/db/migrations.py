@@ -317,6 +317,14 @@ async def run_migration_007(conn: AsyncConnection) -> None:
     """))
 
 
+async def run_migration_008(conn: AsyncConnection) -> None:
+    """מיגרציה 008 - הוספת עמודת rejection_note לטבלת users (הערת דחייה מהמנהל)."""
+    await conn.execute(text("""
+        ALTER TABLE users
+            ADD COLUMN IF NOT EXISTS rejection_note TEXT;
+    """))
+
+
 async def run_all_migrations(conn: AsyncConnection) -> None:
     """הרצת כל המיגרציות ברצף (ללא ALTER TYPE — ראה add_enum_values)."""
     logger.info("Running migration 001...")
@@ -333,3 +341,5 @@ async def run_all_migrations(conn: AsyncConnection) -> None:
     await run_migration_006(conn)
     logger.info("Running migration 007...")
     await run_migration_007(conn)
+    logger.info("Running migration 008...")
+    await run_migration_008(conn)
