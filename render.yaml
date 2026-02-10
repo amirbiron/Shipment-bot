@@ -66,6 +66,7 @@ services:
         sync: false
       - key: WHATSAPP_GATEWAY_URL
         value: "https://shipment-bot-wa-gateway.onrender.com"
+    autoDeploy: true
 
   # =====================================================
   # WhatsApp Gateway (Node.js with Docker for Chrome)
