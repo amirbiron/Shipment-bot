@@ -9,7 +9,7 @@ was created for a different user record each time.
 import pytest
 from httpx import AsyncClient
 
-from app.db.models.user import UserRole, ApprovalStatus
+from app.db.models.user import User, UserRole, ApprovalStatus
 from app.state_machine.states import CourierState
 from app.core.config import settings
 
@@ -682,3 +682,175 @@ async def test_dedup_stale_message_allows_retry(
 
     # עכשיו ההודעה תקועה — retry מותר (commit פנימי)
     assert await _try_acquire_message(db_session, "msg-stale-1", "whatsapp") is True
+
+
+# ============================================================================
+# מניעת כרטיס נהג כפול (notification idempotency)
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_courier_notification_not_sent_twice(
+    test_client: AsyncClient,
+    mock_whatsapp_gateway,
+    db_session,
+):
+    """
+    רגרסיה: כרטיס נהג נשלח פעמיים כשהגטוויי שולח שני webhook calls
+    עבור אותה לחיצת כפתור. הנוטיפיקציה חייבת לרוץ רק פעם אחת.
+    המפתח כולל timestamp (לדקה) כדי להבחין בין רישומים נפרדים.
+    """
+    from app.api.webhooks.whatsapp import _try_acquire_message, _mark_message_completed
+
+    user_id = 42
+    reg_ts = 1000  # מייצג דקה מסוימת
+    notify_key = f"courier_reg_notify_{user_id}_{reg_ts}"
+
+    # ניסיון ראשון — מאפשר שליחה
+    assert await _try_acquire_message(db_session, notify_key, "notification") is True
+    await _mark_message_completed(db_session, notify_key)
+
+    # ניסיון שני עם אותו מפתח — חוסם שליחה כפולה
+    assert await _try_acquire_message(db_session, notify_key, "notification") is False
+
+    # רי-רגיסטרציה (timestamp חדש) — מאפשר שליחה מחדש
+    new_reg_ts = 2000
+    new_notify_key = f"courier_reg_notify_{user_id}_{new_reg_ts}"
+    assert await _try_acquire_message(db_session, new_notify_key, "notification") is True
+
+
+@pytest.mark.asyncio
+async def test_handle_terms_skips_if_already_accepted(
+    db_session,
+):
+    """
+    רגרסיה: אם המשתמש כבר אישר תקנון (terms_accepted_at מוגדר)
+    ה-handler לא צריך לעבד מחדש — צריך להעביר ל-pending_approval.
+    """
+    from datetime import datetime
+    from app.state_machine.handlers import CourierStateHandler
+    from app.state_machine.states import CourierState
+    from app.state_machine.manager import StateManager
+
+    # יצירת משתמש שכבר סיים רישום
+    user = User(
+        phone_number="+972509999888",
+        name="Test Courier",
+        full_name="Test Courier Full",
+        role=UserRole.COURIER,
+        platform="whatsapp",
+        approval_status=ApprovalStatus.PENDING,
+        terms_accepted_at=datetime.utcnow(),
+    )
+    db_session.add(user)
+    await db_session.commit()
+    await db_session.refresh(user)
+
+    # הגדרת state ל-REGISTER_TERMS (מצב לא תקין — כבר אישר)
+    state_manager = StateManager(db_session)
+    await state_manager.force_state(
+        user.id, "whatsapp", CourierState.REGISTER_TERMS.value
+    )
+
+    handler = CourierStateHandler(db_session, platform="whatsapp")
+    response, new_state = await handler.handle_message(user, "קראתי ואני מאשר ✅", None)
+
+    # צריך להחזיר PENDING_APPROVAL (דרך _handle_pending_approval) ולא לעבד מחדש
+    assert new_state == CourierState.PENDING_APPROVAL.value
+    assert "בבדיקה" in response.text or "ממתין" in response.text or "⏳" in response.text
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_user_prefers_real_phone(
+    db_session,
+):
+    """
+    כשיוצרים משתמש חדש עם normalized_phone זמין,
+    ה-phone_number צריך להיות המספר האמיתי (לא wa: placeholder).
+    """
+    from app.api.webhooks.whatsapp import get_or_create_user
+
+    user, is_new, norm_phone = await get_or_create_user(
+        db_session,
+        sender_identifier="some_long_lid_identifier_12345@lid",
+        from_number="972501234567@c.us",
+        reply_to="972501234567@c.us",
+        resolved_phone="972501234567",
+    )
+
+    assert is_new is True
+    # צריך להשתמש במספר האמיתי, לא ב-wa:placeholder
+    assert user.phone_number == "+972501234567"
+    assert norm_phone == "+972501234567"
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_user_heals_placeholder_to_real_phone(
+    db_session,
+):
+    """
+    כשיש משתמש קיים עם wa:placeholder, ויש לנו עכשיו מספר אמיתי,
+    ה-phone_number צריך להתעדכן למספר האמיתי.
+    """
+    from app.api.webhooks.whatsapp import get_or_create_user
+    import hashlib
+
+    # יצירת משתמש עם placeholder
+    sender_raw = "some_stable_sender@lid"
+    digest = hashlib.sha1(sender_raw.encode("utf-8")).hexdigest()[:17]
+    placeholder = f"wa:{digest}"
+
+    existing_user = User(
+        phone_number=placeholder,
+        platform="whatsapp",
+        role=UserRole.SENDER,
+    )
+    db_session.add(existing_user)
+    await db_session.commit()
+    await db_session.refresh(existing_user)
+
+    # חיפוש עם אותו sender_id + מספר אמיתי
+    user, is_new, norm_phone = await get_or_create_user(
+        db_session,
+        sender_identifier=sender_raw,
+        from_number="972509876543@c.us",
+        resolved_phone="972509876543",
+    )
+
+    assert is_new is False
+    assert user.id == existing_user.id
+    # ה-phone_number צריך להתעדכן למספר האמיתי
+    assert user.phone_number == "+972509876543"
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_user_finds_by_real_phone_after_heal(
+    db_session,
+):
+    """
+    אחרי ריפוי phone_number למספר אמיתי, חיפוש עם sender_id חדש
+    צריך למצוא את המשתמש לפי normalized_phone (ולא ליצור כפילות).
+    """
+    from app.api.webhooks.whatsapp import get_or_create_user
+
+    # יצירת משתמש ישירות עם מספר אמיתי (כאילו כבר רופא)
+    existing_user = User(
+        phone_number="+972507777888",
+        platform="whatsapp",
+        role=UserRole.COURIER,
+        approval_status=ApprovalStatus.PENDING,
+    )
+    db_session.add(existing_user)
+    await db_session.commit()
+    await db_session.refresh(existing_user)
+
+    # חיפוש עם sender_id שונה לגמרי אבל אותו מספר טלפון
+    user, is_new, norm_phone = await get_or_create_user(
+        db_session,
+        sender_identifier="completely_new_lid@lid",
+        from_number="972507777888@c.us",
+        resolved_phone="972507777888",
+    )
+
+    assert is_new is False
+    assert user.id == existing_user.id

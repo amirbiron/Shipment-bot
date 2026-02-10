@@ -306,20 +306,78 @@ async def get_or_create_user(
             return user_by_phone, False, normalized_phone
 
     if user_by_sender:
+        # ריפוי: אם למשתמש יש placeholder (wa:...) ועכשיו יש לנו מספר אמיתי —
+        # מעדכנים את phone_number כדי שחיפושים עתידיים לפי מספר אמיתי ימצאו אותו
+        # ויימנעו מיצירת רשומה כפולה.
+        if (
+            normalized_phone
+            and user_by_sender.phone_number
+            and user_by_sender.phone_number.startswith("wa:")
+            and not user_by_phone  # אין משתמש אחר עם המספר הזה
+        ):
+            try:
+                async with db.begin_nested():
+                    user_by_sender.phone_number = normalized_phone
+                await db.commit()
+                await db.refresh(user_by_sender)
+                logger.info(
+                    "עדכון phone_number מ-placeholder למספר אמיתי",
+                    extra_data={
+                        "user_id": user_by_sender.id,
+                        "phone": PhoneNumberValidator.mask(normalized_phone),
+                    },
+                )
+            except IntegrityError:
+                # משתמש אחר כבר מחזיק את המספר הזה — ממשיכים עם ה-placeholder.
+                # אין צורך ב-db.rollback() — ה-savepoint כבר בוטל אוטומטית.
+                # rollback מלא היה מבטל את כל הטרנזקציה ומסיים expired objects.
+                await db.refresh(user_by_sender)
+                logger.warning(
+                    "לא ניתן לעדכן phone_number — כבר קיים אצל משתמש אחר",
+                    extra_data={
+                        "user_id": user_by_sender.id,
+                        "phone": PhoneNumberValidator.mask(normalized_phone),
+                    },
+                )
         return user_by_sender, False, normalized_phone
 
     if user_by_phone:
         return user_by_phone, False, normalized_phone
 
-    # יצירת משתמש חדש — ברירת מחדל: sender_id (יציב). אם הוא ארוך מדי, משתמשים ב-placeholder.
-    create_identifier = (sender_identifier or reply_to or from_number or "").strip()
-    create_identifier = _whatsapp_sender_placeholder(create_identifier)
+    # יצירת משתמש חדש — מעדיפים מספר אמיתי (אם קיים) על פני placeholder
+    # כדי שחיפוש עתידי לפי normalized_phone ימצא את המשתמש ולא ייצור כפילות.
+    if normalized_phone:
+        create_identifier = normalized_phone
+    else:
+        create_identifier = (sender_identifier or reply_to or from_number or "").strip()
+        create_identifier = _whatsapp_sender_placeholder(create_identifier)
 
-    user = User(phone_number=create_identifier, platform="whatsapp", role=UserRole.SENDER)
-    db.add(user)
-    await db.commit()
-    await db.refresh(user)
-    return user, True, normalized_phone
+    try:
+        async with db.begin_nested():
+            user = User(phone_number=create_identifier, platform="whatsapp", role=UserRole.SENDER)
+            db.add(user)
+        await db.commit()
+        await db.refresh(user)
+        return user, True, normalized_phone
+    except IntegrityError:
+        # race condition — משתמש אחר נוצר במקביל עם אותו phone_number.
+        # אין צורך ב-db.rollback() — ה-savepoint כבר בוטל אוטומטית.
+        # מבצעים חיפוש מחדש כדי להחזיר את המשתמש הקיים.
+        logger.info(
+            "IntegrityError ביצירת משתמש — כנראה נוצר במקביל, מנסה למצוא",
+            extra_data={"phone": PhoneNumberValidator.mask(create_identifier)},
+        )
+        result = await db.execute(
+            select(User).where(User.phone_number == create_identifier)
+        )
+        existing = result.scalar_one_or_none()
+        if existing:
+            return existing, False, normalized_phone
+        # לא אמור לקרות — IntegrityError בלי רשומה תואמת.
+        # זורקים שגיאה ברורה כדי שה-webhook ידלג על ההודעה עם לוג מתאים.
+        raise ValueError(
+            f"לא ניתן ליצור או למצוא משתמש עם phone_number={PhoneNumberValidator.mask(create_identifier)}"
+        )
 
 
 async def send_whatsapp_message(
@@ -1446,31 +1504,46 @@ async def whatsapp_webhook(
                 )
     
                 # שליחת "כרטיס נהג" למנהלים רק במעבר הראשון למצב PENDING_APPROVAL
+                # בדיקת idempotency מונעת שליחה כפולה גם במקרה של race condition
+                # (למשל אם הגטוויי שולח את אותה לחיצת כפתור כשני webhook calls נפרדים)
                 if (
                     new_state == CourierState.PENDING_APPROVAL.value
                     and previous_state != CourierState.PENDING_APPROVAL.value
                     and user.approval_status == ApprovalStatus.PENDING
                 ):
-                    # שליפת מסמכים ישירות מה-DB - כל השדות כבר נשמרו בשלבי ה-KYC
-                    contact_phone = _resolve_contact_phone(
-                        resolved_phone=resolved_phone,
-                        from_number=from_number,
-                        reply_to=reply_to,
-                        sender_id=sender_id,
-                        stored_phone=user.phone_number,
-                    )
-                    background_tasks.add_task(
-                        AdminNotificationService.notify_new_courier_registration,
-                        user.id,
-                        user.full_name or user.name or "לא צוין",
-                        user.service_area or "לא צוין",
-                        contact_phone,
-                        user.id_document_url,
-                        "whatsapp",
-                        user.vehicle_category,
-                        user.selfie_file_id,
-                        user.vehicle_photo_file_id,
-                    )
+                    # מפתח idempotency כולל את מועד אישור התקנון (לדקה הקרובה).
+                    # - שני webhook calls מקבילים לאותו רישום → אותה דקה → אותו מפתח → חסימה
+                    # - רי-רגיסטרציה אחרי דחייה → terms_accepted_at חדש → מפתח שונה → מאפשר
+                    reg_ts = int(user.terms_accepted_at.timestamp()) // 60 if user.terms_accepted_at else 0
+                    notify_key = f"courier_reg_notify_{user.id}_{reg_ts}"
+                    should_notify = await _try_acquire_message(db, notify_key, "notification")
+                    if should_notify:
+                        # שליפת מסמכים ישירות מה-DB - כל השדות כבר נשמרו בשלבי ה-KYC
+                        contact_phone = _resolve_contact_phone(
+                            resolved_phone=resolved_phone,
+                            from_number=from_number,
+                            reply_to=reply_to,
+                            sender_id=sender_id,
+                            stored_phone=user.phone_number,
+                        )
+                        background_tasks.add_task(
+                            AdminNotificationService.notify_new_courier_registration,
+                            user.id,
+                            user.full_name or user.name or "לא צוין",
+                            user.service_area or "לא צוין",
+                            contact_phone,
+                            user.id_document_url,
+                            "whatsapp",
+                            user.vehicle_category,
+                            user.selfie_file_id,
+                            user.vehicle_photo_file_id,
+                        )
+                        await _mark_message_completed(db, notify_key)
+                    else:
+                        logger.info(
+                            "כרטיס נהג כבר נשלח, מדלג על שליחה כפולה",
+                            extra_data={"user_id": user.id},
+                        )
     
                 # Check if courier submitted deposit screenshot
                 if photo_file_id:
