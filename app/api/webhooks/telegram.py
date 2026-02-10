@@ -779,8 +779,9 @@ async def telegram_webhook(
                             send_whatsapp_fn=send_whatsapp_message,
                         )
                 else:
-                    # דחייה — אם יש כבר דחייה ממתינה (לחץ על דחייה פעמיים ברצף), דורסים
-                    prev_id = await _get_pending_rejection(send_chat_id)
+                    # דחייה — אם יש כבר דחייה ממתינה (לחץ על דחייה פעמיים ברצף),
+                    # מוחקים אטומית עם pop כדי שכשל ב-_set לא ישאיר ערך ישן
+                    prev_id = await _pop_pending_rejection(send_chat_id)
                     if prev_id is not None:
                         background_tasks.add_task(
                             send_telegram_message,
