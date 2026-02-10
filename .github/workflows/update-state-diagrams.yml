@@ -1,0 +1,54 @@
+name: עדכון דיאגרמות מכונת מצבים
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - "app/state_machine/states.py"
+      - "scripts/generate_state_diagrams.py"
+
+jobs:
+  update-diagrams:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Check if diagrams need updating
+        id: check
+        run: |
+          python scripts/generate_state_diagrams.py --check && echo "synced=true" >> "$GITHUB_OUTPUT" || echo "synced=false" >> "$GITHUB_OUTPUT"
+
+      - name: Update CLAUDE.md diagrams
+        if: steps.check.outputs.synced == 'false'
+        run: |
+          python scripts/generate_state_diagrams.py --update-claude-md
+
+      - name: Commit and push
+        if: steps.check.outputs.synced == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add CLAUDE.md
+          git commit -m "עדכון אוטומטי: דיאגרמות מכונת מצבים ב-CLAUDE.md"
+          git push

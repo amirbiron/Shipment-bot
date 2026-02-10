@@ -29,7 +29,10 @@ jobs:
 
       - name: Validate state diagrams
         run: |
-          python scripts/generate_state_diagrams.py --check
+          python scripts/generate_state_diagrams.py --check || {
+            echo "::error::הדיאגרמות ב-CLAUDE.md אינן מסונכרנות עם הקוד. הריצו: python scripts/generate_state_diagrams.py --update-claude-md"
+            exit 1
+          }
 
       - name: Run tests
         run: |
