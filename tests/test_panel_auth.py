@@ -4,9 +4,10 @@
 import pytest
 
 from app.core.auth import (
-    check_otp_cooldown,
+    check_otp_cooldown_by_phone,
     create_access_token,
     generate_otp,
+    set_otp_cooldown_by_phone,
     store_otp,
     verify_otp,
     verify_token,
@@ -251,6 +252,21 @@ class TestPanelAuthEndpoints:
         assert response2.status_code == 429
 
     @pytest.mark.asyncio
+    async def test_unknown_phone_also_rate_limited(self, test_client):
+        """טלפון לא קיים גם מקבל 429 בבקשה כפולה — מונע enumeration"""
+        # בקשה ראשונה — 200 גנרי
+        response1 = await test_client.post("/api/panel/auth/request-otp", json={
+            "phone_number": "0508888888",
+        })
+        assert response1.status_code == 200
+
+        # בקשה שנייה מיידית — 429 (כמו בטלפון תקין)
+        response2 = await test_client.post("/api/panel/auth/request-otp", json={
+            "phone_number": "0508888888",
+        })
+        assert response2.status_code == 429
+
+    @pytest.mark.asyncio
     async def test_ownership_mismatch_rejected(
         self, test_client, user_factory, db_session,
     ):
@@ -352,12 +368,19 @@ class TestOTPRateLimiting:
     """בדיקות rate limiting של OTP"""
 
     @pytest.mark.asyncio
-    async def test_cooldown_blocks_rapid_requests(self):
-        """cooldown חוסם בקשות מהירות"""
-        await store_otp(user_id=999, otp="111111")
-        # cooldown מופעל אחרי store_otp
-        allowed = await check_otp_cooldown(999)
+    async def test_cooldown_by_phone_blocks_rapid_requests(self):
+        """cooldown לפי טלפון חוסם בקשות מהירות"""
+        phone = "+972501234567"
+        await set_otp_cooldown_by_phone(phone)
+        allowed = await check_otp_cooldown_by_phone(phone)
         assert allowed is False
+
+    @pytest.mark.asyncio
+    async def test_cooldown_by_phone_allows_different_numbers(self):
+        """cooldown על מספר אחד לא חוסם מספר אחר"""
+        await set_otp_cooldown_by_phone("+972501111111")
+        allowed = await check_otp_cooldown_by_phone("+972502222222")
+        assert allowed is True
 
     @pytest.mark.asyncio
     async def test_otp_max_attempts_exceeded(self):

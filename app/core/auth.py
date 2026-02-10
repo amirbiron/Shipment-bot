@@ -21,7 +21,7 @@ from app.core.redis_client import get_redis
 logger = get_logger(__name__)
 
 _OTP_KEY_PREFIX = "panel_otp"
-_OTP_COOLDOWN_PREFIX = "panel_otp_cooldown"
+_OTP_PHONE_COOLDOWN_PREFIX = "panel_otp_phone_cooldown"
 _OTP_ATTEMPTS_PREFIX = "panel_otp_attempts"
 
 # הגבלות OTP
@@ -81,22 +81,28 @@ def generate_otp() -> str:
     return f"{secrets.randbelow(1000000):06d}"
 
 
-async def check_otp_cooldown(user_id: int) -> bool:
-    """בדיקה אם המשתמש עדיין בזמן המתנה — True אם מותר לשלוח"""
+async def check_otp_cooldown_by_phone(phone: str) -> bool:
+    """בדיקה אם הטלפון עדיין בזמן המתנה — True אם מותר לשלוח.
+    מבוסס על מספר טלפון (לא user_id) כדי למנוע enumeration."""
     redis = await get_redis()
-    cooldown_key = f"{_OTP_COOLDOWN_PREFIX}:{user_id}"
-    existing = await redis.get(cooldown_key)
+    key = f"{_OTP_PHONE_COOLDOWN_PREFIX}:{phone}"
+    existing = await redis.get(key)
     return existing is None
 
 
+async def set_otp_cooldown_by_phone(phone: str) -> None:
+    """הגדרת cooldown על מספר טלפון — נקרא לפני בדיקת קיום המשתמש למניעת enumeration"""
+    redis = await get_redis()
+    key = f"{_OTP_PHONE_COOLDOWN_PREFIX}:{phone}"
+    await redis.setex(key, OTP_COOLDOWN_SECONDS, "1")
+
+
 async def store_otp(user_id: int, otp: str) -> None:
-    """שמירת OTP ב-Redis עם TTL + cooldown + איפוס מונה ניסיונות"""
+    """שמירת OTP ב-Redis עם TTL + איפוס מונה ניסיונות"""
     redis = await get_redis()
     key = f"{_OTP_KEY_PREFIX}:{user_id}"
-    cooldown_key = f"{_OTP_COOLDOWN_PREFIX}:{user_id}"
     attempts_key = f"{_OTP_ATTEMPTS_PREFIX}:{user_id}"
     await redis.setex(key, settings.OTP_EXPIRE_SECONDS, otp)
-    await redis.setex(cooldown_key, OTP_COOLDOWN_SECONDS, "1")
     # איפוס מונה ניסיונות — בקשת OTP חדש פותחת חלון ניסיונות מחדש
     await redis.delete(attempts_key)
     logger.info("OTP stored", extra_data={"user_id": user_id})

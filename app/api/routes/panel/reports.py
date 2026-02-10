@@ -17,7 +17,6 @@ from app.core.auth import TokenPayload
 from app.api.dependencies.auth import get_current_station_owner
 from app.db.database import get_db
 from app.db.models.station_ledger import StationLedger, StationLedgerEntryType
-from app.db.models.manual_charge import ManualCharge
 from app.domain.services.station_service import StationService
 from app.api.routes.panel.schemas import parse_date_param
 
@@ -67,50 +66,33 @@ async def get_collection_report(
     db: AsyncSession = Depends(get_db),
     cycle_start: Optional[str] = Query(None, description="תחילת מחזור (YYYY-MM-DD). ברירת מחדל: מחזור נוכחי"),
 ) -> CollectionReportResponse:
-    """דוח גבייה — מבוסס על StationService.get_collection_report עם הרחבה"""
+    """דוח גבייה — מבוסס על StationService"""
     station_id = auth.station_id
+    station_service = StationService(db)
 
     # חישוב תחילת מחזור
     cs = parse_date_param(cycle_start, "cycle_start")
     if not cs:
-        cs = StationService._get_billing_cycle_start()
+        cs = StationService.get_billing_cycle_start()
 
     # סוף מחזור — תחילת החודש הבא (מותאם ליום האחרון בחודש)
     if cs.month == 12:
         next_month, next_year = 1, cs.year + 1
     else:
         next_month, next_year = cs.month + 1, cs.year
-    # מוודאים שהיום לא חורג מהמקסימום בחודש הבא
     max_day = calendar.monthrange(next_year, next_month)[1]
     ce = cs.replace(year=next_year, month=next_month, day=min(cs.day, max_day))
 
-    # שליפת חיובים בטווח
-    result = await db.execute(
-        select(ManualCharge).where(
-            ManualCharge.station_id == station_id,
-            ManualCharge.created_at >= cs,
-            ManualCharge.created_at < ce,
-        ).order_by(ManualCharge.created_at.desc())
-    )
-    charges = list(result.scalars().all())
-
-    # קיבוץ לפי שם נהג
-    report: dict[str, dict] = {}
-    for charge in charges:
-        name = charge.driver_name
-        if name not in report:
-            report[name] = {"total_debt": 0.0, "charge_count": 0}
-        report[name]["total_debt"] += charge.amount
-        report[name]["charge_count"] += 1
+    # שליפת דוח מה-service
+    report_data = await station_service.get_collection_report_for_period(station_id, cs, ce)
 
     items = [
         CollectionReportItem(
-            driver_name=name,
-            total_debt=data["total_debt"],
-            charge_count=data["charge_count"],
+            driver_name=item["driver_name"],
+            total_debt=item["total_debt"],
+            charge_count=item["charge_count"],
         )
-        for name, data in report.items()
-        if data["total_debt"] > 0
+        for item in report_data
     ]
 
     total_debt = sum(item.total_debt for item in items)

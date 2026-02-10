@@ -502,7 +502,7 @@ class StationService:
     # ==================== דוח גבייה [3.3] ====================
 
     @staticmethod
-    def _get_billing_cycle_start() -> datetime:
+    def get_billing_cycle_start() -> datetime:
         """חישוב תחילת מחזור החיוב הנוכחי (28 לחודש)"""
         now = datetime.utcnow()
         if now.day >= 28:
@@ -523,7 +523,7 @@ class StationService:
 
         מחזור חיוב: מה-28 בחודש הקודם עד ה-28 בחודש הנוכחי.
         """
-        cycle_start = self._get_billing_cycle_start()
+        cycle_start = self.get_billing_cycle_start()
 
         # קבלת חיובים ממחזור החיוב הנוכחי בלבד
         result = await self.db.execute(
@@ -545,4 +545,36 @@ class StationService:
             {"driver_name": name, "total_debt": total}
             for name, total in report.items()
             if total > 0
+        ]
+
+    async def get_collection_report_for_period(
+        self, station_id: int, cycle_start: datetime, cycle_end: datetime,
+    ) -> List[dict]:
+        """
+        דוח גבייה לתקופה מותאמת — רשימת נהגים שחייבים כסף לתחנה.
+
+        מחזיר רשימה עם driver_name, total_debt, charge_count.
+        """
+        result = await self.db.execute(
+            select(ManualCharge).where(
+                ManualCharge.station_id == station_id,
+                ManualCharge.created_at >= cycle_start,
+                ManualCharge.created_at < cycle_end,
+            ).order_by(ManualCharge.created_at.desc())
+        )
+        charges = list(result.scalars().all())
+
+        # קיבוץ לפי שם נהג
+        report: dict[str, dict] = {}
+        for charge in charges:
+            name = charge.driver_name
+            if name not in report:
+                report[name] = {"total_debt": 0.0, "charge_count": 0}
+            report[name]["total_debt"] += charge.amount
+            report[name]["charge_count"] += 1
+
+        return [
+            {"driver_name": name, "total_debt": data["total_debt"], "charge_count": data["charge_count"]}
+            for name, data in report.items()
+            if data["total_debt"] > 0
         ]

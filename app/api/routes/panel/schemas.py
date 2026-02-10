@@ -28,7 +28,7 @@ def parse_date_param(value: Optional[str], param_name: str, end_of_day: bool = F
     try:
         dt = datetime.strptime(value, "%Y-%m-%d")
         if end_of_day:
-            dt = dt.replace(hour=23, minute=59, second=59)
+            dt = dt.replace(hour=23, minute=59, second=59, microsecond=999999)
         return dt
     except ValueError:
         raise HTTPException(
