@@ -279,7 +279,7 @@ class ShipmentWorkflowService:
             "car_7": "7 מקומות",
             "pickup_truck": "טנדר",
             "motorcycle": "אופנוע",
-        }.get(courier.vehicle_category or "", courier.vehicle_category or "לא צוין")
+        }.get(courier.vehicle_category or "", escape(courier.vehicle_category or "לא צוין"))
 
         courier_name = escape(
             courier.full_name or courier.name or "לא צוין"
