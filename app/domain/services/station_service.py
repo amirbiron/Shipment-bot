@@ -599,9 +599,13 @@ class StationService:
     # ==================== שלב 5: חסימה אוטומטית ====================
 
     @staticmethod
-    def _get_previous_billing_cycle_start() -> datetime:
-        """חישוב תחילת מחזור החיוב הקודם (28 לחודש שלפני)"""
-        current_cycle = StationService._get_billing_cycle_start()
+    def _get_previous_billing_cycle_start(current_cycle: datetime | None = None) -> datetime:
+        """חישוב תחילת מחזור החיוב הקודם (28 לחודש שלפני).
+
+        מקבל current_cycle כדי למנוע חוסר עקביות בקריאות utcnow נפרדות.
+        """
+        if current_cycle is None:
+            current_cycle = StationService._get_billing_cycle_start()
         if current_cycle.month == 1:
             return current_cycle.replace(year=current_cycle.year - 1, month=12)
         return current_cycle.replace(month=current_cycle.month - 1)
@@ -618,7 +622,7 @@ class StationService:
             רשימת נהגים שנחסמו, כל אחד כ-dict עם courier_id ו-driver_name.
         """
         current_cycle_start = self._get_billing_cycle_start()
-        previous_cycle_start = self._get_previous_billing_cycle_start()
+        previous_cycle_start = self._get_previous_billing_cycle_start(current_cycle_start)
 
         # שליפת כל החיובים שלא שולמו עם courier_id ידוע ב-2 המחזורים האחרונים
         result = await self.db.execute(
