@@ -712,6 +712,9 @@ async def telegram_webhook(
                 admin_name = name or "מנהל"
 
                 if action == "approve":
+                    # ניקוי דחייה ממתינה (אם המנהל לחץ דחה ואז אשר — מבטלים את הדחייה)
+                    _pending_rejection_notes.pop(send_chat_id, None)
+
                     result = await CourierApprovalService.approve(db, courier_id)
 
                     # שליחת תוצאה למנהל (בצ'אט שבו לחץ)

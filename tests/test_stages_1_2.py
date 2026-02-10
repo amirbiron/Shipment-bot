@@ -1307,3 +1307,83 @@ class TestRejectionNote:
 
         # ניקוי
         _pending_rejection_notes.pop(admin_chat_id, None)
+
+    @pytest.mark.asyncio
+    async def test_approve_clears_pending_rejection(
+        self, db_session, user_factory, test_client
+    ):
+        """לחיצת אשר אחרי דחה — מנקה את הדחייה הממתינה"""
+        from app.api.webhooks.telegram import _pending_rejection_notes
+
+        courier1 = await user_factory(
+            phone_number="tg:80040",
+            name="Courier Pending Reject",
+            role=UserRole.COURIER,
+            platform="telegram",
+            telegram_chat_id="80040",
+            approval_status=ApprovalStatus.PENDING,
+        )
+        courier2 = await user_factory(
+            phone_number="tg:80041",
+            name="Courier To Approve",
+            role=UserRole.COURIER,
+            platform="telegram",
+            telegram_chat_id="80041",
+            approval_status=ApprovalStatus.PENDING,
+        )
+        admin_chat_id = "99992"
+        with (
+            patch.object(settings, "TELEGRAM_ADMIN_CHAT_IDS", admin_chat_id),
+            patch.object(settings, "TELEGRAM_ADMIN_CHAT_ID", admin_chat_id),
+            patch.object(settings, "TELEGRAM_BOT_TOKEN", "fake-token"),
+            patch.object(settings, "WHATSAPP_ADMIN_GROUP_ID", None),
+            patch.object(settings, "WHATSAPP_ADMIN_NUMBERS", ""),
+            patch.object(settings, "WHATSAPP_GATEWAY_URL", ""),
+        ):
+            # שלב 1: לחיצה על דחה לשליח 1
+            resp1 = await test_client.post(
+                "/api/telegram/webhook",
+                json={
+                    "update_id": 300,
+                    "callback_query": {
+                        "id": "cb_reject_then_approve_1",
+                        "from": {"id": 99992, "first_name": "Admin"},
+                        "message": {
+                            "message_id": 300,
+                            "chat": {"id": 99992, "type": "private"},
+                            "from": {"id": 99992, "first_name": "Admin"},
+                            "date": 1700000000,
+                            "text": "כרטיס נהג",
+                        },
+                        "data": f"reject_courier_{courier1.id}",
+                    },
+                },
+            )
+            assert resp1.status_code == 200
+            assert admin_chat_id in _pending_rejection_notes
+
+            # שלב 2: לחיצה על אשר לשליח 2 — חייבת לנקות את הדחייה הממתינה
+            resp2 = await test_client.post(
+                "/api/telegram/webhook",
+                json={
+                    "update_id": 301,
+                    "callback_query": {
+                        "id": "cb_reject_then_approve_2",
+                        "from": {"id": 99992, "first_name": "Admin"},
+                        "message": {
+                            "message_id": 301,
+                            "chat": {"id": 99992, "type": "private"},
+                            "from": {"id": 99992, "first_name": "Admin"},
+                            "date": 1700000000,
+                            "text": "כרטיס נהג",
+                        },
+                        "data": f"approve_courier_{courier2.id}",
+                    },
+                },
+            )
+            assert resp2.status_code == 200
+            # הדחייה הממתינה נמחקה — הטקסט הבא לא ידחה בטעות את שליח 1
+            assert admin_chat_id not in _pending_rejection_notes
+
+        # ניקוי למקרה שנכשל
+        _pending_rejection_notes.pop(admin_chat_id, None)
