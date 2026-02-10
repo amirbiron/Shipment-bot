@@ -1118,3 +1118,20 @@ class TestRejectionNote:
         assert action == "reject"
         assert user_id == 123
         assert note is None
+
+    @pytest.mark.asyncio
+    async def test_reject_already_approved_courier_fails(self, db_session, user_factory):
+        """דחיית נהג שכבר אושר — נכשלת (race condition בין מנהלים)"""
+        user = await user_factory(
+            phone_number="tg:80010",
+            name="Already Approved",
+            role=UserRole.COURIER,
+            platform="telegram",
+            telegram_chat_id="80010",
+            approval_status=ApprovalStatus.APPROVED,
+        )
+        result = await CourierApprovalService.reject(
+            db_session, user.id, rejection_note="טעות"
+        )
+        assert result.success is False
+        assert "כבר מאושר" in result.message

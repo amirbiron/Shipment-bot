@@ -98,6 +98,12 @@ class CourierApprovalService:
         if user.role != UserRole.COURIER:
             return ApprovalResult(False, f"❌ משתמש {user_id} אינו נהג")
 
+        if user.approval_status == ApprovalStatus.APPROVED:
+            return ApprovalResult(
+                False,
+                f"ℹ️ נהג {user_id} ({user.full_name or user.name or 'לא צוין'}) כבר מאושר. לא ניתן לדחות נהג מאושר."
+            )
+
         if user.approval_status == ApprovalStatus.REJECTED:
             return ApprovalResult(
                 False,
@@ -146,6 +152,9 @@ class CourierApprovalService:
         2. סיכום לקבוצת מנהלים
         """
         # הודעות לשליח - בשני פורמטים (HTML לטלגרם, Markdown לוואטסאפ)
+        # חישוב הערת דחייה מראש — נדרש גם בהודעה לשליח וגם בסיכום לקבוצה
+        note = (rejection_note or user.rejection_note) if action != "approve" else None
+
         if action == "approve":
             tg_msg = """🎉 <b>חשבונך אושר!</b>
 
@@ -161,7 +170,6 @@ class CourierApprovalService:
 כתוב *תפריט* כדי להתחיל."""
         else:
             # הודעת דחייה עם הערת מנהל (אם קיימת)
-            note = rejection_note or user.rejection_note
             if note:
                 safe_note_html = TextSanitizer.sanitize_for_html(note)
                 tg_msg = f"""😔 <b>לצערנו, בקשתך להצטרף כשליח נדחתה.</b>
@@ -203,5 +211,5 @@ class CourierApprovalService:
             user.platform or 'telegram',
             decision,
             admin_name,
-            rejection_note=note if action != "approve" else None,
+            rejection_note=note,
         )
