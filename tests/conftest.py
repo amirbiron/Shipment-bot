@@ -305,6 +305,15 @@ class FakeRedis:
     async def get(self, key: str) -> str | None:
         return self._store.get(key)
 
+    async def set(self, key: str, value: str, nx: bool = False, ex: int | None = None) -> bool | None:
+        """SET עם תמיכה ב-NX (רק אם לא קיים) ו-EX (תפוגה בשניות)"""
+        if nx and key in self._store:
+            return None
+        self._store[key] = value
+        if ex is not None:
+            self._ttls[key] = ex
+        return True
+
     async def setex(self, key: str, ttl: int, value: str) -> None:
         self._store[key] = value
         self._ttls[key] = ttl
@@ -312,6 +321,18 @@ class FakeRedis:
     async def getdel(self, key: str) -> str | None:
         self._ttls.pop(key, None)
         return self._store.pop(key, None)
+
+    async def incr(self, key: str) -> int:
+        """INCR אטומי — מגדיל ב-1, מאתחל ל-1 אם לא קיים"""
+        current = self._store.get(key)
+        new_val = int(current) + 1 if current is not None else 1
+        self._store[key] = str(new_val)
+        return new_val
+
+    async def expire(self, key: str, ttl: int) -> None:
+        """הגדרת TTL למפתח קיים"""
+        if key in self._store:
+            self._ttls[key] = ttl
 
     async def delete(self, *keys: str) -> None:
         for key in keys:
@@ -331,8 +352,26 @@ def fake_redis():
     async def _get_fake_redis():
         return _fake
 
-    with patch("app.core.redis_client.get_redis", _get_fake_redis):
+    with patch("app.core.redis_client.get_redis", _get_fake_redis), \
+         patch("app.core.auth.get_redis", _get_fake_redis):
         yield _fake
+
+
+# ============================================================================
+# JWT Secret for panel tests
+# ============================================================================
+
+_TEST_JWT_SECRET = "test-jwt-secret-key-for-testing-only-do-not-use-in-production"
+
+
+@pytest.fixture(autouse=True)
+def set_jwt_secret():
+    """מגדיר JWT_SECRET_KEY לבדיקות פאנל"""
+    with patch.object(settings, "JWT_SECRET_KEY", _TEST_JWT_SECRET), \
+         patch.object(settings, "JWT_ALGORITHM", "HS256"), \
+         patch.object(settings, "JWT_ACCESS_TOKEN_EXPIRE_MINUTES", 480), \
+         patch.object(settings, "OTP_EXPIRE_SECONDS", 300):
+        yield
 
 
 # הערה: אין צורך ב-autouse fixture לניקוי WebhookEvent (idempotency) —
