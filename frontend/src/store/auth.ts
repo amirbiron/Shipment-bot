@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { persist, createJSONStorage } from "zustand/middleware";
 
 interface AuthState {
   token: string | null;
@@ -27,6 +27,6 @@ export const useAuthStore = create<AuthState>()(
           isAuthenticated: false,
         }),
     }),
-    { name: "station-panel-auth" }
+    { name: "station-panel-auth", storage: createJSONStorage(() => sessionStorage) }
   )
 );
