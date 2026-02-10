@@ -698,19 +698,25 @@ async def test_courier_notification_not_sent_twice(
     """
     רגרסיה: כרטיס נהג נשלח פעמיים כשהגטוויי שולח שני webhook calls
     עבור אותה לחיצת כפתור. הנוטיפיקציה חייבת לרוץ רק פעם אחת.
+    המפתח כולל timestamp (לדקה) כדי להבחין בין רישומים נפרדים.
     """
     from app.api.webhooks.whatsapp import _try_acquire_message, _mark_message_completed
 
-    # idempotency: כרטיס נהג חדש עם מפתח ייחודי
     user_id = 42
-    notify_key = f"courier_reg_notify_{user_id}"
+    reg_ts = 1000  # מייצג דקה מסוימת
+    notify_key = f"courier_reg_notify_{user_id}_{reg_ts}"
 
     # ניסיון ראשון — מאפשר שליחה
     assert await _try_acquire_message(db_session, notify_key, "notification") is True
     await _mark_message_completed(db_session, notify_key)
 
-    # ניסיון שני — חוסם שליחה כפולה
+    # ניסיון שני עם אותו מפתח — חוסם שליחה כפולה
     assert await _try_acquire_message(db_session, notify_key, "notification") is False
+
+    # רי-רגיסטרציה (timestamp חדש) — מאפשר שליחה מחדש
+    new_reg_ts = 2000
+    new_notify_key = f"courier_reg_notify_{user_id}_{new_reg_ts}"
+    assert await _try_acquire_message(db_session, new_notify_key, "notification") is True
 
 
 @pytest.mark.asyncio

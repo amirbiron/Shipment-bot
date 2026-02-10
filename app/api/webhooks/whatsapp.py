@@ -1504,7 +1504,11 @@ async def whatsapp_webhook(
                     and previous_state != CourierState.PENDING_APPROVAL.value
                     and user.approval_status == ApprovalStatus.PENDING
                 ):
-                    notify_key = f"courier_reg_notify_{user.id}"
+                    # מפתח idempotency כולל את מועד אישור התקנון (לדקה הקרובה).
+                    # - שני webhook calls מקבילים לאותו רישום → אותה דקה → אותו מפתח → חסימה
+                    # - רי-רגיסטרציה אחרי דחייה → terms_accepted_at חדש → מפתח שונה → מאפשר
+                    reg_ts = int(user.terms_accepted_at.timestamp()) // 60 if user.terms_accepted_at else 0
+                    notify_key = f"courier_reg_notify_{user.id}_{reg_ts}"
                     should_notify = await _try_acquire_message(db, notify_key, "notification")
                     if should_notify:
                         # שליפת מסמכים ישירות מה-DB - כל השדות כבר נשמרו בשלבי ה-KYC
