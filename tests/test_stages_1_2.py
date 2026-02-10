@@ -1507,3 +1507,167 @@ class TestRejectionNote:
             # הנהג צריך להיות נדחה ב-DB
             await db_session.refresh(courier)
             assert courier.approval_status == ApprovalStatus.REJECTED
+
+
+# ============================================================================
+# בדיקות ידניות שנגזרו מ-property-based testing (hypothesis)
+# ============================================================================
+
+
+class TestPropertyBasedDiscoveries:
+    """
+    בדיקות ידניות שנוצרו כתוצאה מהרצת hypothesis
+    על זרימות אישור/דחייה ופירוס פקודות.
+    ראו issue #138 ו-tests/test_property_based.py.
+    """
+
+    @pytest.mark.asyncio
+    async def test_rapid_approve_reject_approve_sequence(self, db_session, user_factory):
+        """
+        רצף מהיר: approve → reject → approve.
+        נמצא ע"י hypothesis — מוודא שהסטטוס הסופי תקין
+        ושהשירות לא נותן תוצאות שגויות אחרי מעברים מרובים.
+        """
+        user = await user_factory(
+            phone_number="tg:disc_001",
+            name="Rapid Seq",
+            role=UserRole.COURIER,
+            platform="telegram",
+            telegram_chat_id="disc_001",
+            approval_status=ApprovalStatus.PENDING,
+        )
+        # אישור ראשון — אמור להצליח
+        r1 = await CourierApprovalService.approve(db_session, user.id)
+        assert r1.success is True
+
+        # דחייה אחרי אישור — אמורה להיכשל (לא ניתן לדחות מאושר)
+        r2 = await CourierApprovalService.reject(db_session, user.id)
+        assert r2.success is False
+        assert "כבר מאושר" in r2.message
+
+        # אישור כפול — אמור להיכשל
+        r3 = await CourierApprovalService.approve(db_session, user.id)
+        assert r3.success is False
+        assert "כבר מאושר" in r3.message
+
+        # הסטטוס הסופי חייב להישאר APPROVED
+        await db_session.refresh(user)
+        assert user.approval_status == ApprovalStatus.APPROVED
+
+    @pytest.mark.asyncio
+    async def test_reject_with_note_then_reject_again_fails(self, db_session, user_factory):
+        """
+        דחייה עם הערה ואז דחייה נוספת — הדחייה השנייה נכשלת.
+        מוודא שאי אפשר לדחות פעמיים.
+        """
+        user = await user_factory(
+            phone_number="tg:disc_002",
+            name="Double Reject",
+            role=UserRole.COURIER,
+            platform="telegram",
+            telegram_chat_id="disc_002",
+            approval_status=ApprovalStatus.PENDING,
+        )
+        r1 = await CourierApprovalService.reject(
+            db_session, user.id, rejection_note="צילום לא ברור"
+        )
+        assert r1.success is True
+        assert user.rejection_note == "צילום לא ברור"
+
+        r2 = await CourierApprovalService.reject(
+            db_session, user.id, rejection_note="הערה אחרת"
+        )
+        assert r2.success is False
+        assert "כבר נדחה" in r2.message
+
+        # ההערה הראשונה נשארת — לא נדרסת
+        await db_session.refresh(user)
+        assert user.rejection_note == "צילום לא ברור"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("empty_note", [None, "", "   "])
+    async def test_empty_rejection_note_stored_as_none(self, empty_note, db_session, user_factory):
+        """
+        הערת דחייה ריקה (None / "" / רווחים) — נשמרת כ-None, לא כמחרוזת ריקה.
+        באג שנמצא ע"י hypothesis: העברת "" ל-reject() גרמה לשמירת מחרוזת ריקה ב-DB.
+        """
+        uid = f"tg:disc_003_{hash(str(empty_note))}"
+        user = await user_factory(
+            phone_number=uid,
+            name="Empty Note",
+            role=UserRole.COURIER,
+            platform="telegram",
+            telegram_chat_id=uid,
+            approval_status=ApprovalStatus.PENDING,
+        )
+        result = await CourierApprovalService.reject(
+            db_session, user.id, rejection_note=empty_note
+        )
+        assert result.success is True
+        await db_session.refresh(user)
+        assert user.rejection_note is None, (
+            f"rejection_note עם קלט {empty_note!r} אמור להיות None, קיבלנו: {user.rejection_note!r}"
+        )
+
+    @pytest.mark.unit
+    def test_approval_command_with_unicode_surrogates_does_not_crash(self):
+        """
+        פקודות עם תווי Unicode חריגים — הפונקציה לא קורסת.
+        נמצא ע"י hypothesis (arbitrary text strategy).
+        """
+        from app.api.webhooks.whatsapp import _match_approval_command
+
+        # תווים חריגים שנמצאו בהרצות hypothesis
+        edge_cases = [
+            "\x00אשר 123",
+            "אשר\x00 456",
+            "\u200b\u200c\u200d אשר 789",
+            "✅\ufeff אשר 42",
+            "\u202b\u202a\u202c אשר 55 \u202e",
+        ]
+        for text in edge_cases:
+            result = _match_approval_command(text)
+            # לא אמור לקרוס — None או tuple חוקי
+            if result is not None:
+                action, uid, note = result
+                assert action in ("approve", "reject")
+                assert isinstance(uid, int) and uid > 0
+
+    @pytest.mark.unit
+    def test_approval_command_whitespace_only_note_normalized_to_none(self):
+        """
+        פקודת דחייה עם הערה שמכילה רק רווחים — מנורמלת ל-None.
+        נמצא ע"י hypothesis (rejection note strategy).
+        """
+        from app.api.webhooks.whatsapp import _match_approval_command
+
+        result = _match_approval_command("דחה 100   ")
+        assert result is not None
+        _, _, note = result
+        assert note is None, f"הערה של רווחים בלבד הייתה אמורה להיות None, קיבלנו: '{note}'"
+
+    @pytest.mark.asyncio
+    async def test_all_actions_on_blocked_courier_fail(self, db_session, user_factory):
+        """
+        שליח חסום — כל הפעולות (אישור, דחייה) נכשלות.
+        נמצא ע"י hypothesis — רצף שמתחיל ב-block ואז פעולות נוספות.
+        """
+        user = await user_factory(
+            phone_number="tg:disc_005",
+            name="Blocked Courier",
+            role=UserRole.COURIER,
+            platform="telegram",
+            telegram_chat_id="disc_005",
+            approval_status=ApprovalStatus.BLOCKED,
+        )
+        r_approve = await CourierApprovalService.approve(db_session, user.id)
+        assert r_approve.success is False
+        assert "חסום" in r_approve.message
+
+        r_reject = await CourierApprovalService.reject(db_session, user.id)
+        assert r_reject.success is False
+        assert "חסום" in r_reject.message
+
+        # הסטטוס נשאר BLOCKED
+        await db_session.refresh(user)
+        assert user.approval_status == ApprovalStatus.BLOCKED

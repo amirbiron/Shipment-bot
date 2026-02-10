@@ -117,8 +117,9 @@ class CourierApprovalService:
             )
 
         user.approval_status = ApprovalStatus.REJECTED
-        # שמירת הערת דחייה — תמיד מעדכנים (גם None) למניעת הערה ישנה שנשארת
-        user.rejection_note = rejection_note
+        # שמירת הערת דחייה — נרמול מחרוזת ריקה/רווחים ל-None למניעת ערך לא-תקין ב-DB
+        normalized_note = (rejection_note.strip() or None) if rejection_note else None
+        user.rejection_note = normalized_note
         await db.commit()
 
         logger.info(
@@ -127,11 +128,11 @@ class CourierApprovalService:
                 "user_id": user_id,
                 "action": "reject",
                 "name": user.full_name or user.name or 'לא צוין',
-                "has_rejection_note": bool(rejection_note),
+                "has_rejection_note": bool(normalized_note),
             }
         )
 
-        note_suffix = TextSanitizer.format_note_line(rejection_note, label="הערה")
+        note_suffix = TextSanitizer.format_note_line(normalized_note, label="הערה")
         return ApprovalResult(
             True,
             f"❌ נהג {user_id} ({user.full_name or user.name or 'לא צוין'}) נדחה.{note_suffix}",
