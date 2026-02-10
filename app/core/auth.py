@@ -102,16 +102,6 @@ async def store_otp(user_id: int, otp: str) -> None:
     logger.info("OTP stored", extra_data={"user_id": user_id})
 
 
-async def check_otp_attempts(user_id: int) -> bool:
-    """בדיקה אם נותרו ניסיונות אימות — True אם לא חרג מהמקסימום"""
-    redis = await get_redis()
-    attempts_key = f"{_OTP_ATTEMPTS_PREFIX}:{user_id}"
-    count = await redis.get(attempts_key)
-    if count is not None and int(count) >= OTP_MAX_ATTEMPTS:
-        return False
-    return True
-
-
 async def _increment_and_check_otp_attempts(user_id: int) -> bool:
     """הגדלה אטומית של מונה ניסיונות + בדיקת מגבלה — True אם עדיין מותר"""
     redis = await get_redis()

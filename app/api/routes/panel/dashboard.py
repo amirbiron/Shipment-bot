@@ -13,6 +13,8 @@ from app.core.auth import TokenPayload
 from app.api.dependencies.auth import get_current_station_owner
 from app.db.database import get_db
 from app.db.models.delivery import Delivery, DeliveryStatus
+from app.db.models.station_blacklist import StationBlacklist
+from app.db.models.station_dispatcher import StationDispatcher
 from app.db.models.station_ledger import StationLedger, StationLedgerEntryType
 from app.domain.services.station_service import StationService
 
@@ -53,9 +55,35 @@ async def get_dashboard(
 
     station = await station_service.get_station(station_id)
     wallet = await station_service.get_station_wallet(station_id)
-    active = await station_service.get_station_active_deliveries(station_id)
-    dispatchers = await station_service.get_dispatchers(station_id)
-    blacklist = await station_service.get_blacklist(station_id)
+
+    # ספירות ישירות ב-DB — COUNT במקום טעינת אובייקטים מלאים
+    active_count_result = await db.execute(
+        select(func.count(Delivery.id)).where(
+            Delivery.station_id == station_id,
+            Delivery.status.in_([
+                DeliveryStatus.OPEN,
+                DeliveryStatus.PENDING_APPROVAL,
+                DeliveryStatus.CAPTURED,
+                DeliveryStatus.IN_PROGRESS,
+            ]),
+        )
+    )
+    active_deliveries_count = active_count_result.scalar() or 0
+
+    dispatchers_count_result = await db.execute(
+        select(func.count(StationDispatcher.id)).where(
+            StationDispatcher.station_id == station_id,
+            StationDispatcher.is_active == True,  # noqa: E712
+        )
+    )
+    active_dispatchers_count = dispatchers_count_result.scalar() or 0
+
+    blacklisted_count_result = await db.execute(
+        select(func.count(StationBlacklist.id)).where(
+            StationBlacklist.station_id == station_id,
+        )
+    )
+    blacklisted_count = blacklisted_count_result.scalar() or 0
 
     # סטטיסטיקות יומיות — לפי שעון ישראל (כולל שעון קיץ אוטומטי)
     _ISRAEL_TZ = ZoneInfo("Asia/Jerusalem")
@@ -98,12 +126,12 @@ async def get_dashboard(
 
     return DashboardResponse(
         station_name=station.name if station else "",
-        active_deliveries_count=len(active),
+        active_deliveries_count=active_deliveries_count,
         today_deliveries_count=today_deliveries_count,
         today_delivered_count=today_delivered_count,
         wallet_balance=wallet.balance,
         commission_rate=wallet.commission_rate,
         today_revenue=today_revenue,
-        active_dispatchers_count=len(dispatchers),
-        blacklisted_count=len(blacklist),
+        active_dispatchers_count=active_dispatchers_count,
+        blacklisted_count=blacklisted_count,
     )
