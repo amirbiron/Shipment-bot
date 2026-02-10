@@ -112,56 +112,12 @@ async def _send_telegram_message(chat_id: str, content: dict) -> bool:
 
     async def _send():
         url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                url,
-                json={
-                    "chat_id": chat_id,
-                    "text": content.get("message_text", ""),
-                    "parse_mode": "HTML"
-                },
-                timeout=30.0
-            )
-            if response.status_code != 200:
-                raise TelegramError.from_response(
-                    "sendMessage",
-                    response,
-                    message=f"sendMessage returned status {response.status_code}",
-                )
-            return True
-
-    try:
-        return await circuit_breaker.execute(_send)
-    except Exception as e:
-        logger.error(
-            "Telegram send error",
-            extra_data={"chat_id": chat_id, "error": str(e)},
-            exc_info=True
-        )
-        return False
-
-
-async def _send_telegram_message_with_buttons(
-    chat_id: str, content: dict
-) -> bool:
-    """שלב 4: שליחת הודעת טלגרם עם כפתורי inline (אישור/דחייה)"""
-    import httpx
-    from app.core.config import settings
-
-    if not settings.TELEGRAM_BOT_TOKEN:
-        logger.warning("Telegram bot token not configured")
-        return False
-
-    circuit_breaker = get_telegram_circuit_breaker()
-
-    async def _send():
-        url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
         payload = {
             "chat_id": chat_id,
             "text": content.get("message_text", ""),
             "parse_mode": "HTML",
         }
-        # הוספת inline keyboard אם קיים בתוכן
+        # הוספת inline keyboard אם קיים בתוכן (שלב 4: כפתורי אישור/דחייה)
         if content.get("inline_keyboard"):
             payload["reply_markup"] = {
                 "inline_keyboard": content["inline_keyboard"]
@@ -180,9 +136,9 @@ async def _send_telegram_message_with_buttons(
         return await circuit_breaker.execute(_send)
     except Exception as e:
         logger.error(
-            "Telegram send with buttons error",
+            "Telegram send error",
             extra_data={"chat_id": chat_id, "error": str(e)},
-            exc_info=True,
+            exc_info=True
         )
         return False
 
@@ -321,7 +277,7 @@ async def _process_single_message(message: OutboxMessage) -> tuple:
                 else:
                     # לטלגרם: שליחה עם inline keyboard אם יש בתוכן
                     tasks = [
-                        _send_telegram_message_with_buttons(
+                        _send_telegram_message(
                             r.telegram_chat_id, content
                         )
                         for r in recipients if r.telegram_chat_id
