@@ -256,22 +256,21 @@ class StationService:
 
     async def _resolve_courier_id_by_name(self, driver_name: str) -> int | None:
         """ניסיון best-effort לזהות שליח לפי שם — מחזיר courier_id אם נמצא שליח יחיד תואם."""
+        from sqlalchemy import func, or_
         from app.db.models.user import UserRole
         normalized = self._normalize_driver_name(driver_name).lower()
+        # חיפוש התאמה מדויקת (case-insensitive) ברמת SQL — מונע full table scan
         result = await self.db.execute(
             select(User).where(
                 User.role == UserRole.COURIER,
                 User.is_active == True,  # noqa: E712
+                or_(
+                    func.lower(User.full_name) == normalized,
+                    func.lower(User.name) == normalized,
+                ),
             )
         )
-        couriers = list(result.scalars().all())
-
-        # חיפוש התאמה מדויקת (case-insensitive)
-        matches = [
-            c for c in couriers
-            if (c.full_name and c.full_name.lower() == normalized)
-            or (c.name and c.name.lower() == normalized)
-        ]
+        matches = list(result.scalars().all())
         if len(matches) == 1:
             return matches[0].id
         return None

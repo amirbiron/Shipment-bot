@@ -533,6 +533,8 @@ def process_billing_cycle_blocking():
                         },
                         exc_info=True,
                     )
+                    # rollback למניעת דליפת אובייקטים מתחנה שנכשלה לתחנה הבאה
+                    await db.rollback()
 
             logger.info(
                 "סיום בדיקת חסימה אוטומטית",

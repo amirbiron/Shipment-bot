@@ -111,7 +111,13 @@ class DeliveryService:
         מעברי סטטוס מותרים: CAPTURED → DELIVERED, IN_PROGRESS → DELIVERED.
         הזיכוי מתבצע באותה טרנזקציה עם שינוי הסטטוס לאטומיות.
         """
-        delivery = await self.get_delivery(delivery_id)
+        # נעילת שורה למניעת זיכוי עמלה כפול בקריאות מקבילות
+        result = await self.db.execute(
+            select(Delivery)
+            .where(Delivery.id == delivery_id)
+            .with_for_update()
+        )
+        delivery = result.scalar_one_or_none()
         if not delivery:
             return None
 
