@@ -1174,7 +1174,7 @@ class TestRejectionNote:
 
     @pytest.mark.asyncio
     async def test_html_escaping_in_rejection_note(self, db_session, user_factory):
-        """הערת דחייה עם תווים מיוחדים — נעשה HTML escape בתגובה לשליח"""
+        """הערת דחייה עם תווים מיוחדים — נעשה HTML escape בתגובה לשליח (טלגרם)"""
         from app.state_machine.handlers import CourierStateHandler
 
         xss_note = '<script>alert("xss")</script> & "quotes"'
@@ -1195,8 +1195,9 @@ class TestRejectionNote:
         await db_session.refresh(user)
         assert user.rejection_note == xss_note
 
-        # בדיקת ה-handler: ההודעה לשליח חייבת להכיל את ההערה ב-escape
-        blocked_resp = CourierStateHandler._blocked_or_rejected_response(user)
+        # בדיקת ה-handler (טלגרם): ההודעה לשליח חייבת להכיל את ההערה ב-escape
+        handler = CourierStateHandler(db_session, platform="telegram")
+        blocked_resp = handler._blocked_or_rejected_response(user)
         assert blocked_resp is not None
         response, _, _ = blocked_resp
         # לוודא שהתווים עברו escape ולא מופיעים כ-raw HTML
@@ -1204,6 +1205,13 @@ class TestRejectionNote:
         assert "&lt;script&gt;" in response.text
         assert "&amp;" in response.text
         assert "&quot;" in response.text
+
+        # בדיקת ה-handler (וואטסאפ): ההערה מוצגת כטקסט רגיל ללא escape
+        wa_handler = CourierStateHandler(db_session, platform="whatsapp")
+        wa_resp = wa_handler._blocked_or_rejected_response(user)
+        assert wa_resp is not None
+        wa_response, _, _ = wa_resp
+        assert xss_note in wa_response.text
 
     @pytest.mark.asyncio
     async def test_html_escaping_in_notify_after_decision(self):

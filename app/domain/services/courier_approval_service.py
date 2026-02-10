@@ -42,7 +42,7 @@ class CourierApprovalService:
         if user.role == UserRole.SENDER and user.approval_status == ApprovalStatus.PENDING:
             logger.info(
                 "Approving courier who reverted to sender via #",
-                extra_data={"user_id": user_id}
+                extra_data={"user_id": user_id, "action": "approve"}
             )
             user.role = UserRole.COURIER
 
@@ -66,7 +66,7 @@ class CourierApprovalService:
 
         logger.info(
             "Courier approved",
-            extra_data={"user_id": user_id, "name": user.full_name or user.name or 'לא צוין'}
+            extra_data={"user_id": user_id, "action": "approve", "name": user.full_name or user.name or 'לא צוין'}
         )
 
         return ApprovalResult(
@@ -91,7 +91,7 @@ class CourierApprovalService:
         if user.role == UserRole.SENDER and user.approval_status == ApprovalStatus.PENDING:
             logger.info(
                 "Rejecting courier who reverted to sender via #",
-                extra_data={"user_id": user_id}
+                extra_data={"user_id": user_id, "action": "reject"}
             )
             user.role = UserRole.COURIER
 
@@ -125,12 +125,13 @@ class CourierApprovalService:
             "Courier rejected",
             extra_data={
                 "user_id": user_id,
+                "action": "reject",
                 "name": user.full_name or user.name or 'לא צוין',
                 "has_rejection_note": bool(rejection_note),
             }
         )
 
-        note_suffix = f"\nהערה: {rejection_note}" if rejection_note else ""
+        note_suffix = TextSanitizer.format_note_line(rejection_note, label="הערה")
         return ApprovalResult(
             True,
             f"❌ נהג {user_id} ({user.full_name or user.name or 'לא צוין'}) נדחה.{note_suffix}",
@@ -170,24 +171,14 @@ class CourierApprovalService:
 כתוב *תפריט* כדי להתחיל."""
         else:
             # הודעת דחייה עם הערת מנהל (אם קיימת)
-            if note:
-                safe_note_html = TextSanitizer.sanitize_for_html(note)
-                tg_msg = f"""😔 <b>לצערנו, בקשתך להצטרף כשליח נדחתה.</b>
+            tg_note = TextSanitizer.format_note_line(note, platform="telegram")
+            wa_note = TextSanitizer.format_note_line(note, platform="whatsapp")
 
-📝 <b>הערת המנהל:</b> {safe_note_html}
-
+            tg_msg = f"""😔 <b>לצערנו, בקשתך להצטרף כשליח נדחתה.</b>
+{tg_note}
 אם אתה חושב שזו טעות, אנא צור קשר עם התמיכה."""
-                wa_msg = f"""😔 *לצערנו, בקשתך להצטרף כשליח נדחתה.*
-
-📝 *הערת המנהל:* {note}
-
-אם אתה חושב שזו טעות, אנא צור קשר עם התמיכה."""
-            else:
-                tg_msg = """😔 <b>לצערנו, בקשתך להצטרף כשליח נדחתה.</b>
-
-אם אתה חושב שזו טעות, אנא צור קשר עם התמיכה."""
-                wa_msg = """😔 *לצערנו, בקשתך להצטרף כשליח נדחתה.*
-
+            wa_msg = f"""😔 *לצערנו, בקשתך להצטרף כשליח נדחתה.*
+{wa_note}
 אם אתה חושב שזו טעות, אנא צור קשר עם התמיכה."""
 
         # שליחה לשליח - זיהוי פלטפורמה עם סדר עקבי

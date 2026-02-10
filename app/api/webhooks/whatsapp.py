@@ -707,7 +707,7 @@ def _match_approval_command(text: str) -> tuple[str, int, str | None] | None:
     reject_match = re.match(r'^[❌✖️\s]*(?:דחה|דחייה|דחיה)(?:\s+(?:שליח|נהג))?\s+(\d+)(?:\s+(.+))?\s*$', text)
     if reject_match:
         note = reject_match.group(2)
-        note = note.strip() if note else None
+        note = (note.strip() or None) if note else None
         return ("reject", int(reject_match.group(1)), note)
 
     return None

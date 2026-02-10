@@ -286,12 +286,9 @@ class AdminNotificationService:
             status_icon = "❌"
             status_text = "נדחה"
 
-        # שורת הערת דחייה (אם קיימת) — HTML escaping לטלגרם
-        wa_note_line = f"\n📝 *הערה:* {rejection_note}" if rejection_note else ""
-        tg_note_line = (
-            f"\n📝 <b>הערה:</b> {TextSanitizer.sanitize_for_html(rejection_note)}"
-            if rejection_note else ""
-        )
+        # שורת הערת דחייה (אם קיימת) — פורמט מרוכז דרך TextSanitizer
+        wa_note_line = TextSanitizer.format_note_line(rejection_note, platform="whatsapp", label="הערה")
+        tg_note_line = TextSanitizer.format_note_line(rejection_note, platform="telegram", label="הערה")
 
         # שליחה לקבוצת וואטסאפ
         if settings.WHATSAPP_ADMIN_GROUP_ID:

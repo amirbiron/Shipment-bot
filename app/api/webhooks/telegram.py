@@ -836,7 +836,8 @@ async def telegram_webhook(
     if pending_courier_id is not None:
         _pending_rejection_notes.pop(send_chat_id, None)
         admin_name = name or "מנהל"
-        rejection_note = text.strip() if text.strip() != "ללא" else None
+        stripped = text.strip()
+        rejection_note = stripped if stripped and stripped != "ללא" else None
 
         result = await CourierApprovalService.reject(db, pending_courier_id, rejection_note=rejection_note)
         background_tasks.add_task(send_telegram_message, send_chat_id, result.message)

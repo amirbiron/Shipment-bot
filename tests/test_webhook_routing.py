@@ -555,6 +555,31 @@ class TestApprovalCommandMatching:
         """דחייה עם אמוג'י והערה"""
         assert _match_approval_command("*❌ דחה שליח 300 חסר מסמך*") == ("reject", 300, "חסר מסמך")
 
+    @pytest.mark.unit
+    def test_reject_with_multiple_spaces(self):
+        """דחייה עם רווחים מרובים בין חלקי הפקודה"""
+        assert _match_approval_command("דחה   123   התמונות לא ברורות") == ("reject", 123, "התמונות לא ברורות")
+
+    @pytest.mark.unit
+    def test_reject_with_tabs_and_newlines(self):
+        """דחייה עם טאב ושבירת שורה — מנורמלים לרווח"""
+        assert _match_approval_command("דחה\t100\tהערה") == ("reject", 100, "הערה")
+
+    @pytest.mark.unit
+    def test_reject_note_starts_with_number(self):
+        """הערה שמתחילה במספר — לא מתבלבלת עם ה-ID"""
+        assert _match_approval_command("דחה 100 3 תמונות חסרות") == ("reject", 100, "3 תמונות חסרות")
+
+    @pytest.mark.unit
+    def test_reject_whitespace_only_note_returns_none(self):
+        """הערה שמכילה רק רווחים — מנורמלת ל-None"""
+        # \s+ מנורמל לרווח אחד, ואז (.+) תופס את הרווח ו-strip() מחזיר ""
+        # אבל or None ממיר ל-None
+        result = _match_approval_command("דחה 100  ")
+        assert result is not None
+        _, _, note = result
+        assert note is None
+
 
 # ============================================================================
 # פתרון כתובת שליחה למנהל (reply_to vs admin number from settings)

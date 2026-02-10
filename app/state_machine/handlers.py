@@ -675,10 +675,10 @@ class CourierStateHandler:
         self.platform = platform
         self.state_manager = StateManager(db)
 
-    @staticmethod
-    def _blocked_or_rejected_response(user: User) -> tuple[MessageResponse, str, dict] | None:
+    def _blocked_or_rejected_response(self, user: User) -> tuple[MessageResponse, str, dict] | None:
         """מחזיר תשובה לשליח חסום/נדחה, או None אם הסטטוס אחר."""
         from app.db.models.user import ApprovalStatus
+        from app.core.validation import TextSanitizer
 
         if user.approval_status == ApprovalStatus.BLOCKED:
             response = MessageResponse(
@@ -688,7 +688,9 @@ class CourierStateHandler:
             return response, CourierState.PENDING_APPROVAL.value, {}
 
         if user.approval_status == ApprovalStatus.REJECTED:
-            note_line = f"\n📝 הערת המנהל: {escape(user.rejection_note)}" if user.rejection_note else ""
+            note_line = TextSanitizer.format_note_line(
+                user.rejection_note, platform=self.platform,
+            )
             response = MessageResponse(
                 f"לצערנו, בקשתך להצטרף כשליח נדחתה.{note_line}\n"
                 "לפרטים נוספים, פנה להנהלה.\n\n"

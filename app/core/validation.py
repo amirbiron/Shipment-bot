@@ -199,6 +199,33 @@ class TextSanitizer:
         return html.escape(text)
 
     @staticmethod
+    def format_note_line(
+        note: str | None,
+        *,
+        platform: str = "text",
+        label: str = "הערת המנהל",
+    ) -> str:
+        """
+        מחזיר שורת הערה מפורמטת לפי פלטפורמה, או מחרוזת ריקה.
+
+        Args:
+            note: טקסט ההערה (None או מחרוזת ריקה → מחרוזת ריקה)
+            platform: "telegram" (HTML), "whatsapp" (Markdown), "text" (ללא עיצוב)
+            label: תווית ההערה (ברירת מחדל "הערת המנהל")
+
+        Returns:
+            שורה מפורמטת (כולל \\n בהתחלה) או ""
+        """
+        if not note:
+            return ""
+        if platform == "telegram":
+            return f"\n📝 <b>{label}:</b> {TextSanitizer.sanitize_for_html(note)}"
+        elif platform == "whatsapp":
+            return f"\n📝 *{label}:* {note}"
+        else:
+            return f"\n{label}: {note}"
+
+    @staticmethod
     def check_for_injection(text: str) -> tuple[bool, str | None]:
         """
         Check text for potential injection attacks.
