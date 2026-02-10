@@ -11,10 +11,12 @@ FastAPI dependency לאימות בקשות לפאנל ווב
 """
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import verify_token, TokenPayload
 from app.db.database import get_db
+from app.db.models.user import User
 from app.domain.services.station_service import StationService
 from app.core.logging import get_logger
 
@@ -38,6 +40,21 @@ async def get_current_station_owner(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="טוקן לא תקין או פג תוקף",
+        )
+
+    # ולידציה שהמשתמש עדיין פעיל
+    user_result = await db.execute(
+        select(User).where(User.id == token_data.user_id)
+    )
+    user = user_result.scalar_one_or_none()
+    if not user or not user.is_active:
+        logger.warning(
+            "Panel access denied — user inactive",
+            extra_data={"user_id": token_data.user_id},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="חשבון המשתמש אינו פעיל",
         )
 
     # ולידציה שהתחנה עדיין פעילה

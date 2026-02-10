@@ -116,6 +116,13 @@ async def request_otp(
             detail="משתמש לא נמצא עם מספר הטלפון הזה",
         )
 
+    # בדיקה שהמשתמש פעיל
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="חשבון המשתמש אינו פעיל",
+        )
+
     # ולידציה שהוא בעל תחנה
     if user.role != UserRole.STATION_OWNER:
         raise HTTPException(
@@ -207,6 +214,13 @@ async def verify_otp_endpoint(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="משתמש לא נמצא",
+        )
+
+    # בדיקה שהמשתמש פעיל
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="חשבון המשתמש אינו פעיל",
         )
 
     # אימות OTP (כולל בדיקת מגבלת ניסיונות)

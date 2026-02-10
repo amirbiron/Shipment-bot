@@ -277,6 +277,60 @@ class TestPanelAuthEndpoints:
         assert response.status_code == 403
 
 
+class TestDeactivatedUser:
+    """בדיקות שמשתמש לא פעיל נחסם בכל שלבי האימות"""
+
+    @pytest.mark.asyncio
+    async def test_inactive_user_request_otp_rejected(
+        self, test_client, user_factory, db_session,
+    ):
+        """משתמש לא פעיל לא יכול לבקש OTP — 403"""
+        user = await user_factory(
+            phone_number="+972503333333",
+            name="מושבת",
+            role=UserRole.STATION_OWNER,
+            is_active=False,
+        )
+        station = Station(name="תחנה", owner_id=user.id)
+        db_session.add(station)
+        await db_session.flush()
+        wallet = StationWallet(station_id=station.id)
+        db_session.add(wallet)
+        await db_session.commit()
+
+        response = await test_client.post("/api/panel/auth/request-otp", json={
+            "phone_number": "0503333333",
+        })
+        assert response.status_code == 403
+        assert "אינו פעיל" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_inactive_user_dashboard_rejected(
+        self, test_client, user_factory, db_session,
+    ):
+        """משתמש לא פעיל עם token תקין — 403 בגישה לדשבורד"""
+        user = await user_factory(
+            phone_number="+972504444444",
+            name="מושבת עם טוקן",
+            role=UserRole.STATION_OWNER,
+            is_active=False,
+        )
+        station = Station(name="תחנה", owner_id=user.id)
+        db_session.add(station)
+        await db_session.flush()
+        wallet = StationWallet(station_id=station.id)
+        db_session.add(wallet)
+        await db_session.commit()
+
+        # טוקן תקין — אבל המשתמש כבר לא פעיל
+        token = create_access_token(user.id, station.id, "station_owner")
+        response = await test_client.get(
+            "/api/panel/dashboard",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 403
+
+
 class TestJWTExpTimestamp:
     """בדיקות שה-exp ב-JWT הוא int (Unix timestamp)"""
 

@@ -17,6 +17,7 @@ from app.db.database import get_db
 from app.db.models.station_blacklist import StationBlacklist
 from app.db.models.user import User
 from app.domain.services.station_service import StationService
+from app.api.routes.panel.schemas import ActionResponse, BulkResultItem
 
 logger = get_logger(__name__)
 
@@ -60,24 +61,11 @@ class BulkBlacklistRequest(BaseModel):
         return v
 
 
-class BulkResultItem(BaseModel):
-    """תוצאת הוספה בודדת"""
-    phone_masked: str
-    success: bool
-    message: str
-
-
 class BulkBlacklistResponse(BaseModel):
     """תוצאות הוספה מרובה"""
     results: List[BulkResultItem]
     total: int
     success_count: int
-
-
-class ActionResponse(BaseModel):
-    """תגובת פעולה"""
-    success: bool
-    message: str
 
 
 # ==================== Endpoints ====================

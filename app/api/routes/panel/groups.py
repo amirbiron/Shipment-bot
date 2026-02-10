@@ -12,6 +12,7 @@ from app.core.validation import TextSanitizer
 from app.api.dependencies.auth import get_current_station_owner
 from app.db.database import get_db
 from app.domain.services.station_service import StationService
+from app.api.routes.panel.schemas import ActionResponse
 
 router = APIRouter()
 
@@ -47,12 +48,6 @@ class UpdateGroupSettingsRequest(BaseModel):
         if v is not None:
             return TextSanitizer.sanitize(v.strip(), max_length=100)
         return v
-
-
-class ActionResponse(BaseModel):
-    """תגובת פעולה"""
-    success: bool
-    message: str
 
 
 # ==================== Endpoints ====================
