@@ -74,3 +74,9 @@ htmlcov/
 
 # mypy
 .mypy_cache/
+
+# Frontend build output
+frontend/dist/
+
+# חריגה לתיקיית lib של ה-Frontend (כדי שלא תיתפס על ידי lib/ למעלה)
+!frontend/src/lib/
