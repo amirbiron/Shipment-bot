@@ -14,11 +14,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import (
     TokenPayload,
-    check_otp_cooldown_by_phone,
     create_access_token,
     generate_otp,
-    set_otp_cooldown_by_phone,
     store_otp,
+    try_set_otp_cooldown_by_phone,
     verify_otp,
 )
 from app.core.logging import get_logger
@@ -109,14 +108,12 @@ async def request_otp(
     db: AsyncSession = Depends(get_db),
 ) -> ActionResponse:
     """בקשת קוד כניסה — תשובה גנרית למניעת user-enumeration"""
-    # Rate limiting לפי טלפון — לפני כל בדיקת קיום (מונע enumeration דרך 429)
-    if not await check_otp_cooldown_by_phone(data.phone_number):
+    # Rate limiting אטומי לפי טלפון — SET NX EX, לפני כל בדיקת קיום (מונע enumeration)
+    if not await try_set_otp_cooldown_by_phone(data.phone_number):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="נא להמתין לפחות דקה בין בקשות קוד כניסה",
         )
-    # מגדירים cooldown מיד — לכל מספר, ללא תלות בקיום המשתמש
-    await set_otp_cooldown_by_phone(data.phone_number)
 
     # חיפוש המשתמש
     result = await db.execute(

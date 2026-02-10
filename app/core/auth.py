@@ -81,20 +81,15 @@ def generate_otp() -> str:
     return f"{secrets.randbelow(1000000):06d}"
 
 
-async def check_otp_cooldown_by_phone(phone: str) -> bool:
-    """בדיקה אם הטלפון עדיין בזמן המתנה — True אם מותר לשלוח.
+async def try_set_otp_cooldown_by_phone(phone: str) -> bool:
+    """בדיקה + הגדרת cooldown אטומית — SET NX EX.
+    מחזיר True אם מותר (cooldown הוגדר עכשיו), False אם כבר בזמן המתנה.
     מבוסס על מספר טלפון (לא user_id) כדי למנוע enumeration."""
     redis = await get_redis()
     key = f"{_OTP_PHONE_COOLDOWN_PREFIX}:{phone}"
-    existing = await redis.get(key)
-    return existing is None
-
-
-async def set_otp_cooldown_by_phone(phone: str) -> None:
-    """הגדרת cooldown על מספר טלפון — נקרא לפני בדיקת קיום המשתמש למניעת enumeration"""
-    redis = await get_redis()
-    key = f"{_OTP_PHONE_COOLDOWN_PREFIX}:{phone}"
-    await redis.setex(key, OTP_COOLDOWN_SECONDS, "1")
+    # פעולה אטומית — SET רק אם המפתח לא קיים (NX) עם תפוגה (EX)
+    result = await redis.set(key, "1", nx=True, ex=OTP_COOLDOWN_SECONDS)
+    return result is not None
 
 
 async def store_otp(user_id: int, otp: str) -> None:

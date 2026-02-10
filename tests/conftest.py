@@ -305,6 +305,15 @@ class FakeRedis:
     async def get(self, key: str) -> str | None:
         return self._store.get(key)
 
+    async def set(self, key: str, value: str, nx: bool = False, ex: int | None = None) -> bool | None:
+        """SET עם תמיכה ב-NX (רק אם לא קיים) ו-EX (תפוגה בשניות)"""
+        if nx and key in self._store:
+            return None
+        self._store[key] = value
+        if ex is not None:
+            self._ttls[key] = ex
+        return True
+
     async def setex(self, key: str, ttl: int, value: str) -> None:
         self._store[key] = value
         self._ttls[key] = ttl

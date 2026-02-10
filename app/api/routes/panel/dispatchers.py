@@ -60,18 +60,14 @@ class BulkAddDispatchersRequest(BaseModel):
     def validate_and_normalize(cls, v: List[str]) -> List[str]:
         if len(v) > 50:
             raise ValueError("מקסימום 50 סדרנים בפעולה אחת")
-        # strip + normalize + הסרת כפילויות (שמירה על סדר)
-        seen: set[str] = set()
+        # strip + normalize — כפילויות נשמרות ומדווחות בתגובה
         result: list[str] = []
         for phone in v:
             stripped = phone.strip()
             if not stripped:
                 continue
             if PhoneNumberValidator.validate(stripped):
-                normalized = PhoneNumberValidator.normalize(stripped)
-                if normalized not in seen:
-                    seen.add(normalized)
-                    result.append(normalized)
+                result.append(PhoneNumberValidator.normalize(stripped))
             else:
                 result.append(stripped)
         return result

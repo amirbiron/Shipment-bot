@@ -4,11 +4,10 @@
 import pytest
 
 from app.core.auth import (
-    check_otp_cooldown_by_phone,
     create_access_token,
     generate_otp,
-    set_otp_cooldown_by_phone,
     store_otp,
+    try_set_otp_cooldown_by_phone,
     verify_otp,
     verify_token,
 )
@@ -368,18 +367,21 @@ class TestOTPRateLimiting:
     """בדיקות rate limiting של OTP"""
 
     @pytest.mark.asyncio
-    async def test_cooldown_by_phone_blocks_rapid_requests(self):
-        """cooldown לפי טלפון חוסם בקשות מהירות"""
+    async def test_atomic_cooldown_blocks_rapid_requests(self):
+        """cooldown אטומי (SET NX EX) חוסם בקשות מהירות"""
         phone = "+972501234567"
-        await set_otp_cooldown_by_phone(phone)
-        allowed = await check_otp_cooldown_by_phone(phone)
-        assert allowed is False
+        # קריאה ראשונה — מותר
+        first = await try_set_otp_cooldown_by_phone(phone)
+        assert first is True
+        # קריאה שנייה — חסום
+        second = await try_set_otp_cooldown_by_phone(phone)
+        assert second is False
 
     @pytest.mark.asyncio
-    async def test_cooldown_by_phone_allows_different_numbers(self):
+    async def test_atomic_cooldown_allows_different_numbers(self):
         """cooldown על מספר אחד לא חוסם מספר אחר"""
-        await set_otp_cooldown_by_phone("+972501111111")
-        allowed = await check_otp_cooldown_by_phone("+972502222222")
+        await try_set_otp_cooldown_by_phone("+972501111111")
+        allowed = await try_set_otp_cooldown_by_phone("+972502222222")
         assert allowed is True
 
     @pytest.mark.asyncio
