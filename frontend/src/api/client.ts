@@ -1,6 +1,5 @@
 import axios from "axios";
 import { useAuthStore } from "@/store/auth";
-import { toast } from "@/components/ui/use-toast";
 
 const apiClient = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || "/api/panel",
@@ -28,7 +27,7 @@ apiClient.interceptors.response.use(
       const isAuthRoute = AUTH_PATHS.some((path) => requestUrl.includes(path));
       if (!isAuthRoute) {
         useAuthStore.getState().logout();
-        toast({ title: "פג תוקף הכניסה", description: "יש להתחבר מחדש", variant: "destructive" });
+        sessionStorage.setItem("session-expired", "1");
         window.location.href = "/panel/login";
       }
     }

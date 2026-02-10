@@ -13,7 +13,6 @@ import ExportButton from "@/components/shared/ExportButton";
 import StatCard from "@/components/shared/StatCard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { useToast } from "@/components/ui/use-toast";
 import { formatCurrency, formatDate } from "@/lib/format";
 import { FileText, TrendingUp, CreditCard, ArrowDownCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -31,7 +30,6 @@ const collectionColumns: ColumnDef<CollectionReportItem, unknown>[] = [
 ];
 
 export default function ReportsPage() {
-  const { toast } = useToast();
   const [tab, setTab] = useState<Tab>("collection");
   const [cycleStart, setCycleStart] = useState("");
   const [dateFrom, setDateFrom] = useState("");
@@ -49,13 +47,7 @@ export default function ReportsPage() {
     enabled: tab === "revenue",
   });
 
-  const handleExportCsv = async () => {
-    try {
-      await exportCollectionCsv(cycleStart || undefined);
-    } catch {
-      toast({ title: "שגיאה בייצוא", variant: "destructive" });
-    }
-  };
+  const handleExportCsv = () => exportCollectionCsv(cycleStart || undefined);
 
   return (
     <div className="space-y-6">

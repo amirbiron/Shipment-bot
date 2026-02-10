@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, Navigate } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,14 @@ export default function LoginPage() {
   const [phone, setPhone] = useState("");
   const [otp, setOtp] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // הצגת הודעה כשפג תוקף הטוקן (הדגל נשמר ב-sessionStorage לפני redirect)
+  useEffect(() => {
+    if (sessionStorage.getItem("session-expired")) {
+      sessionStorage.removeItem("session-expired");
+      toast({ title: "פג תוקף הכניסה", description: "יש להתחבר מחדש", variant: "destructive" });
+    }
+  }, []);
 
   if (isAuthenticated) {
     return <Navigate to="/" replace />;
