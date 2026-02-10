@@ -35,6 +35,7 @@ router = APIRouter()
 # כאשר מנהל לוחץ "❌ דחה", שומרים כאן את ה-courier_id
 # וממתינים להודעת הטקסט הבאה מהמנהל כהערת דחייה.
 # רשומות פגות תוקף אחרי 5 דקות.
+# TODO: בהרצה עם מספר instances (k8s), להעביר ל-Redis כדי שהסטייט ישותף בין תהליכים.
 _REJECTION_NOTE_TTL_SECONDS = 300  # 5 דקות
 _pending_rejection_notes: dict[str, tuple[int, float]] = {}
 
@@ -729,7 +730,16 @@ async def telegram_webhook(
                             send_whatsapp_fn=send_whatsapp_message,
                         )
                 else:
-                    # דחייה — שומרים את ה-courier_id וממתינים להערת המנהל
+                    # דחייה — אם יש כבר דחייה ממתינה (לחץ על דחייה פעמיים ברצף), דורסים
+                    prev = _pending_rejection_notes.get(send_chat_id)
+                    if prev is not None:
+                        prev_id, _ = prev
+                        background_tasks.add_task(
+                            send_telegram_message,
+                            send_chat_id,
+                            f"⚠️ הדחייה הקודמת (נהג {prev_id}) בוטלה. ממתין להערה על נהג {courier_id}.",
+                        )
+
                     _pending_rejection_notes[send_chat_id] = (courier_id, time.monotonic())
                     background_tasks.add_task(
                         send_telegram_message,
@@ -739,7 +749,11 @@ async def telegram_webhook(
                         "\n⏱ יש לך 5 דקות לשלוח הערה.",
                     )
 
-                return {"ok": True, "admin_action": action, "courier_id": courier_id}
+                return {
+                    "ok": True,
+                    "admin_action": "reject_pending_note" if action == "reject" else action,
+                    "courier_id": courier_id,
+                }
 
             logger.warning(
                 "Non-admin clicked approval button",

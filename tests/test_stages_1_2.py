@@ -5,6 +5,7 @@
 שלב 2: מוודא את כל זרימת ה-KYC: שם -> מסמך -> סלפי -> קטגוריית רכב -> תמונת רכב -> תקנון.
 כולל בדיקות לתהליך אישור/דחייה של שליחים.
 """
+import time
 import pytest
 from unittest.mock import AsyncMock, patch
 from httpx import AsyncClient
@@ -933,7 +934,7 @@ class TestTelegramApprovalButtons:
             )
             assert resp.status_code == 200
             data = resp.json()
-            assert data.get("admin_action") == "reject"
+            assert data.get("admin_action") == "reject_pending_note"
 
 
 class TestWhatsAppAdminApproval:
@@ -1086,7 +1087,7 @@ class TestRejectionNote:
             )
             assert resp.status_code == 200
             data = resp.json()
-            assert data.get("admin_action") == "reject"
+            assert data.get("admin_action") == "reject_pending_note"
             # הנהג עדיין לא נדחה - ממתינים להערה
             assert admin_chat_id in _pending_rejection_notes
             courier_id, created_at = _pending_rejection_notes[admin_chat_id]
@@ -1135,3 +1136,166 @@ class TestRejectionNote:
         )
         assert result.success is False
         assert "כבר מאושר" in result.message
+
+    @pytest.mark.asyncio
+    async def test_ttl_expiry_clears_pending_rejection(self):
+        """רשומת דחייה ממתינה פגת תוקף אחרי TTL — מוחזר None"""
+        from app.api.webhooks.telegram import (
+            _pending_rejection_notes,
+            _get_pending_rejection,
+            _REJECTION_NOTE_TTL_SECONDS,
+        )
+
+        admin_id = "admin_ttl_test"
+        # רשומה שנוצרה לפני TTL+1 שניות — פגת תוקף
+        _pending_rejection_notes[admin_id] = (999, time.monotonic() - _REJECTION_NOTE_TTL_SECONDS - 1)
+
+        result = _get_pending_rejection(admin_id)
+        assert result is None
+        # ניקוי אוטומטי — הרשומה נמחקה מהמילון
+        assert admin_id not in _pending_rejection_notes
+
+    @pytest.mark.asyncio
+    async def test_ttl_not_expired_returns_courier_id(self):
+        """רשומת דחייה תקפה (בתוך TTL) — מחזירה courier_id"""
+        from app.api.webhooks.telegram import (
+            _pending_rejection_notes,
+            _get_pending_rejection,
+        )
+
+        admin_id = "admin_ttl_valid"
+        _pending_rejection_notes[admin_id] = (555, time.monotonic())
+
+        result = _get_pending_rejection(admin_id)
+        assert result == 555
+
+        # ניקוי
+        _pending_rejection_notes.pop(admin_id, None)
+
+    @pytest.mark.asyncio
+    async def test_html_escaping_in_rejection_note(self, db_session, user_factory):
+        """הערת דחייה עם תווים מיוחדים — נעשה HTML escape בתגובה לשליח"""
+        from app.state_machine.handlers import CourierStateHandler
+
+        xss_note = '<script>alert("xss")</script> & "quotes"'
+        user = await user_factory(
+            phone_number="tg:80020",
+            name="XSS Courier",
+            role=UserRole.COURIER,
+            platform="telegram",
+            telegram_chat_id="80020",
+            approval_status=ApprovalStatus.PENDING,
+        )
+        # דחייה עם הערה שמכילה תווי HTML
+        result = await CourierApprovalService.reject(
+            db_session, user.id, rejection_note=xss_note
+        )
+        assert result.success is True
+
+        await db_session.refresh(user)
+        assert user.rejection_note == xss_note
+
+        # בדיקת ה-handler: ההודעה לשליח חייבת להכיל את ההערה ב-escape
+        blocked_resp = CourierStateHandler._blocked_or_rejected_response(user)
+        assert blocked_resp is not None
+        response, _, _ = blocked_resp
+        # לוודא שהתווים עברו escape ולא מופיעים כ-raw HTML
+        assert "<script>" not in response.text
+        assert "&lt;script&gt;" in response.text
+        assert "&amp;" in response.text
+        assert "&quot;" in response.text
+
+    @pytest.mark.asyncio
+    async def test_html_escaping_in_notify_after_decision(self):
+        """sanitize_for_html מבצע escape נכון לתווי HTML"""
+        from app.core.validation import TextSanitizer
+
+        dangerous = '<b>bold</b> & "air quotes"'
+        safe = TextSanitizer.sanitize_for_html(dangerous)
+        assert "<b>" not in safe
+        assert "&lt;b&gt;" in safe
+        assert "&amp;" in safe
+        assert "&quot;" in safe
+
+    @pytest.mark.asyncio
+    async def test_double_reject_click_overwrites_pending(
+        self, db_session, user_factory, test_client
+    ):
+        """מנהל שלוחץ דחה פעמיים — הלחיצה השנייה דורסת את הראשונה"""
+        from app.api.webhooks.telegram import _pending_rejection_notes
+
+        courier1 = await user_factory(
+            phone_number="tg:80030",
+            name="Courier One",
+            role=UserRole.COURIER,
+            platform="telegram",
+            telegram_chat_id="80030",
+            approval_status=ApprovalStatus.PENDING,
+        )
+        courier2 = await user_factory(
+            phone_number="tg:80031",
+            name="Courier Two",
+            role=UserRole.COURIER,
+            platform="telegram",
+            telegram_chat_id="80031",
+            approval_status=ApprovalStatus.PENDING,
+        )
+        admin_chat_id = "99991"
+        with (
+            patch.object(settings, "TELEGRAM_ADMIN_CHAT_IDS", admin_chat_id),
+            patch.object(settings, "TELEGRAM_ADMIN_CHAT_ID", admin_chat_id),
+            patch.object(settings, "TELEGRAM_BOT_TOKEN", "fake-token"),
+            patch.object(settings, "WHATSAPP_ADMIN_GROUP_ID", None),
+            patch.object(settings, "WHATSAPP_ADMIN_NUMBERS", ""),
+            patch.object(settings, "WHATSAPP_GATEWAY_URL", ""),
+        ):
+            # לחיצה ראשונה — דחיית שליח 1
+            resp1 = await test_client.post(
+                "/api/telegram/webhook",
+                json={
+                    "update_id": 200,
+                    "callback_query": {
+                        "id": "cb_double1",
+                        "from": {"id": 99991, "first_name": "Admin"},
+                        "message": {
+                            "message_id": 200,
+                            "chat": {"id": 99991, "type": "private"},
+                            "from": {"id": 99991, "first_name": "Admin"},
+                            "date": 1700000000,
+                            "text": "כרטיס נהג",
+                        },
+                        "data": f"reject_courier_{courier1.id}",
+                    },
+                },
+            )
+            assert resp1.status_code == 200
+            assert admin_chat_id in _pending_rejection_notes
+            stored_id_1, _ = _pending_rejection_notes[admin_chat_id]
+            assert stored_id_1 == courier1.id
+
+            # לחיצה שנייה — דחיית שליח 2, דורסת את הראשונה
+            resp2 = await test_client.post(
+                "/api/telegram/webhook",
+                json={
+                    "update_id": 201,
+                    "callback_query": {
+                        "id": "cb_double2",
+                        "from": {"id": 99991, "first_name": "Admin"},
+                        "message": {
+                            "message_id": 201,
+                            "chat": {"id": 99991, "type": "private"},
+                            "from": {"id": 99991, "first_name": "Admin"},
+                            "date": 1700000000,
+                            "text": "כרטיס נהג",
+                        },
+                        "data": f"reject_courier_{courier2.id}",
+                    },
+                },
+            )
+            assert resp2.status_code == 200
+            # הרשומה הנוכחית היא של שליח 2
+            stored_id_2, _ = _pending_rejection_notes[admin_chat_id]
+            assert stored_id_2 == courier2.id
+
+        # ניקוי
+        _pending_rejection_notes.pop(admin_chat_id, None)
