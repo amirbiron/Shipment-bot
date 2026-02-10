@@ -33,9 +33,12 @@ router = APIRouter()
 # ממתין להערות דחייה — ממפה admin_chat_id → courier_id ב-Redis.
 # כאשר מנהל לוחץ "❌ דחה", שומרים ב-Redis את ה-courier_id
 # וממתינים להודעת הטקסט הבאה מהמנהל כהערת דחייה.
-# רשומות פגות תוקף אוטומטית אחרי 5 דקות (TTL של Redis).
-_REJECTION_NOTE_TTL_SECONDS = 300  # 5 דקות
-_PENDING_REJECTION_KEY_PREFIX = "pending_rejection:"
+# רשומות פגות תוקף אוטומטית לפי REDIS_PENDING_REJECTION_TTL (ברירת מחדל: 5 דקות).
+_PENDING_REJECTION_KEY_PREFIX = "shipmentbot:tg:pending_rejection:"
+
+
+def _rejection_key(admin_chat_id: str) -> str:
+    return f"{_PENDING_REJECTION_KEY_PREFIX}{admin_chat_id}"
 
 
 async def _get_pending_rejection(admin_chat_id: str) -> int | None:
@@ -43,7 +46,7 @@ async def _get_pending_rejection(admin_chat_id: str) -> int | None:
     try:
         from app.core.redis_client import get_redis
         r = await get_redis()
-        val = await r.get(f"{_PENDING_REJECTION_KEY_PREFIX}{admin_chat_id}")
+        val = await r.get(_rejection_key(admin_chat_id))
         return int(val) if val is not None else None
     except Exception as e:
         logger.error("Redis get failed for pending rejection", extra_data={
@@ -52,28 +55,30 @@ async def _get_pending_rejection(admin_chat_id: str) -> int | None:
         return None
 
 
-async def _set_pending_rejection(admin_chat_id: str, courier_id: int) -> None:
-    """שומר דחייה ממתינה ב-Redis עם TTL אוטומטי."""
+async def _set_pending_rejection(admin_chat_id: str, courier_id: int) -> bool:
+    """שומר דחייה ממתינה ב-Redis עם TTL. מחזיר False אם Redis נכשל."""
     try:
         from app.core.redis_client import get_redis
         r = await get_redis()
         await r.setex(
-            f"{_PENDING_REJECTION_KEY_PREFIX}{admin_chat_id}",
-            _REJECTION_NOTE_TTL_SECONDS,
+            _rejection_key(admin_chat_id),
+            settings.REDIS_PENDING_REJECTION_TTL,
             str(courier_id),
         )
+        return True
     except Exception as e:
         logger.error("Redis set failed for pending rejection", extra_data={
             "admin_chat_id": admin_chat_id, "courier_id": courier_id, "error": str(e),
         })
+        return False
 
 
 async def _pop_pending_rejection(admin_chat_id: str) -> int | None:
-    """מחזיר courier_id ומוחק את הרשומה מ-Redis, או None אם אין."""
+    """מחזיר courier_id ומוחק את הרשומה מ-Redis (אטומי עם GETDEL), או None."""
     try:
         from app.core.redis_client import get_redis
         r = await get_redis()
-        val = await r.getdel(f"{_PENDING_REJECTION_KEY_PREFIX}{admin_chat_id}")
+        val = await r.getdel(_rejection_key(admin_chat_id))
         return int(val) if val is not None else None
     except Exception as e:
         logger.error("Redis pop failed for pending rejection", extra_data={
@@ -87,7 +92,7 @@ async def _clear_pending_rejection(admin_chat_id: str) -> None:
     try:
         from app.core.redis_client import get_redis
         r = await get_redis()
-        await r.delete(f"{_PENDING_REJECTION_KEY_PREFIX}{admin_chat_id}")
+        await r.delete(_rejection_key(admin_chat_id))
     except Exception as e:
         logger.error("Redis delete failed for pending rejection", extra_data={
             "admin_chat_id": admin_chat_id, "error": str(e),
@@ -783,7 +788,33 @@ async def telegram_webhook(
                             f"⚠️ הדחייה הקודמת (נהג {prev_id}) בוטלה. ממתין להערה על נהג {courier_id}.",
                         )
 
-                    await _set_pending_rejection(send_chat_id, courier_id)
+                    saved = await _set_pending_rejection(send_chat_id, courier_id)
+                    if not saved:
+                        # Redis נכשל — דוחים ישירות ללא הערה כדי לא לאבד את הפעולה
+                        result = await CourierApprovalService.reject(db, courier_id)
+                        background_tasks.add_task(
+                            send_telegram_message,
+                            send_chat_id,
+                            f"⚠️ שגיאת מערכת — הדחייה בוצעה ללא הערה.\n{result.message}",
+                        )
+                        if result.success and result.user:
+                            from app.api.webhooks.whatsapp import send_whatsapp_message
+
+                            admin_name = name or "מנהל"
+                            background_tasks.add_task(
+                                CourierApprovalService.notify_after_decision,
+                                result.user,
+                                "reject",
+                                admin_name,
+                                send_telegram_fn=send_telegram_message,
+                                send_whatsapp_fn=send_whatsapp_message,
+                            )
+                        return {
+                            "ok": True,
+                            "admin_action": "reject_immediate_redis_fail",
+                            "courier_id": courier_id,
+                        }
+
                     background_tasks.add_task(
                         send_telegram_message,
                         send_chat_id,

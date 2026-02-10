@@ -1089,7 +1089,7 @@ class TestRejectionNote:
             assert data.get("admin_action") == "reject_pending_note"
             # הנהג עדיין לא נדחה - ממתינים להערה ב-Redis
             key = f"{_PENDING_REJECTION_KEY_PREFIX}{admin_chat_id}"
-            stored = fake_redis._store.get(key)
+            stored = await fake_redis.get(key)
             assert stored == str(courier.id)
 
     @pytest.mark.asyncio
@@ -1287,7 +1287,7 @@ class TestRejectionNote:
                 },
             )
             assert resp1.status_code == 200
-            assert fake_redis._store.get(key) == str(courier1.id)
+            assert await fake_redis.get(key) == str(courier1.id)
 
             # לחיצה שנייה — דחיית שליח 2, דורסת את הראשונה
             resp2 = await test_client.post(
@@ -1310,7 +1310,7 @@ class TestRejectionNote:
             )
             assert resp2.status_code == 200
             # הרשומה הנוכחית היא של שליח 2
-            assert fake_redis._store.get(key) == str(courier2.id)
+            assert await fake_redis.get(key) == str(courier2.id)
 
     @pytest.mark.asyncio
     async def test_approve_clears_pending_rejection(
@@ -1365,7 +1365,7 @@ class TestRejectionNote:
                 },
             )
             assert resp1.status_code == 200
-            assert key in fake_redis._store
+            assert await fake_redis.get(key) is not None
 
             # שלב 2: לחיצה על אשר לשליח 2 — חייבת לנקות את הדחייה הממתינה
             resp2 = await test_client.post(
@@ -1388,4 +1388,122 @@ class TestRejectionNote:
             )
             assert resp2.status_code == 200
             # הדחייה הממתינה נמחקה — הטקסט הבא לא ידחה בטעות את שליח 1
-            assert key not in fake_redis._store
+            assert await fake_redis.get(key) is None
+
+    @pytest.mark.asyncio
+    async def test_pending_rejection_uses_configured_ttl(
+        self, test_client: AsyncClient, user_factory, mock_telegram_api, fake_redis
+    ):
+        """דחייה ממתינה נשמרת עם TTL מהגדרות (REDIS_PENDING_REJECTION_TTL)"""
+        from app.api.webhooks.telegram import _PENDING_REJECTION_KEY_PREFIX
+
+        courier = await user_factory(
+            phone_number="tg:80050",
+            name="TTL Courier",
+            role=UserRole.COURIER,
+            platform="telegram",
+            telegram_chat_id="80050",
+            approval_status=ApprovalStatus.PENDING,
+        )
+        admin_chat_id = "99993"
+        key = f"{_PENDING_REJECTION_KEY_PREFIX}{admin_chat_id}"
+        with (
+            patch.object(settings, "TELEGRAM_ADMIN_CHAT_IDS", admin_chat_id),
+            patch.object(settings, "TELEGRAM_ADMIN_CHAT_ID", admin_chat_id),
+            patch.object(settings, "TELEGRAM_BOT_TOKEN", "fake-token"),
+            patch.object(settings, "WHATSAPP_ADMIN_GROUP_ID", None),
+            patch.object(settings, "WHATSAPP_ADMIN_NUMBERS", ""),
+            patch.object(settings, "WHATSAPP_GATEWAY_URL", ""),
+        ):
+            resp = await test_client.post(
+                "/api/telegram/webhook",
+                json={
+                    "update_id": 400,
+                    "callback_query": {
+                        "id": "cb_ttl",
+                        "from": {"id": 99993, "first_name": "Admin"},
+                        "message": {
+                            "message_id": 400,
+                            "chat": {"id": 99993, "type": "private"},
+                            "from": {"id": 99993, "first_name": "Admin"},
+                            "date": 1700000000,
+                            "text": "כרטיס נהג",
+                        },
+                        "data": f"reject_courier_{courier.id}",
+                    },
+                },
+            )
+            assert resp.status_code == 200
+            # TTL שנשמר ב-FakeRedis חייב להתאים להגדרה
+            assert fake_redis._ttls.get(key) == settings.REDIS_PENDING_REJECTION_TTL
+
+    @pytest.mark.asyncio
+    async def test_redis_failure_rejects_without_note(
+        self, db_session, user_factory, test_client, mock_telegram_api
+    ):
+        """כשל Redis — הדחייה מבוצעת ישירות ללא הערה והמנהל מקבל הודעה"""
+        courier = await user_factory(
+            phone_number="tg:80060",
+            name="Redis Fail Courier",
+            role=UserRole.COURIER,
+            platform="telegram",
+            telegram_chat_id="80060",
+            approval_status=ApprovalStatus.PENDING,
+        )
+        admin_chat_id = "99994"
+
+        # FakeRedis שנכשל בכל פעולה
+        class FailingRedis:
+            async def ping(self) -> bool:
+                return True
+
+            async def setex(self, *args, **kwargs):
+                raise ConnectionError("Redis is down")
+
+            async def get(self, *args, **kwargs):
+                raise ConnectionError("Redis is down")
+
+            async def getdel(self, *args, **kwargs):
+                raise ConnectionError("Redis is down")
+
+            async def delete(self, *args, **kwargs):
+                raise ConnectionError("Redis is down")
+
+        async def _get_failing_redis():
+            return FailingRedis()
+
+        with (
+            patch.object(settings, "TELEGRAM_ADMIN_CHAT_IDS", admin_chat_id),
+            patch.object(settings, "TELEGRAM_ADMIN_CHAT_ID", admin_chat_id),
+            patch.object(settings, "TELEGRAM_BOT_TOKEN", "fake-token"),
+            patch.object(settings, "WHATSAPP_ADMIN_GROUP_ID", None),
+            patch.object(settings, "WHATSAPP_ADMIN_NUMBERS", ""),
+            patch.object(settings, "WHATSAPP_GATEWAY_URL", ""),
+            patch("app.core.redis_client.get_redis", _get_failing_redis),
+        ):
+            resp = await test_client.post(
+                "/api/telegram/webhook",
+                json={
+                    "update_id": 500,
+                    "callback_query": {
+                        "id": "cb_redis_fail",
+                        "from": {"id": 99994, "first_name": "Admin"},
+                        "message": {
+                            "message_id": 500,
+                            "chat": {"id": 99994, "type": "private"},
+                            "from": {"id": 99994, "first_name": "Admin"},
+                            "date": 1700000000,
+                            "text": "כרטיס נהג",
+                        },
+                        "data": f"reject_courier_{courier.id}",
+                    },
+                },
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            # כשל Redis — דחייה ישירה ללא הערה
+            assert data.get("admin_action") == "reject_immediate_redis_fail"
+
+            # הנהג צריך להיות נדחה ב-DB
+            await db_session.refresh(courier)
+            assert courier.approval_status == ApprovalStatus.REJECTED

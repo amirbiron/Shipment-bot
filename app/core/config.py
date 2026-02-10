@@ -34,6 +34,7 @@ class Settings(BaseSettings):
 
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
+    REDIS_PENDING_REJECTION_TTL: int = 300  # TTL בשניות לדחייה ממתינה (ברירת מחדל: 5 דקות)
 
     # Celery
     CELERY_BROKER_URL: str = "redis://localhost:6379/1"
