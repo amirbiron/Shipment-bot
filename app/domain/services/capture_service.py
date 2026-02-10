@@ -169,7 +169,9 @@ class CaptureService:
             return True, f"המשלוח נתפס בהצלחה! עמלה: {fee}₪, יתרה חדשה: {future_balance}₪", delivery
 
         except Exception as e:
-            await self.db.rollback()
+            # rollback רק כש-auto_commit=True — אחרת הקורא מנהל את הטרנזקציה
+            if auto_commit:
+                await self.db.rollback()
             raise CaptureError(f"שגיאה בתפיסת המשלוח: {str(e)}")
 
     async def release_delivery(

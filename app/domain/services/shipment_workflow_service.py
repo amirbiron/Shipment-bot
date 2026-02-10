@@ -156,9 +156,33 @@ class ShipmentWorkflowService:
             if not is_disp:
                 return False, "אין לך הרשאה לאשר משלוחים בתחנה זו.", None
 
+        # אימות מחדש שהשליח עדיין מאושר ולא חסום (עלול להשתנות בין בקשה לאישור)
+        courier_id = delivery.requesting_courier_id
+        courier_check = await self._get_user(courier_id)
+        if not courier_check or courier_check.approval_status != ApprovalStatus.APPROVED:
+            logger.warning(
+                "Courier no longer approved at approval time",
+                extra_data={"courier_id": courier_id, "delivery_id": delivery_id}
+            )
+            return False, "❌ השליח כבר לא מאושר לקחת משלוחים.", None
+
+        if delivery.station_id:
+            is_blocked = await self.station_service.is_blacklisted(
+                delivery.station_id, courier_id
+            )
+            if is_blocked:
+                logger.warning(
+                    "Courier blacklisted at approval time",
+                    extra_data={
+                        "courier_id": courier_id,
+                        "station_id": delivery.station_id,
+                        "delivery_id": delivery_id,
+                    }
+                )
+                return False, "❌ השליח חסום בתחנה זו.", None
+
         # ביצוע תפיסה אטומית דרך CaptureService (חיוב ארנק וכו')
         # auto_commit=False כדי שהכל יהיה באותה טרנזקציה עם שדות האישור
-        courier_id = delivery.requesting_courier_id
         success, msg, captured = await self.capture_service.capture_delivery(
             delivery_id, courier_id, auto_commit=False
         )
