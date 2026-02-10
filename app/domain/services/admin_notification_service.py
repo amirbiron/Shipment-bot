@@ -10,6 +10,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.circuit_breaker import get_telegram_circuit_breaker, get_whatsapp_admin_circuit_breaker
 from app.core.exceptions import TelegramError, WhatsAppError
+from app.core.validation import TextSanitizer
 
 logger = get_logger(__name__)
 
@@ -285,9 +286,12 @@ class AdminNotificationService:
             status_icon = "❌"
             status_text = "נדחה"
 
-        # שורת הערת דחייה (אם קיימת)
+        # שורת הערת דחייה (אם קיימת) — HTML escaping לטלגרם
         wa_note_line = f"\n📝 *הערה:* {rejection_note}" if rejection_note else ""
-        tg_note_line = f"\n📝 <b>הערה:</b> {rejection_note}" if rejection_note else ""
+        tg_note_line = (
+            f"\n📝 <b>הערה:</b> {TextSanitizer.sanitize_for_html(rejection_note)}"
+            if rejection_note else ""
+        )
 
         # שליחה לקבוצת וואטסאפ
         if settings.WHATSAPP_ADMIN_GROUP_ID:

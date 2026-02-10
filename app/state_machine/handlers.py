@@ -930,8 +930,8 @@ class CourierStateHandler:
             return response, CourierState.PENDING_APPROVAL.value, {}
 
         if user.approval_status == ApprovalStatus.REJECTED:
-            # הצגת הערת דחייה אם קיימת
-            note_line = f"\n📝 הערת המנהל: {user.rejection_note}" if user.rejection_note else ""
+            # הצגת הערת דחייה אם קיימת — escape ל-HTML כי טלגרם משתמש ב-parse_mode=HTML
+            note_line = f"\n📝 הערת המנהל: {escape(user.rejection_note)}" if user.rejection_note else ""
             response = MessageResponse(
                 f"לצערנו, בקשתך להצטרף כשליח נדחתה.{note_line}\n"
                 "לפרטים נוספים, פנה להנהלה.\n\n"
@@ -1153,8 +1153,8 @@ class CourierStateHandler:
             return response, CourierState.PENDING_APPROVAL.value, {}
 
         if user.approval_status == ApprovalStatus.REJECTED:
-            # הצגת הערת דחייה אם קיימת
-            note_line = f"\n📝 הערת המנהל: {user.rejection_note}" if user.rejection_note else ""
+            # הצגת הערת דחייה אם קיימת — escape ל-HTML כי טלגרם משתמש ב-parse_mode=HTML
+            note_line = f"\n📝 הערת המנהל: {escape(user.rejection_note)}" if user.rejection_note else ""
             response = MessageResponse(
                 f"לצערנו, בקשתך להצטרף כשליח נדחתה.{note_line}\n"
                 "לפרטים נוספים, פנה להנהלה.\n\n"

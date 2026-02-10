@@ -2,6 +2,7 @@
 Telegram Webhook Handler - Bot Gateway Layer
 """
 import re
+import time
 import hashlib
 from dataclasses import dataclass
 from collections.abc import Awaitable, Callable
@@ -30,10 +31,25 @@ logger = get_logger(__name__)
 
 router = APIRouter()
 
-# מילון ממתין להערות דחייה — ממפה admin_chat_id → courier_id
+# ממתין להערות דחייה — ממפה admin_chat_id → (courier_id, timestamp)
 # כאשר מנהל לוחץ "❌ דחה", שומרים כאן את ה-courier_id
-# וממתינים להודעת הטקסט הבאה מהמנהל כהערת דחייה
-_pending_rejection_notes: dict[str, int] = {}
+# וממתינים להודעת הטקסט הבאה מהמנהל כהערת דחייה.
+# רשומות פגות תוקף אחרי 5 דקות.
+_REJECTION_NOTE_TTL_SECONDS = 300  # 5 דקות
+_pending_rejection_notes: dict[str, tuple[int, float]] = {}
+
+
+def _get_pending_rejection(admin_chat_id: str) -> int | None:
+    """מחזיר courier_id אם יש דחייה ממתינה תקפה, אחרת None (+ ניקוי)."""
+    entry = _pending_rejection_notes.get(admin_chat_id)
+    if entry is None:
+        return None
+    courier_id, created_at = entry
+    if time.monotonic() - created_at > _REJECTION_NOTE_TTL_SECONDS:
+        # פג תוקף — מנקים
+        _pending_rejection_notes.pop(admin_chat_id, None)
+        return None
+    return courier_id
 
 _SenderButtonHandler: TypeAlias = Callable[
     [User, AsyncSession, StateManager, str, str | None],
@@ -714,11 +730,13 @@ async def telegram_webhook(
                         )
                 else:
                     # דחייה — שומרים את ה-courier_id וממתינים להערת המנהל
-                    _pending_rejection_notes[send_chat_id] = courier_id
+                    _pending_rejection_notes[send_chat_id] = (courier_id, time.monotonic())
                     background_tasks.add_task(
                         send_telegram_message,
                         send_chat_id,
-                        f"📝 כתוב הערת דחייה לנהג {courier_id} (או שלח <b>ללא</b> לדחייה ללא הערה):",
+                        f"📝 כתוב הערת דחייה לנהג {courier_id}"
+                        " (או שלח <b>ללא</b> לדחייה ללא הערה):"
+                        "\n⏱ יש לך 5 דקות לשלוח הערה.",
                     )
 
                 return {"ok": True, "admin_action": action, "courier_id": courier_id}
@@ -800,12 +818,13 @@ async def telegram_webhook(
             }
 
     # טיפול בהערת דחייה ממתינה — מנהל שלחץ "❌ דחה" ושלח הערה
-    if send_chat_id in _pending_rejection_notes and not event.is_callback:
-        courier_id = _pending_rejection_notes.pop(send_chat_id)
+    pending_courier_id = _get_pending_rejection(send_chat_id) if not event.is_callback else None
+    if pending_courier_id is not None:
+        _pending_rejection_notes.pop(send_chat_id, None)
         admin_name = name or "מנהל"
         rejection_note = text.strip() if text.strip() != "ללא" else None
 
-        result = await CourierApprovalService.reject(db, courier_id, rejection_note=rejection_note)
+        result = await CourierApprovalService.reject(db, pending_courier_id, rejection_note=rejection_note)
         background_tasks.add_task(send_telegram_message, send_chat_id, result.message)
 
         if result.success and result.user:
@@ -821,7 +840,7 @@ async def telegram_webhook(
                 rejection_note=rejection_note,
             )
 
-        return {"ok": True, "admin_action": "reject", "courier_id": courier_id}
+        return {"ok": True, "admin_action": "reject", "courier_id": pending_courier_id}
 
     # Get or create user (מזהה לפי from_user.id כשאפשר)
     user, is_new_user = await get_or_create_user(db, telegram_user_id, name)

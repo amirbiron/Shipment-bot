@@ -10,6 +10,7 @@ from sqlalchemy import select
 from app.db.models.user import User, UserRole, ApprovalStatus
 from app.domain.services.admin_notification_service import AdminNotificationService
 from app.core.logging import get_logger
+from app.core.validation import TextSanitizer
 
 logger = get_logger(__name__)
 
@@ -162,9 +163,10 @@ class CourierApprovalService:
             # הודעת דחייה עם הערת מנהל (אם קיימת)
             note = rejection_note or user.rejection_note
             if note:
+                safe_note_html = TextSanitizer.sanitize_for_html(note)
                 tg_msg = f"""😔 <b>לצערנו, בקשתך להצטרף כשליח נדחתה.</b>
 
-📝 <b>הערת המנהל:</b> {note}
+📝 <b>הערת המנהל:</b> {safe_note_html}
 
 אם אתה חושב שזו טעות, אנא צור קשר עם התמיכה."""
                 wa_msg = f"""😔 *לצערנו, בקשתך להצטרף כשליח נדחתה.*

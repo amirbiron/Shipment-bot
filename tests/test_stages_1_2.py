@@ -1089,7 +1089,8 @@ class TestRejectionNote:
             assert data.get("admin_action") == "reject"
             # הנהג עדיין לא נדחה - ממתינים להערה
             assert admin_chat_id in _pending_rejection_notes
-            assert _pending_rejection_notes[admin_chat_id] == courier.id
+            courier_id, created_at = _pending_rejection_notes[admin_chat_id]
+            assert courier_id == courier.id
 
         # ניקוי
         _pending_rejection_notes.pop(admin_chat_id, None)
