@@ -26,9 +26,21 @@ class MessageResponse:
 class SenderStateHandler:
     """Handles sender conversation states"""
 
+    # מפתחות קונטקסט של טיוטת משלוח — מנוקים בחזרה ל-MENU
+    _DELIVERY_CONTEXT_KEYS = {
+        "pickup_city", "pickup_street", "pickup_number", "pickup_apartment",
+        "pickup_address", "dropoff_city", "dropoff_street", "dropoff_number",
+        "dropoff_apartment", "dropoff_address", "delivery_location", "same_city",
+        "urgency", "delivery_time", "min_price", "customer_price", "description",
+    }
+
     def __init__(self, db: AsyncSession):
         self.db = db
         self.state_manager = StateManager(db)
+
+    def _is_delivery_flow_state(self, state: str) -> bool:
+        """בודק אם המצב שייך לזרימת יצירת משלוח"""
+        return state.startswith("SENDER.DELIVERY.")
 
     async def handle_message(
         self,
@@ -44,6 +56,24 @@ class SenderStateHandler:
 
         handler = self._get_handler(current_state)
         response, new_state, context_update = await handler(message, context, user_id)
+
+        # ניקוי קונטקסט טיוטת משלוח בחזרה ל-MENU מזרימת משלוח
+        if (
+            new_state == SenderState.MENU.value
+            and self._is_delivery_flow_state(current_state)
+        ):
+            clean_context = {
+                k: v for k, v in context.items()
+                if k not in self._DELIVERY_CONTEXT_KEYS
+            }
+            if context_update:
+                for k, v in context_update.items():
+                    if k not in self._DELIVERY_CONTEXT_KEYS:
+                        clean_context[k] = v
+            await self.state_manager.force_state(
+                user_id, platform, new_state, clean_context
+            )
+            return response, new_state
 
         if new_state != current_state:
             # Try to transition to new state
@@ -918,6 +948,8 @@ class CourierStateHandler:
         user.terms_accepted_at = datetime.utcnow()
         user.role = UserRole.COURIER
         user.approval_status = ApprovalStatus.PENDING
+        # ניקוי הערת דחייה ישנה מהגשה קודמת (אם קיימת)
+        user.rejection_note = None
 
         # fallback לתקופת מעבר: שליחים שהתחילו KYC לפני הפריסה
         # עדיין מחזיקים מסמכים רק ב-context. נעתיק ל-DB אם השדה ריק.

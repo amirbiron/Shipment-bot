@@ -66,7 +66,8 @@ class StationOwnerStateHandler:
             # ניהול סדרנים
             StationOwnerState.MANAGE_DISPATCHERS.value: self._handle_manage_dispatchers,
             StationOwnerState.ADD_DISPATCHER_PHONE.value: self._handle_add_dispatcher,
-            StationOwnerState.REMOVE_DISPATCHER_SELECT.value: self._handle_remove_dispatcher,
+            StationOwnerState.REMOVE_DISPATCHER_SELECT.value: self._handle_remove_dispatcher_select,
+            StationOwnerState.CONFIRM_REMOVE_DISPATCHER.value: self._handle_confirm_remove_dispatcher,
 
             # ארנק תחנה
             StationOwnerState.VIEW_WALLET.value: self._handle_view_wallet,
@@ -78,7 +79,8 @@ class StationOwnerStateHandler:
             StationOwnerState.VIEW_BLACKLIST.value: self._handle_view_blacklist,
             StationOwnerState.ADD_BLACKLIST_PHONE.value: self._handle_add_blacklist_phone,
             StationOwnerState.ADD_BLACKLIST_REASON.value: self._handle_add_blacklist_reason,
-            StationOwnerState.REMOVE_BLACKLIST_SELECT.value: self._handle_remove_blacklist,
+            StationOwnerState.REMOVE_BLACKLIST_SELECT.value: self._handle_remove_blacklist_select,
+            StationOwnerState.CONFIRM_REMOVE_BLACKLIST.value: self._handle_confirm_remove_blacklist,
 
             # שלב 4: הגדרות קבוצות
             StationOwnerState.GROUP_SETTINGS.value: self._handle_group_settings,
@@ -234,10 +236,10 @@ class StationOwnerStateHandler:
             "dispatcher_map": dispatcher_map
         }
 
-    async def _handle_remove_dispatcher(
+    async def _handle_remove_dispatcher_select(
         self, user: User, message: str, context: dict
     ):
-        """הסרת סדרן לפי בחירה מרשימה"""
+        """בחירת סדרן להסרה — מעביר לשלב אישור"""
         if "חזרה" in message:
             return await self._show_manage_dispatchers(user, context)
 
@@ -247,6 +249,42 @@ class StationOwnerStateHandler:
 
         if numbers and numbers[0] in dispatcher_map:
             dispatcher_user_id = dispatcher_map[numbers[0]]
+            # שליפת שם הסדרן להצגה בהודעת האישור
+            result = await self.db.execute(
+                select(User).where(User.id == dispatcher_user_id)
+            )
+            dispatcher_user = result.scalar_one_or_none()
+            name = dispatcher_user.name if dispatcher_user else "לא ידוע"
+
+            response = MessageResponse(
+                f"⚠️ <b>אישור הסרת סדרן</b>\n\n"
+                f"האם אתה בטוח שברצונך להסיר את <b>{escape(name)}</b> מרשימת הסדרנים?",
+                keyboard=[["✅ כן, הסר", "❌ ביטול"]],
+                inline=True
+            )
+            return response, StationOwnerState.CONFIRM_REMOVE_DISPATCHER.value, {
+                "remove_dispatcher_id": dispatcher_user_id,
+                "remove_dispatcher_name": name,
+            }
+
+        response = MessageResponse(
+            "בחירה לא תקינה. אנא בחר מספר מהרשימה.",
+            keyboard=[["🔙 חזרה"]]
+        )
+        return response, StationOwnerState.REMOVE_DISPATCHER_SELECT.value, {}
+
+    async def _handle_confirm_remove_dispatcher(
+        self, user: User, message: str, context: dict
+    ):
+        """אישור הסרת סדרן"""
+        if "ביטול" in message or "❌" in message:
+            return await self._show_manage_dispatchers(user, context)
+
+        if "כן" in message or "✅" in message or "הסר" in message:
+            dispatcher_user_id = context.get("remove_dispatcher_id")
+            if not dispatcher_user_id:
+                return await self._show_manage_dispatchers(user, context)
+
             success, msg = await self.station_service.remove_dispatcher(
                 self.station_id, dispatcher_user_id
             )
@@ -260,10 +298,11 @@ class StationOwnerStateHandler:
             return response, StationOwnerState.MANAGE_DISPATCHERS.value, {}
 
         response = MessageResponse(
-            "בחירה לא תקינה. אנא בחר מספר מהרשימה.",
-            keyboard=[["🔙 חזרה"]]
+            "אנא בחר:\n✅ כן, הסר\n❌ ביטול",
+            keyboard=[["✅ כן, הסר", "❌ ביטול"]],
+            inline=True
         )
-        return response, StationOwnerState.REMOVE_DISPATCHER_SELECT.value, {}
+        return response, StationOwnerState.CONFIRM_REMOVE_DISPATCHER.value, {}
 
     # ==================== ארנק תחנה ====================
 
@@ -463,10 +502,10 @@ class StationOwnerStateHandler:
             "blacklist_map": blacklist_map
         }
 
-    async def _handle_remove_blacklist(
+    async def _handle_remove_blacklist_select(
         self, user: User, message: str, context: dict
     ):
-        """הסרת נהג מרשימה שחורה"""
+        """בחירת נהג להסרה מרשימה שחורה — מעביר לשלב אישור"""
         if "חזרה" in message:
             return await self._show_blacklist(user, context)
 
@@ -476,6 +515,42 @@ class StationOwnerStateHandler:
 
         if numbers and numbers[0] in blacklist_map:
             courier_id = blacklist_map[numbers[0]]
+            # שליפת שם הנהג להצגה בהודעת האישור
+            result = await self.db.execute(
+                select(User).where(User.id == courier_id)
+            )
+            blocked_user = result.scalar_one_or_none()
+            name = blocked_user.name if blocked_user else "לא ידוע"
+
+            response = MessageResponse(
+                f"⚠️ <b>אישור הסרה מרשימה שחורה</b>\n\n"
+                f"האם אתה בטוח שברצונך להסיר את <b>{escape(name)}</b> מהרשימה השחורה?",
+                keyboard=[["✅ כן, הסר", "❌ ביטול"]],
+                inline=True
+            )
+            return response, StationOwnerState.CONFIRM_REMOVE_BLACKLIST.value, {
+                "remove_blacklist_courier_id": courier_id,
+                "remove_blacklist_name": name,
+            }
+
+        response = MessageResponse(
+            "בחירה לא תקינה. אנא בחר מספר מהרשימה.",
+            keyboard=[["🔙 חזרה"]]
+        )
+        return response, StationOwnerState.REMOVE_BLACKLIST_SELECT.value, {}
+
+    async def _handle_confirm_remove_blacklist(
+        self, user: User, message: str, context: dict
+    ):
+        """אישור הסרת נהג מרשימה שחורה"""
+        if "ביטול" in message or "❌" in message:
+            return await self._show_blacklist(user, context)
+
+        if "כן" in message or "✅" in message or "הסר" in message:
+            courier_id = context.get("remove_blacklist_courier_id")
+            if not courier_id:
+                return await self._show_blacklist(user, context)
+
             success, msg = await self.station_service.remove_from_blacklist(
                 self.station_id, courier_id
             )
@@ -489,10 +564,11 @@ class StationOwnerStateHandler:
             return response, StationOwnerState.VIEW_BLACKLIST.value, {}
 
         response = MessageResponse(
-            "בחירה לא תקינה. אנא בחר מספר מהרשימה.",
-            keyboard=[["🔙 חזרה"]]
+            "אנא בחר:\n✅ כן, הסר\n❌ ביטול",
+            keyboard=[["✅ כן, הסר", "❌ ביטול"]],
+            inline=True
         )
-        return response, StationOwnerState.REMOVE_BLACKLIST_SELECT.value, {}
+        return response, StationOwnerState.CONFIRM_REMOVE_BLACKLIST.value, {}
 
     # ==================== שלב 4: הגדרות קבוצות ====================
 
