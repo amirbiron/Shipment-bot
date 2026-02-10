@@ -170,6 +170,9 @@ class OutboxService:
             platform = MessagePlatform.WHATSAPP
             recipient = sender.phone_number
 
+        if not recipient:
+            return messages
+
         content = {
             "delivery_id": delivery.id,
             "courier_id": courier_id,

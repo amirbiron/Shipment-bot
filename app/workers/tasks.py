@@ -159,15 +159,19 @@ async def _get_courier_recipients(db, platform: MessagePlatform) -> list:
 async def _get_dispatcher_recipients(
     db, station_id: int, platform: MessagePlatform
 ) -> list:
-    """שלב 4: שליפת סדרנים פעילים של תחנה לפלטפורמה נתונה"""
+    """שלב 4: שליפת סדרנים פעילים של תחנה פעילה לפלטפורמה נתונה"""
     from app.db.models.station_dispatcher import StationDispatcher
+    from app.db.models.station import Station
 
     result = await db.execute(
         select(User).join(
             StationDispatcher, StationDispatcher.user_id == User.id
+        ).join(
+            Station, StationDispatcher.station_id == Station.id
         ).where(
             StationDispatcher.station_id == station_id,
             StationDispatcher.is_active == True,
+            Station.is_active == True,
             User.is_active == True,
             User.platform == platform.value,
         )
