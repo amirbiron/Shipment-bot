@@ -36,3 +36,4 @@ class Station(Base):
     # קשרים
     owner = relationship("User", foreign_keys=[owner_id])
     dispatchers = relationship("StationDispatcher", back_populates="station")
+    owners = relationship("StationOwner", back_populates="station")

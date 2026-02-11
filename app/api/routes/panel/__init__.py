@@ -13,11 +13,13 @@ from app.api.routes.panel.wallet import router as wallet_router
 from app.api.routes.panel.blacklist import router as blacklist_router
 from app.api.routes.panel.reports import router as reports_router
 from app.api.routes.panel.groups import router as groups_router
+from app.api.routes.panel.owners import router as owners_router
 
 router = APIRouter()
 
 router.include_router(auth_router, prefix="/auth", tags=["Panel - אימות"])
 router.include_router(dashboard_router, prefix="/dashboard", tags=["Panel - דשבורד"])
+router.include_router(owners_router, prefix="/owners", tags=["Panel - בעלים"])
 router.include_router(dispatchers_router, prefix="/dispatchers", tags=["Panel - סדרנים"])
 router.include_router(deliveries_router, prefix="/deliveries", tags=["Panel - משלוחים"])
 router.include_router(wallet_router, prefix="/wallet", tags=["Panel - ארנק"])
