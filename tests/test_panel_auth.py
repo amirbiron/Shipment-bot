@@ -420,3 +420,50 @@ class TestOTPRateLimiting:
         await store_otp(user_id=666, otp="222222")
         result_after_reset = await verify_otp(666, "222222")
         assert result_after_reset is True  # עובד שוב
+
+    @pytest.mark.asyncio
+    async def test_non_consuming_verify_does_not_waste_attempts(self):
+        """אימות עם consume=False לא מבזבז ניסיונות — station picker לא שורף מכסה"""
+        await store_otp(user_id=555, otp="123456")
+        # 4 אימותים מוצלחים ללא צריכה (כמו station picker retries)
+        for _ in range(4):
+            result = await verify_otp(555, "123456", consume=False)
+            assert result is True
+        # האימות ה-5 עם צריכה עדיין צריך להצליח — המונה לא עלה
+        result = await verify_otp(555, "123456", consume=True)
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_wrong_otp_still_counted_with_consume_false(self):
+        """OTP שגוי עדיין נספר גם כש-consume=False — הגנה מ-brute force"""
+        await store_otp(user_id=444, otp="123456")
+        # 5 ניסיונות שגויים (consume=False לא עוזר לתוקף)
+        for _ in range(5):
+            await verify_otp(444, "000000", consume=False)
+        # הניסיון ה-6 נכשל גם עם הקוד הנכון
+        result = await verify_otp(444, "123456")
+        assert result is False
+
+
+class TestStationOwnerWithoutStations:
+    """בדיקות שבעל תחנה ללא תחנות מקבל תשובה גנרית — מניעת user-enumeration"""
+
+    @pytest.mark.asyncio
+    async def test_owner_without_station_gets_generic_401(
+        self, test_client, user_factory, db_session,
+    ):
+        """בעל תחנה ללא תחנה פעילה מקבל 401 גנרי — לא 403 שחושף מידע"""
+        user = await user_factory(
+            phone_number="+972505555555",
+            role=UserRole.STATION_OWNER,
+        )
+        # לא יוצרים תחנה — המשתמש הוא STATION_OWNER בלי תחנה
+        await store_otp(user.id, "123456")
+
+        response = await test_client.post("/api/panel/auth/verify-otp", json={
+            "phone_number": "0505555555",
+            "otp": "123456",
+        })
+        # חייב להיות 401 (אותו דבר כמו OTP שגוי) — לא 403
+        assert response.status_code == 401
+        assert response.json()["detail"] == "קוד שגוי או פג תוקף"

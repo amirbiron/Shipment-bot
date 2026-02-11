@@ -95,7 +95,8 @@ class StationService:
         return result.scalar_one_or_none()
 
     async def get_stations_by_owner(self, owner_id: int) -> List[Station]:
-        """קבלת כל התחנות שהמשתמש בעלים בהן"""
+        """קבלת כל התחנות שהמשתמש בעלים בהן — ממזג junction table ו-owner_id fallback"""
+        # תחנות מטבלת junction
         result = await self.db.execute(
             select(Station).join(
                 StationOwner, StationOwner.station_id == Station.id
@@ -106,16 +107,19 @@ class StationService:
             )
         )
         stations = list(result.scalars().all())
+        junction_ids = {s.id for s in stations}
 
-        # fallback: אם אין תוצאות מ-station_owners, בודקים owner_id ישן
-        if not stations:
-            result = await self.db.execute(
-                select(Station).where(
-                    Station.owner_id == owner_id,
-                    Station.is_active == True  # noqa: E712
-                )
+        # fallback: תחנות עם owner_id ישן שלא נמצאו דרך junction
+        # (תחנות שלא עברו מיגרציה לטבלת station_owners)
+        result = await self.db.execute(
+            select(Station).where(
+                Station.owner_id == owner_id,
+                Station.is_active == True  # noqa: E712
             )
-            stations = list(result.scalars().all())
+        )
+        for s in result.scalars().all():
+            if s.id not in junction_ids:
+                stations.append(s)
 
         return stations
 

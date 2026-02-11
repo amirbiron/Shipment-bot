@@ -245,6 +245,37 @@ class TestStationOwnerService:
         assert stations[0].id == station.id
 
     @pytest.mark.asyncio
+    async def test_get_stations_merges_junction_and_owner_id(self, user_factory, db_session):
+        """get_stations_by_owner ממזג תוצאות מ-junction ומ-owner_id fallback"""
+        user = await user_factory(
+            phone_number="+972501234567",
+            role=UserRole.STATION_OWNER,
+        )
+        # תחנה א — עם junction entry
+        station1 = Station(name="תחנה א (junction)", owner_id=user.id)
+        db_session.add(station1)
+        await db_session.flush()
+        db_session.add(StationWallet(station_id=station1.id))
+        db_session.add(StationOwner(station_id=station1.id, user_id=user.id))
+
+        # תחנה ב — רק owner_id, בלי junction entry (מדמה תחנה לפני מיגרציה)
+        station2 = Station(name="תחנה ב (owner_id בלבד)", owner_id=user.id)
+        db_session.add(station2)
+        await db_session.flush()
+        db_session.add(StationWallet(station_id=station2.id))
+        # לא מוסיפים StationOwner — מדמה תחנה שלא עברה מיגרציה
+
+        await db_session.commit()
+
+        service = StationService(db_session)
+        stations = await service.get_stations_by_owner(user.id)
+        # חייב להחזיר את שתי התחנות — גם junction וגם fallback
+        assert len(stations) == 2
+        station_ids = {s.id for s in stations}
+        assert station1.id in station_ids
+        assert station2.id in station_ids
+
+    @pytest.mark.asyncio
     async def test_get_stations_by_owner_multiple(self, user_factory, db_session):
         """משתמש שהוא בעלים בכמה תחנות"""
         user = await user_factory(

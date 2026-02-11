@@ -134,11 +134,17 @@ async def verify_otp(user_id: int, otp: str, consume: bool = True) -> bool:
     key = f"{_OTP_KEY_PREFIX}:{user_id}"
     stored = await redis.get(key)
     if stored and stored == otp:
+        attempts_key = f"{_OTP_ATTEMPTS_PREFIX}:{user_id}"
         if consume:
             await redis.delete(key)
             # מאפס ניסיונות אחרי צריכה מוצלחת
-            attempts_key = f"{_OTP_ATTEMPTS_PREFIX}:{user_id}"
             await redis.delete(attempts_key)
+        else:
+            # לא צורכים — מחזירים את המונה אחורה כדי לא לבזבז ניסיון
+            # על אימות מוצלח (למשל station picker)
+            current = await redis.get(attempts_key)
+            if current and int(current) > 0:
+                await redis.set(attempts_key, str(int(current) - 1))
         logger.info("OTP verified successfully", extra_data={"user_id": user_id, "consumed": consume})
         return True
 

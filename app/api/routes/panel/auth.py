@@ -240,12 +240,13 @@ async def verify_otp_endpoint(
         )
 
     # קבלת תחנות — לפני צריכת OTP, כדי לדעת אם צריך station picker
+    # תשובה אחידה (401) גם כשאין תחנות — מונע user-enumeration
     station_service = StationService(db)
     stations = await station_service.get_stations_by_owner(user.id)
     if not stations:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="לא נמצאה תחנה פעילה",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="קוד שגוי או פג תוקף",
         )
 
     # אם יש כמה תחנות והמשתמש לא בחר — מאמתים בלי לצרוך את ה-OTP
