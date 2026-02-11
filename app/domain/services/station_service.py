@@ -16,7 +16,8 @@ from app.db.models.station_ledger import StationLedger, StationLedgerEntryType
 from app.db.models.station_blacklist import StationBlacklist
 from app.db.models.manual_charge import ManualCharge
 from app.db.models.delivery import Delivery, DeliveryStatus
-from app.db.models.user import User
+from app.db.models.user import User, UserRole
+from app.db.models.courier_wallet import CourierWallet
 from app.core.logging import get_logger
 from app.core.validation import PhoneNumberValidator
 from app.core.exceptions import ValidationException
@@ -192,7 +193,6 @@ class StationService:
             self.db.add(owner_record)
 
         # עדכון תפקיד המשתמש ל-STATION_OWNER אם צריך
-        from app.db.models.user import UserRole
         if user.role != UserRole.STATION_OWNER:
             user.role = UserRole.STATION_OWNER
 
@@ -245,6 +245,37 @@ class StationService:
             remaining = [o for o in active_owners if o.user_id != user_id]
             if remaining:
                 station.owner_id = remaining[0].user_id
+
+        # אם המשתמש כבר לא בעלים של אף תחנה — מחזירים את התפקיד המקורי
+        remaining_ownerships = await self.db.execute(
+            select(StationOwner).where(
+                StationOwner.user_id == user_id,
+                StationOwner.is_active == True,  # noqa: E712
+            ).limit(1)
+        )
+        if remaining_ownerships.scalar_one_or_none() is None:
+            user_result = await self.db.execute(
+                select(User).where(User.id == user_id)
+            )
+            user = user_result.scalar_one_or_none()
+            if user and user.role == UserRole.STATION_OWNER:
+                # בדיקה אם היה שליח (יש לו ארנק שליח)
+                wallet_result = await self.db.execute(
+                    select(CourierWallet).where(
+                        CourierWallet.courier_id == user_id
+                    ).limit(1)
+                )
+                if wallet_result.scalar_one_or_none() is not None:
+                    user.role = UserRole.COURIER
+                else:
+                    user.role = UserRole.SENDER
+                logger.info(
+                    "Reverted user role after station ownership removal",
+                    extra_data={
+                        "user_id": user_id,
+                        "new_role": user.role.value,
+                    }
+                )
 
         await self.db.commit()
 

@@ -8,6 +8,7 @@ from app.db.models.user import UserRole
 from app.db.models.station import Station
 from app.db.models.station_owner import StationOwner
 from app.db.models.station_wallet import StationWallet
+from app.db.models.courier_wallet import CourierWallet
 from app.domain.services.station_service import StationService
 
 
@@ -203,6 +204,95 @@ class TestStationOwnerService:
         # owner_id של התחנה צריך להתעדכן ל-owner2
         await db_session.refresh(station)
         assert station.owner_id == owner2.id
+
+    @pytest.mark.asyncio
+    async def test_remove_owner_reverts_courier_role(self, user_factory, db_session):
+        """הסרת בעלים שהיה שליח מחזירה אותו ל-COURIER"""
+        original_owner = await user_factory(
+            phone_number="+972501234567",
+            role=UserRole.STATION_OWNER,
+        )
+        # משתמש שהיה שליח (יש לו ארנק שליח) והפך לבעל תחנה
+        ex_courier = await user_factory(
+            phone_number="+972502222222",
+            role=UserRole.STATION_OWNER,
+        )
+        # יצירת ארנק שליח — מעיד שהמשתמש היה שליח
+        courier_wallet = CourierWallet(courier_id=ex_courier.id, balance=0.0)
+        db_session.add(courier_wallet)
+
+        station = Station(name="תחנה", owner_id=original_owner.id)
+        db_session.add(station)
+        await db_session.flush()
+        db_session.add(StationWallet(station_id=station.id))
+        db_session.add(StationOwner(station_id=station.id, user_id=original_owner.id))
+        db_session.add(StationOwner(station_id=station.id, user_id=ex_courier.id))
+        await db_session.commit()
+
+        service = StationService(db_session)
+        success, msg = await service.remove_owner(station.id, ex_courier.id)
+        assert success is True
+
+        await db_session.refresh(ex_courier)
+        assert ex_courier.role == UserRole.COURIER
+
+    @pytest.mark.asyncio
+    async def test_remove_owner_reverts_sender_role(self, user_factory, db_session):
+        """הסרת בעלים שהיה שולח מחזירה אותו ל-SENDER"""
+        original_owner = await user_factory(
+            phone_number="+972501234567",
+            role=UserRole.STATION_OWNER,
+        )
+        ex_sender = await user_factory(
+            phone_number="+972502222222",
+            role=UserRole.STATION_OWNER,
+        )
+        # אין ארנק שליח — המשתמש היה שולח רגיל
+
+        station = Station(name="תחנה", owner_id=original_owner.id)
+        db_session.add(station)
+        await db_session.flush()
+        db_session.add(StationWallet(station_id=station.id))
+        db_session.add(StationOwner(station_id=station.id, user_id=original_owner.id))
+        db_session.add(StationOwner(station_id=station.id, user_id=ex_sender.id))
+        await db_session.commit()
+
+        service = StationService(db_session)
+        success, msg = await service.remove_owner(station.id, ex_sender.id)
+        assert success is True
+
+        await db_session.refresh(ex_sender)
+        assert ex_sender.role == UserRole.SENDER
+
+    @pytest.mark.asyncio
+    async def test_remove_owner_keeps_role_if_still_owns_another(self, user_factory, db_session):
+        """הסרת בעלים שעדיין בעלים בתחנה אחרת — לא משנה תפקיד"""
+        user = await user_factory(
+            phone_number="+972501234567",
+            role=UserRole.STATION_OWNER,
+        )
+        other_owner = await user_factory(
+            phone_number="+972502222222",
+            role=UserRole.STATION_OWNER,
+        )
+        station1 = Station(name="תחנה א", owner_id=user.id)
+        station2 = Station(name="תחנה ב", owner_id=user.id)
+        db_session.add_all([station1, station2])
+        await db_session.flush()
+        db_session.add(StationWallet(station_id=station1.id))
+        db_session.add(StationWallet(station_id=station2.id))
+        db_session.add(StationOwner(station_id=station1.id, user_id=user.id))
+        db_session.add(StationOwner(station_id=station1.id, user_id=other_owner.id))
+        db_session.add(StationOwner(station_id=station2.id, user_id=user.id))
+        await db_session.commit()
+
+        service = StationService(db_session)
+        # מסירים מתחנה א — עדיין בעלים בתחנה ב
+        success, msg = await service.remove_owner(station1.id, user.id)
+        assert success is True
+
+        await db_session.refresh(user)
+        assert user.role == UserRole.STATION_OWNER
 
     @pytest.mark.asyncio
     async def test_cannot_remove_last_owner(self, user_factory, db_session):
