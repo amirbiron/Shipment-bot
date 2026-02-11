@@ -9,6 +9,7 @@ from app.db.models.outbox_message import OutboxMessage
 from app.db.models.user import User
 from app.db.models.station import Station
 from app.db.models.station_dispatcher import StationDispatcher
+from app.db.models.station_owner import StationOwner
 from app.db.models.station_wallet import StationWallet
 from app.db.models.station_ledger import StationLedger
 from app.db.models.manual_charge import ManualCharge
@@ -24,6 +25,7 @@ __all__ = [
     "User",
     "Station",
     "StationDispatcher",
+    "StationOwner",
     "StationWallet",
     "StationLedger",
     "ManualCharge",

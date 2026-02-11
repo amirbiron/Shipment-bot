@@ -6,6 +6,7 @@
 2. מזין את הקוד בפאנל → מקבל JWT token
 """
 from html import escape
+from typing import List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, field_validator
@@ -54,6 +55,7 @@ class OTPVerify(BaseModel):
     """אימות OTP"""
     phone_number: str
     otp: str
+    station_id: Optional[int] = None  # אופציונלי — אם יש כמה תחנות, המשתמש בוחר
 
     @field_validator("phone_number")
     @classmethod
@@ -70,12 +72,24 @@ class OTPVerify(BaseModel):
         return v
 
 
+class StationOption(BaseModel):
+    """תחנה לבחירה"""
+    station_id: int
+    station_name: str
+
+
 class TokenResponse(BaseModel):
     """תגובת התחברות"""
     access_token: str
     token_type: str = "bearer"
     station_id: int
     station_name: str
+
+
+class StationPickerResponse(BaseModel):
+    """תגובה כשיש כמה תחנות — המשתמש צריך לבחור"""
+    choose_station: bool = True
+    stations: List[StationOption]
 
 
 class MeResponse(BaseModel):
@@ -140,10 +154,10 @@ async def request_otp(
         })
         return ActionResponse(success=True, message=_OTP_GENERIC_RESPONSE)
 
-    # ולידציה שיש לו תחנה פעילה
+    # ולידציה שיש לו תחנה פעילה (בודק גם station_owners וגם owner_id ישן)
     station_service = StationService(db)
-    station = await station_service.get_station_by_owner(user.id)
-    if not station:
+    stations = await station_service.get_stations_by_owner(user.id)
+    if not stations:
         logger.info("OTP request for owner without station", extra_data={
             "user_id": user.id,
         })
@@ -185,7 +199,7 @@ async def request_otp(
         extra_data={
             "user_id": user.id,
             "phone": PhoneNumberValidator.mask(data.phone_number),
-            "station_id": station.id,
+            "station_ids": [s.id for s in stations],
             "platform": platform_str,
         },
     )
@@ -195,11 +209,14 @@ async def request_otp(
 
 @router.post(
     "/verify-otp",
-    response_model=TokenResponse,
+    response_model=Union[TokenResponse, StationPickerResponse],
     summary="אימות קוד כניסה",
-    description="אימות קוד OTP וקבלת JWT token לגישה לפאנל.",
+    description=(
+        "אימות קוד OTP וקבלת JWT token. "
+        "אם למשתמש יש כמה תחנות, מחזיר רשימה לבחירה (יש לשלוח שוב עם station_id)."
+    ),
     responses={
-        200: {"description": "התחברות הצליחה"},
+        200: {"description": "התחברות הצליחה או בחירת תחנה"},
         401: {"description": "קוד שגוי, פג תוקף, או משתמש לא זוהה"},
     },
     tags=["Panel - אימות"],
@@ -207,8 +224,8 @@ async def request_otp(
 async def verify_otp_endpoint(
     data: OTPVerify,
     db: AsyncSession = Depends(get_db),
-) -> TokenResponse:
-    """אימות OTP והנפקת JWT token"""
+) -> Union[TokenResponse, StationPickerResponse]:
+    """אימות OTP והנפקת JWT token — עם תמיכה בריבוי תחנות"""
     # חיפוש המשתמש
     result = await db.execute(
         select(User).where(User.phone_number == data.phone_number)
@@ -222,22 +239,47 @@ async def verify_otp_endpoint(
             detail="קוד שגוי או פג תוקף",
         )
 
+    # קבלת תחנות — לפני צריכת OTP, כדי לדעת אם צריך station picker
+    # תשובה אחידה (401) גם כשאין תחנות — מונע user-enumeration
+    station_service = StationService(db)
+    stations = await station_service.get_stations_by_owner(user.id)
+    if not stations:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="קוד שגוי או פג תוקף",
+        )
+
+    # אם יש כמה תחנות והמשתמש לא בחר — מאמתים בלי לצרוך את ה-OTP
+    need_station_picker = len(stations) > 1 and data.station_id is None
+
     # אימות OTP (כולל בדיקת מגבלת ניסיונות)
-    is_valid = await verify_otp(user.id, data.otp)
+    # consume=False כשצריך station picker — ה-OTP נשאר תקף לקריאה הבאה עם station_id
+    is_valid = await verify_otp(user.id, data.otp, consume=not need_station_picker)
     if not is_valid:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="קוד שגוי או פג תוקף",
         )
 
-    # קבלת תחנה
-    station_service = StationService(db)
-    station = await station_service.get_station_by_owner(user.id)
-    if not station:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="לא נמצאה תחנה פעילה",
+    # אם יש כמה תחנות והמשתמש לא בחר — מחזיר רשימה לבחירה
+    if need_station_picker:
+        return StationPickerResponse(
+            stations=[
+                StationOption(station_id=s.id, station_name=s.name)
+                for s in stations
+            ],
         )
+
+    # בחירת תחנה — אם צוין station_id מוודאים שהמשתמש באמת בעלים שלה
+    if data.station_id is not None:
+        station = next((s for s in stations if s.id == data.station_id), None)
+        if not station:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="אין הרשאה לתחנה שנבחרה",
+            )
+    else:
+        station = stations[0]
 
     # הנפקת JWT
     token = create_access_token(

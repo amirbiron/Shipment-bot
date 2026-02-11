@@ -115,8 +115,15 @@ async def _increment_and_check_otp_attempts(user_id: int) -> bool:
     return new_count <= OTP_MAX_ATTEMPTS
 
 
-async def verify_otp(user_id: int, otp: str) -> bool:
-    """אימות OTP — מוחק לאחר שימוש (one-time), עם מגבלת ניסיונות אטומית"""
+async def verify_otp(user_id: int, otp: str, consume: bool = True) -> bool:
+    """אימות OTP — מוחק לאחר שימוש (one-time), עם מגבלת ניסיונות אטומית.
+
+    Args:
+        user_id: מזהה המשתמש
+        otp: קוד OTP לאימות
+        consume: האם למחוק את ה-OTP אחרי אימות מוצלח.
+            False משמש למקרים כמו בחירת תחנה (station picker) — ה-OTP נשאר תקף לקריאה הבאה.
+    """
     # הגדלה אטומית + בדיקת מגבלה — פעולה אחת, ללא TOCTOU
     allowed = await _increment_and_check_otp_attempts(user_id)
     if not allowed:
@@ -127,11 +134,16 @@ async def verify_otp(user_id: int, otp: str) -> bool:
     key = f"{_OTP_KEY_PREFIX}:{user_id}"
     stored = await redis.get(key)
     if stored and stored == otp:
-        await redis.delete(key)
-        # מאפס ניסיונות אחרי הצלחה
         attempts_key = f"{_OTP_ATTEMPTS_PREFIX}:{user_id}"
-        await redis.delete(attempts_key)
-        logger.info("OTP verified successfully", extra_data={"user_id": user_id})
+        if consume:
+            await redis.delete(key)
+            # מאפס ניסיונות אחרי צריכה מוצלחת
+            await redis.delete(attempts_key)
+        else:
+            # לא צורכים — DECR אטומי שמחזיר את המונה אחורה בלי למחוק TTL
+            # (בניגוד ל-GET+SET שמוחק TTL ויוצר race condition)
+            await redis.decr(attempts_key)
+        logger.info("OTP verified successfully", extra_data={"user_id": user_id, "consumed": consume})
         return True
 
     logger.warning("OTP verification failed", extra_data={"user_id": user_id})

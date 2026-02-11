@@ -331,6 +331,13 @@ class FakeRedis:
         self._store[key] = str(new_val)
         return new_val
 
+    async def decr(self, key: str) -> int:
+        """DECR אטומי — מקטין ב-1, מאתחל ל--1 אם לא קיים. שומר TTL."""
+        current = self._store.get(key)
+        new_val = int(current) - 1 if current is not None else -1
+        self._store[key] = str(new_val)
+        return new_val
+
     async def expire(self, key: str, ttl: int) -> None:
         """הגדרת TTL למפתח קיים"""
         if key in self._store:

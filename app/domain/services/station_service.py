@@ -9,13 +9,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.db.models.station import Station
+from app.db.models.station_owner import StationOwner
 from app.db.models.station_dispatcher import StationDispatcher
 from app.db.models.station_wallet import StationWallet
 from app.db.models.station_ledger import StationLedger, StationLedgerEntryType
 from app.db.models.station_blacklist import StationBlacklist
 from app.db.models.manual_charge import ManualCharge
 from app.db.models.delivery import Delivery, DeliveryStatus
-from app.db.models.user import User
+from app.db.models.user import User, UserRole
+from app.db.models.courier_wallet import CourierWallet
 from app.core.logging import get_logger
 from app.core.validation import PhoneNumberValidator
 from app.core.exceptions import ValidationException
@@ -43,6 +45,10 @@ class StationService:
         self.db.add(station)
         await self.db.flush()
 
+        # יצירת רשומת בעלים בטבלת junction — מבטיח עקביות עם station_owners
+        owner_record = StationOwner(station_id=station.id, user_id=owner_id)
+        self.db.add(owner_record)
+
         # יצירת ארנק לתחנה
         wallet = StationWallet(station_id=station.id)
         self.db.add(wallet)
@@ -65,7 +71,22 @@ class StationService:
         return result.scalar_one_or_none()
 
     async def get_station_by_owner(self, owner_id: int) -> Optional[Station]:
-        """קבלת תחנה לפי בעל התחנה (מחזיר את הראשונה אם יש יותר מאחת)"""
+        """קבלת תחנה לפי בעלים — בודק קודם בטבלת station_owners, אח"כ fallback ל-owner_id"""
+        # בדיקה ראשונה: טבלת station_owners (ריבוי בעלים)
+        result = await self.db.execute(
+            select(Station).join(
+                StationOwner, StationOwner.station_id == Station.id
+            ).where(
+                StationOwner.user_id == owner_id,
+                StationOwner.is_active == True,  # noqa: E712
+                Station.is_active == True,  # noqa: E712
+            ).limit(1)
+        )
+        station = result.scalar_one_or_none()
+        if station:
+            return station
+
+        # fallback: שדה owner_id ישן (תאימות לאחור עד שכל הנתונים יעברו)
         result = await self.db.execute(
             select(Station).where(
                 Station.owner_id == owner_id,
@@ -73,6 +94,192 @@ class StationService:
             ).limit(1)
         )
         return result.scalar_one_or_none()
+
+    async def get_stations_by_owner(self, owner_id: int) -> List[Station]:
+        """קבלת כל התחנות שהמשתמש בעלים בהן — ממזג junction table ו-owner_id fallback"""
+        # תחנות מטבלת junction
+        result = await self.db.execute(
+            select(Station).join(
+                StationOwner, StationOwner.station_id == Station.id
+            ).where(
+                StationOwner.user_id == owner_id,
+                StationOwner.is_active == True,  # noqa: E712
+                Station.is_active == True,  # noqa: E712
+            )
+        )
+        stations = list(result.scalars().all())
+        junction_ids = {s.id for s in stations}
+
+        # fallback: תחנות עם owner_id ישן שלא נמצאו דרך junction
+        # (תחנות שלא עברו מיגרציה לטבלת station_owners)
+        result = await self.db.execute(
+            select(Station).where(
+                Station.owner_id == owner_id,
+                Station.is_active == True  # noqa: E712
+            )
+        )
+        for s in result.scalars().all():
+            if s.id not in junction_ids:
+                stations.append(s)
+
+        return stations
+
+    async def is_owner_of_station(self, user_id: int, station_id: int) -> bool:
+        """בדיקה אם המשתמש הוא בעלים פעיל בתחנה ספציפית"""
+        # בדיקה בטבלת station_owners
+        result = await self.db.execute(
+            select(StationOwner).join(
+                Station, StationOwner.station_id == Station.id
+            ).where(
+                StationOwner.user_id == user_id,
+                StationOwner.station_id == station_id,
+                StationOwner.is_active == True,  # noqa: E712
+                Station.is_active == True,  # noqa: E712
+            ).limit(1)
+        )
+        if result.scalar_one_or_none() is not None:
+            return True
+
+        # fallback: שדה owner_id ישן
+        result = await self.db.execute(
+            select(Station).where(
+                Station.id == station_id,
+                Station.owner_id == user_id,
+                Station.is_active == True  # noqa: E712
+            ).limit(1)
+        )
+        return result.scalar_one_or_none() is not None
+
+    # ==================== ניהול בעלים ====================
+
+    async def add_owner(
+        self,
+        station_id: int,
+        phone_number: str,
+    ) -> tuple[bool, str]:
+        """הוספת בעלים לתחנה לפי מספר טלפון"""
+        if not PhoneNumberValidator.validate(phone_number):
+            return False, "מספר טלפון לא תקין."
+
+        normalized = PhoneNumberValidator.normalize(phone_number)
+
+        # חיפוש המשתמש
+        result = await self.db.execute(
+            select(User).where(User.phone_number == normalized)
+        )
+        user = result.scalar_one_or_none()
+
+        if not user:
+            return False, "משתמש לא נמצא עם מספר הטלפון הזה."
+
+        # בדיקה שלא כבר בעלים בתחנה
+        existing = await self.db.execute(
+            select(StationOwner).where(
+                StationOwner.station_id == station_id,
+                StationOwner.user_id == user.id,
+            )
+        )
+        existing_owner = existing.scalar_one_or_none()
+        if existing_owner:
+            if existing_owner.is_active:
+                return False, "המשתמש כבר בעלים בתחנה הזו."
+            # הפעלה מחדש של בעלים שהוסר בעבר
+            existing_owner.is_active = True
+        else:
+            owner_record = StationOwner(
+                station_id=station_id,
+                user_id=user.id,
+            )
+            self.db.add(owner_record)
+
+        # עדכון תפקיד המשתמש ל-STATION_OWNER אם צריך
+        if user.role != UserRole.STATION_OWNER:
+            user.role = UserRole.STATION_OWNER
+
+        await self.db.commit()
+
+        logger.info(
+            "Owner added to station",
+            extra_data={
+                "station_id": station_id,
+                "user_id": user.id,
+                "phone": PhoneNumberValidator.mask(normalized),
+            }
+        )
+        return True, f"הבעלים {escape(user.name or user.full_name or 'לא ידוע')} נוסף בהצלחה לתחנה."
+
+    async def remove_owner(
+        self,
+        station_id: int,
+        user_id: int,
+    ) -> tuple[bool, str]:
+        """הסרת בעלים מתחנה — לא ניתן להסיר את הבעלים האחרון"""
+        # בדיקה שיש יותר מבעלים אחד
+        result = await self.db.execute(
+            select(StationOwner).where(
+                StationOwner.station_id == station_id,
+                StationOwner.is_active == True,  # noqa: E712
+            )
+        )
+        active_owners = list(result.scalars().all())
+
+        if len(active_owners) <= 1:
+            return False, "לא ניתן להסיר את הבעלים האחרון של התחנה."
+
+        # מציאת הרשומה להסרה
+        target = None
+        for o in active_owners:
+            if o.user_id == user_id:
+                target = o
+                break
+
+        if not target:
+            return False, "הבעלים לא נמצא בתחנה."
+
+        target.is_active = False
+
+        # אם הבעלים שמוסר הוא ה-owner_id של התחנה — מעדכנים לבעלים פעיל אחר
+        # מונע את ה-fallback של owner_id מלהחזיר גישה לבעלים שהוסר
+        station = await self.get_station(station_id)
+        if station and station.owner_id == user_id:
+            remaining = [o for o in active_owners if o.user_id != user_id]
+            if remaining:
+                station.owner_id = remaining[0].user_id
+
+        # אם המשתמש כבר לא בעלים של אף תחנה — מחזירים את התפקיד המקורי
+        # משתמש ב-get_stations_by_owner שממזג junction table ו-owner_id fallback
+        remaining_stations = await self.get_stations_by_owner(user_id)
+        if not remaining_stations:
+            user_result = await self.db.execute(
+                select(User).where(User.id == user_id)
+            )
+            user = user_result.scalar_one_or_none()
+            if user and user.role == UserRole.STATION_OWNER:
+                # בדיקה אם היה שליח (יש לו ארנק שליח)
+                wallet_result = await self.db.execute(
+                    select(CourierWallet).where(
+                        CourierWallet.courier_id == user_id
+                    ).limit(1)
+                )
+                if wallet_result.scalar_one_or_none() is not None:
+                    user.role = UserRole.COURIER
+                else:
+                    user.role = UserRole.SENDER
+                logger.info(
+                    "Reverted user role after station ownership removal",
+                    extra_data={
+                        "user_id": user_id,
+                        "new_role": user.role.value,
+                    }
+                )
+
+        await self.db.commit()
+
+        logger.info(
+            "Owner removed from station",
+            extra_data={"station_id": station_id, "user_id": user_id}
+        )
+        return True, "הבעלים הוסר בהצלחה מהתחנה."
 
     # ==================== ניהול סדרנים [3.3] ====================
 
