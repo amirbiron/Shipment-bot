@@ -140,11 +140,9 @@ async def verify_otp(user_id: int, otp: str, consume: bool = True) -> bool:
             # מאפס ניסיונות אחרי צריכה מוצלחת
             await redis.delete(attempts_key)
         else:
-            # לא צורכים — מחזירים את המונה אחורה כדי לא לבזבז ניסיון
-            # על אימות מוצלח (למשל station picker)
-            current = await redis.get(attempts_key)
-            if current and int(current) > 0:
-                await redis.set(attempts_key, str(int(current) - 1))
+            # לא צורכים — DECR אטומי שמחזיר את המונה אחורה בלי למחוק TTL
+            # (בניגוד ל-GET+SET שמוחק TTL ויוצר race condition)
+            await redis.decr(attempts_key)
         logger.info("OTP verified successfully", extra_data={"user_id": user_id, "consumed": consume})
         return True
 
