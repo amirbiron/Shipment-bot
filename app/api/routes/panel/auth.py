@@ -239,15 +239,7 @@ async def verify_otp_endpoint(
             detail="קוד שגוי או פג תוקף",
         )
 
-    # אימות OTP (כולל בדיקת מגבלת ניסיונות)
-    is_valid = await verify_otp(user.id, data.otp)
-    if not is_valid:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="קוד שגוי או פג תוקף",
-        )
-
-    # קבלת תחנות
+    # קבלת תחנות — לפני צריכת OTP, כדי לדעת אם צריך station picker
     station_service = StationService(db)
     stations = await station_service.get_stations_by_owner(user.id)
     if not stations:
@@ -256,8 +248,20 @@ async def verify_otp_endpoint(
             detail="לא נמצאה תחנה פעילה",
         )
 
+    # אם יש כמה תחנות והמשתמש לא בחר — מאמתים בלי לצרוך את ה-OTP
+    need_station_picker = len(stations) > 1 and data.station_id is None
+
+    # אימות OTP (כולל בדיקת מגבלת ניסיונות)
+    # consume=False כשצריך station picker — ה-OTP נשאר תקף לקריאה הבאה עם station_id
+    is_valid = await verify_otp(user.id, data.otp, consume=not need_station_picker)
+    if not is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="קוד שגוי או פג תוקף",
+        )
+
     # אם יש כמה תחנות והמשתמש לא בחר — מחזיר רשימה לבחירה
-    if len(stations) > 1 and data.station_id is None:
+    if need_station_picker:
         return StationPickerResponse(
             stations=[
                 StationOption(station_id=s.id, station_name=s.name)

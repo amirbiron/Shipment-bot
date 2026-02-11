@@ -44,6 +44,10 @@ class StationService:
         self.db.add(station)
         await self.db.flush()
 
+        # יצירת רשומת בעלים בטבלת junction — מבטיח עקביות עם station_owners
+        owner_record = StationOwner(station_id=station.id, user_id=owner_id)
+        self.db.add(owner_record)
+
         # יצירת ארנק לתחנה
         wallet = StationWallet(station_id=station.id)
         self.db.add(wallet)
@@ -229,6 +233,15 @@ class StationService:
             return False, "הבעלים לא נמצא בתחנה."
 
         target.is_active = False
+
+        # אם הבעלים שמוסר הוא ה-owner_id של התחנה — מעדכנים לבעלים פעיל אחר
+        # מונע את ה-fallback של owner_id מלהחזיר גישה לבעלים שהוסר
+        station = await self.get_station(station_id)
+        if station and station.owner_id == user_id:
+            remaining = [o for o in active_owners if o.user_id != user_id]
+            if remaining:
+                station.owner_id = remaining[0].user_id
+
         await self.db.commit()
 
         logger.info(
@@ -236,16 +249,6 @@ class StationService:
             extra_data={"station_id": station_id, "user_id": user_id}
         )
         return True, "הבעלים הוסר בהצלחה מהתחנה."
-
-    async def get_owners(self, station_id: int) -> List[StationOwner]:
-        """קבלת רשימת בעלים פעילים בתחנה"""
-        result = await self.db.execute(
-            select(StationOwner).where(
-                StationOwner.station_id == station_id,
-                StationOwner.is_active == True  # noqa: E712
-            )
-        )
-        return list(result.scalars().all())
 
     # ==================== ניהול סדרנים [3.3] ====================
 

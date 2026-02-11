@@ -173,6 +173,38 @@ class TestStationOwnerService:
         assert await service.is_owner_of_station(owner2.id, station.id) is False
 
     @pytest.mark.asyncio
+    async def test_remove_original_owner_clears_fallback(self, user_factory, db_session):
+        """הסרת הבעלים המקורי (owner_id) מעדכנת את owner_id לבעלים אחר — מונע fallback"""
+        owner1 = await user_factory(
+            phone_number="+972501234567",
+            role=UserRole.STATION_OWNER,
+        )
+        owner2 = await user_factory(
+            phone_number="+972502222222",
+            role=UserRole.STATION_OWNER,
+        )
+        # owner1 הוא ה-owner_id המקורי של התחנה
+        station = Station(name="תחנה", owner_id=owner1.id)
+        db_session.add(station)
+        await db_session.flush()
+        wallet = StationWallet(station_id=station.id)
+        db_session.add(wallet)
+        db_session.add(StationOwner(station_id=station.id, user_id=owner1.id))
+        db_session.add(StationOwner(station_id=station.id, user_id=owner2.id))
+        await db_session.commit()
+
+        service = StationService(db_session)
+        success, msg = await service.remove_owner(station.id, owner1.id)
+        assert success is True
+
+        # owner1 לא אמור לקבל גישה דרך fallback של owner_id
+        assert await service.is_owner_of_station(owner1.id, station.id) is False
+
+        # owner_id של התחנה צריך להתעדכן ל-owner2
+        await db_session.refresh(station)
+        assert station.owner_id == owner2.id
+
+    @pytest.mark.asyncio
     async def test_cannot_remove_last_owner(self, user_factory, db_session):
         """לא ניתן להסיר את הבעלים האחרון"""
         owner = await user_factory(
@@ -191,6 +223,26 @@ class TestStationOwnerService:
         success, msg = await service.remove_owner(station.id, owner.id)
         assert success is False
         assert "האחרון" in msg
+
+    @pytest.mark.asyncio
+    async def test_create_station_creates_junction_entry(self, user_factory, db_session):
+        """יצירת תחנה חדשה יוצרת גם רשומה בטבלת station_owners"""
+        owner = await user_factory(
+            phone_number="+972501234567",
+            role=UserRole.STATION_OWNER,
+        )
+
+        service = StationService(db_session)
+        station = await service.create_station("תחנה חדשה", owner.id)
+        await db_session.commit()
+
+        # בדיקה שנוצרה רשומה ב-station_owners
+        assert await service.is_owner_of_station(owner.id, station.id) is True
+
+        # בדיקה שהבעלים מופיע ברשימת התחנות שלו (דרך junction, לא fallback)
+        stations = await service.get_stations_by_owner(owner.id)
+        assert len(stations) == 1
+        assert stations[0].id == station.id
 
     @pytest.mark.asyncio
     async def test_get_stations_by_owner_multiple(self, user_factory, db_session):
@@ -309,6 +361,47 @@ class TestMultiOwnerAuth:
         data = response.json()
         assert "access_token" in data
         assert data["station_name"] == "תחנה ב"
+
+    @pytest.mark.asyncio
+    async def test_verify_otp_full_two_step_flow(
+        self, test_client, user_factory, db_session,
+    ):
+        """זרימה מלאה: station picker ואז בחירת תחנה — OTP לא נצרך בשלב הראשון"""
+        user = await user_factory(
+            phone_number="+972501234567",
+            role=UserRole.STATION_OWNER,
+        )
+        station1 = Station(name="תחנה א", owner_id=user.id)
+        station2 = Station(name="תחנה ב", owner_id=user.id)
+        db_session.add_all([station1, station2])
+        await db_session.flush()
+        db_session.add(StationWallet(station_id=station1.id))
+        db_session.add(StationWallet(station_id=station2.id))
+        db_session.add(StationOwner(station_id=station1.id, user_id=user.id))
+        db_session.add(StationOwner(station_id=station2.id, user_id=user.id))
+        await db_session.commit()
+
+        await store_otp(user.id, "123456")
+
+        # שלב 1: אימות ללא station_id — מחזיר station picker בלי לצרוך OTP
+        response1 = await test_client.post("/api/panel/auth/verify-otp", json={
+            "phone_number": "0501234567",
+            "otp": "123456",
+        })
+        assert response1.status_code == 200
+        data1 = response1.json()
+        assert data1.get("choose_station") is True
+
+        # שלב 2: אימות עם station_id — אותו OTP עדיין תקף
+        response2 = await test_client.post("/api/panel/auth/verify-otp", json={
+            "phone_number": "0501234567",
+            "otp": "123456",
+            "station_id": station1.id,
+        })
+        assert response2.status_code == 200
+        data2 = response2.json()
+        assert "access_token" in data2
+        assert data2["station_name"] == "תחנה א"
 
 
 class TestOwnerPanelEndpoints:
