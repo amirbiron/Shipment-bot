@@ -247,13 +247,9 @@ class StationService:
                 station.owner_id = remaining[0].user_id
 
         # אם המשתמש כבר לא בעלים של אף תחנה — מחזירים את התפקיד המקורי
-        remaining_ownerships = await self.db.execute(
-            select(StationOwner).where(
-                StationOwner.user_id == user_id,
-                StationOwner.is_active == True,  # noqa: E712
-            ).limit(1)
-        )
-        if remaining_ownerships.scalar_one_or_none() is None:
+        # משתמש ב-get_stations_by_owner שממזג junction table ו-owner_id fallback
+        remaining_stations = await self.get_stations_by_owner(user_id)
+        if not remaining_stations:
             user_result = await self.db.execute(
                 select(User).where(User.id == user_id)
             )
