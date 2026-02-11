@@ -35,6 +35,8 @@ services:
         sync: false  # Set manually in dashboard
       - key: WHATSAPP_GATEWAY_URL
         value: "https://shipment-bot-wa-gateway-6uqm.onrender.com"
+      - key: JWT_SECRET_KEY
+        sync: false  # Set manually in dashboard — openssl rand -hex 32
     autoDeploy: true
 
   # =====================================================
