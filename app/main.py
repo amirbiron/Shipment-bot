@@ -5,7 +5,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
+from fastapi.openapi.docs import get_redoc_html
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -198,21 +198,60 @@ async def readiness_check() -> dict[str, str]:
 
 @app.get("/docs", include_in_schema=False)
 async def swagger_ui_html() -> HTMLResponse:
-    """Swagger UI documentation (RTL + Hebrew-friendly styling)."""
-    return get_swagger_ui_html(
-        openapi_url=app.openapi_url,
-        title=f"{app.title} - תיעוד API (Swagger UI)",
-        # Our CSS file imports the upstream Swagger UI CSS and adds RTL overrides.
-        swagger_css_url="/static/swagger-rtl.css",
-        # Use unpkg to reduce CDN-specific loading issues.
-        swagger_js_url="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js",
-        swagger_ui_parameters={
-            "displayRequestDuration": True,
-            # Keep Schemas/Models visible at the bottom (Swagger UI "Schemas" section).
-            # Setting this to -1 hides them completely.
-            "defaultModelsExpandDepth": 1,
-        },
+    """Swagger UI documentation (RTL + Hebrew-friendly styling + כניסה מהירה)."""
+    from html import escape as html_escape
+    from json import dumps as json_dumps
+
+    title = html_escape(f"{app.title} - תיעוד API (Swagger UI)")
+    # json.dumps מייצר מחרוזת JS תקינה עם מירכאות — מחליפה את url: "__OPENAPI_URL__"
+    openapi_url_js = json_dumps(app.openapi_url or "/openapi.json")
+
+    # סדר ההחלפות חשוב: URL קודם, אח"כ כותרת —
+    # מונע מצב שבו הכותרת מכילה את ה-placeholder של ה-URL
+    html = (
+        _SWAGGER_HTML_TEMPLATE
+        .replace("__OPENAPI_URL_JS__", openapi_url_js)
+        .replace("__TITLE__", title)
     )
+    return HTMLResponse(content=html)
+
+
+# תבנית HTML מותאמת ל-Swagger UI.
+# מוסיפה:
+# 1. window.ui — חשיפת instance של Swagger UI לסקריפט הכניסה המהירה
+# 2. swagger-auth.js — ווידג'ט כניסה מהירה (Admin API Key + OTP → JWT)
+_SWAGGER_HTML_TEMPLATE = """\
+<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+    <meta charset="UTF-8">
+    <title>__TITLE__</title>
+    <link rel="stylesheet" type="text/css" href="/static/swagger-rtl.css">
+</head>
+<body>
+    <div id="swagger-ui"></div>
+    <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+    <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-standalone-preset.js"></script>
+    <script>
+    window.ui = SwaggerUIBundle({
+        url: __OPENAPI_URL_JS__,
+        dom_id: "#swagger-ui",
+        presets: [
+            SwaggerUIBundle.presets.apis,
+            SwaggerUIBundle.SwaggerUIStandalonePreset,
+        ],
+        layout: "StandaloneLayout",
+        deepLinking: true,
+        showExtensions: true,
+        showCommonExtensions: true,
+        displayRequestDuration: true,
+        defaultModelsExpandDepth: 1,
+    });
+    </script>
+    <script src="/static/swagger-auth.js"></script>
+</body>
+</html>
+"""
 
 
 @app.get("/redoc", include_in_schema=False)
