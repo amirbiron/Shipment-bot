@@ -10,6 +10,7 @@ services:
     runtime: python
     region: frankfurt
     plan: starter  # upgrade to starter for production
+    privateServiceName: shipment-bot-api
     buildCommand: pip install -r requirements.txt && cd frontend && npm ci && npm run build
     preDeployCommand: python scripts/run_migrations.py
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
@@ -80,6 +81,7 @@ services:
     runtime: docker
     region: frankfurt
     plan: starter
+    privateServiceName: shipment-bot-wa-gateway
     rootDir: whatsapp_gateway
     healthCheckPath: /health
     disk:
