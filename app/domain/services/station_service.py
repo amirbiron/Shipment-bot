@@ -59,7 +59,6 @@ class StationService:
                     role=UserRole.SENDER,
                 )
                 self.db.add(user)
-            await self.db.flush()
         except IntegrityError:
             # race condition — משתמש נוצר במקביל עם אותו phone_number
             logger.info(
