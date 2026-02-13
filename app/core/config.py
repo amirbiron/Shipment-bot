@@ -89,6 +89,14 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30  # חודש — refresh token ב-Redis
     OTP_EXPIRE_SECONDS: int = 300  # 5 דקות
 
+    @field_validator("REFRESH_TOKEN_EXPIRE_DAYS", mode="after")
+    @classmethod
+    def validate_refresh_token_expire_days(cls, v: int) -> int:
+        """ערך חייב להיות חיובי — אחרת setex ב-Redis יכשל ותהליך login ישבר"""
+        if v < 1:
+            raise ValueError("REFRESH_TOKEN_EXPIRE_DAYS must be at least 1")
+        return v
+
     @field_validator("JWT_SECRET_KEY", mode="after")
     @classmethod
     def validate_jwt_secret(cls, v: str) -> str:

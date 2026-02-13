@@ -130,17 +130,6 @@ async def verify_refresh_token(token: str) -> Optional[TokenPayload]:
         return None
 
 
-async def revoke_refresh_tokens_for_user(user_id: int, station_id: int) -> None:
-    """ביטול כל ה-refresh tokens של משתמש לתחנה ספציפית.
-
-    הערה: Redis לא תומך ב-pattern scan יעיל. אם נדרש revoke מלא,
-    ניתן לשמור רשימת tokens per user. כרגע הפונקציה זמינה לשימוש עתידי.
-    """
-    logger.info(
-        "Refresh token revocation requested",
-        extra_data={"user_id": user_id, "station_id": station_id},
-    )
-
 
 def generate_otp() -> str:
     """יצירת קוד OTP בטוח — 6 ספרות"""
