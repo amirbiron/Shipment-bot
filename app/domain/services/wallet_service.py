@@ -50,11 +50,14 @@ class WalletService:
                     "IntegrityError ביצירת ארנק — כנראה נוצר במקביל, מנסה למצוא",
                     extra_data={"courier_id": courier_id},
                 )
-                result = await self.db.execute(
-                    select(CourierWallet).where(
-                        CourierWallet.courier_id == courier_id
-                    )
+                # שומר על נעילת שורה אם נדרשה — אחרת debit/credit
+                # ימשיכו מקריאה לא נעולה ועלולים לדרוס עדכון מקבילי
+                retry_query = select(CourierWallet).where(
+                    CourierWallet.courier_id == courier_id
                 )
+                if for_update:
+                    retry_query = retry_query.with_for_update()
+                result = await self.db.execute(retry_query)
                 wallet = result.scalar_one()
 
         return wallet
