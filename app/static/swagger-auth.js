@@ -29,6 +29,13 @@
     el.className = "qa-msg " + (cls || "");
   }
 
+  /** מניעת XSS — escaping של תווים מיוחדים ב-HTML */
+  function escapeHtml(str) {
+    var div = document.createElement("div");
+    div.appendChild(document.createTextNode(String(str)));
+    return div.innerHTML;
+  }
+
   /* ── בניית הווידג'ט ── */
   function buildWidget() {
     var el = document.createElement("div");
@@ -148,6 +155,11 @@
       var d = await r.json();
       if (r.ok) {
         _phone = phone;
+        // איפוס מצב תחנות מבקשה קודמת (מונע שליחת station_id ישן)
+        _pendingStations = null;
+        _$("qa-stations").innerHTML = "";
+        _$("qa-stations").style.display = "none";
+        _$("qa-otp").value = "";
         _$("qa-step2").style.display = "flex";
         _$("qa-otp").focus();
         setMsg(
@@ -212,12 +224,13 @@
         });
         _pendingStations = null;
         _$("qa-stations").style.display = "none";
+        // setMsg משתמש ב-textContent ולכן בטוח מ-XSS
         setMsg(
           "qa-otp-msg",
           "\u2713 \u05de\u05d7\u05d5\u05d1\u05e8! \u05ea\u05d7\u05e0\u05d4: " +
-            d.station_name +
+            String(d.station_name) +
             " (ID: " +
-            d.station_id +
+            String(d.station_id) +
             ")",
           "qa-ok"
         );
@@ -226,13 +239,15 @@
         _pendingStations = d.stations;
         var html = "<strong>\u05d1\u05d7\u05e8 \u05ea\u05d7\u05e0\u05d4:</strong>";
         d.stations.forEach(function (s) {
+          var safeId = escapeHtml(s.station_id);
+          var safeName = escapeHtml(s.station_name);
           html +=
             '<label><input type="radio" name="qa-station" value="' +
-            s.station_id +
+            safeId +
             '">' +
-            s.station_name +
+            safeName +
             " (ID: " +
-            s.station_id +
+            safeId +
             ")</label>";
         });
         _$("qa-stations").innerHTML = html;

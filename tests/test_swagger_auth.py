@@ -95,6 +95,34 @@ class TestSwaggerAuthStatic:
         assert "qa-stations" in content
         assert "choose_station" in content
 
+    @pytest.mark.asyncio
+    async def test_auth_js_escapes_html_in_station_picker(self, test_client):
+        """הסקריפט משתמש ב-escapeHtml לשמות תחנות — מניעת XSS"""
+        response = await test_client.get("/static/swagger-auth.js")
+        content = response.text
+        assert "escapeHtml" in content
+        # וידוא ש-escapeHtml מיושמת על station_id ו-station_name
+        assert "escapeHtml(s.station_id)" in content
+        assert "escapeHtml(s.station_name)" in content
+
+    @pytest.mark.asyncio
+    async def test_auth_js_resets_stations_on_new_otp(self, test_client):
+        """בקשת OTP חדשה מאפסת את בורר התחנות מבקשה קודמת"""
+        response = await test_client.get("/static/swagger-auth.js")
+        content = response.text
+        # בתוך onRequestOTP — איפוס _pendingStations
+        assert "_pendingStations = null" in content
+
+
+class TestSwaggerStandalonePreset:
+    """בדיקה שתבנית ה-HTML טוענת את Standalone Preset"""
+
+    @pytest.mark.asyncio
+    async def test_docs_loads_standalone_preset_script(self, test_client):
+        """דף הדוקומנטציה טוען את swagger-ui-standalone-preset.js"""
+        response = await test_client.get("/docs")
+        assert "swagger-ui-standalone-preset.js" in response.text
+
 
 class TestRedocStillWorks:
     """בדיקה שדף ReDoc לא נפגע מהשינויים"""
