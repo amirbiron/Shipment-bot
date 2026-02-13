@@ -55,15 +55,15 @@
       arrow.textContent = body.classList.contains("qa-collapsed") ? "◀" : "▼";
     });
 
-    // Enter key
+    // Enter key — בדיקת disabled מונעת שליחה כפולה בלחיצה מהירה
     _$("qa-api-key").addEventListener("keydown", function (e) {
       if (e.key === "Enter") onSetAdminKey();
     });
     _$("qa-phone").addEventListener("keydown", function (e) {
-      if (e.key === "Enter") onRequestOTP();
+      if (e.key === "Enter" && !_$("qa-send").disabled) onRequestOTP();
     });
     _$("qa-otp").addEventListener("keydown", function (e) {
-      if (e.key === "Enter") onVerifyOTP();
+      if (e.key === "Enter" && !_$("qa-verify").disabled) onVerifyOTP();
     });
   }
 

@@ -199,9 +199,20 @@ async def readiness_check() -> dict[str, str]:
 @app.get("/docs", include_in_schema=False)
 async def swagger_ui_html() -> HTMLResponse:
     """Swagger UI documentation (RTL + Hebrew-friendly styling + כניסה מהירה)."""
-    html = _SWAGGER_HTML_TEMPLATE.replace(
-        "__TITLE__", f"{app.title} - תיעוד API (Swagger UI)"
-    ).replace("__OPENAPI_URL__", app.openapi_url or "/openapi.json")
+    from html import escape as html_escape
+    from json import dumps as json_dumps
+
+    title = html_escape(f"{app.title} - תיעוד API (Swagger UI)")
+    # json.dumps מייצר מחרוזת JS תקינה עם מירכאות — מחליפה את url: "__OPENAPI_URL__"
+    openapi_url_js = json_dumps(app.openapi_url or "/openapi.json")
+
+    # סדר ההחלפות חשוב: URL קודם, אח"כ כותרת —
+    # מונע מצב שבו הכותרת מכילה את ה-placeholder של ה-URL
+    html = (
+        _SWAGGER_HTML_TEMPLATE
+        .replace("__OPENAPI_URL_JS__", openapi_url_js)
+        .replace("__TITLE__", title)
+    )
     return HTMLResponse(content=html)
 
 
@@ -223,7 +234,7 @@ _SWAGGER_HTML_TEMPLATE = """\
     <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-standalone-preset.js"></script>
     <script>
     window.ui = SwaggerUIBundle({
-        url: "__OPENAPI_URL__",
+        url: __OPENAPI_URL_JS__,
         dom_id: "#swagger-ui",
         presets: [
             SwaggerUIBundle.presets.apis,

@@ -53,6 +53,13 @@ class TestSwaggerDocsPage:
         assert "/openapi.json" in response.text
 
     @pytest.mark.asyncio
+    async def test_docs_no_raw_placeholders(self, test_client):
+        """אין placeholders לא מוחלפים ב-HTML הסופי"""
+        response = await test_client.get("/docs")
+        assert "__TITLE__" not in response.text
+        assert "__OPENAPI_URL_JS__" not in response.text
+
+    @pytest.mark.asyncio
     async def test_docs_has_rtl_direction(self, test_client):
         """HTML מוגדר כ-RTL עם שפה עברית"""
         response = await test_client.get("/docs")
@@ -121,6 +128,14 @@ class TestSwaggerAuthStatic:
         content = response.text
         # בתוך onRequestOTP — איפוס _pendingStations
         assert "_pendingStations = null" in content
+
+    @pytest.mark.asyncio
+    async def test_auth_js_enter_checks_disabled(self, test_client):
+        """Enter key בודק disabled כדי למנוע שליחה כפולה"""
+        response = await test_client.get("/static/swagger-auth.js")
+        content = response.text
+        assert '!_$("qa-send").disabled' in content
+        assert '!_$("qa-verify").disabled' in content
 
 
 class TestSwaggerDefaultParams:
