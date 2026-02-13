@@ -8,7 +8,7 @@ Fixtures ו-helpers לבדיקות תרחיש מקצה לקצה.
 - פונקציות אימות DB (סטטוס משלוח, outbox, ארנק)
 """
 import pytest
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock
 from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -258,7 +258,7 @@ def configure_admin():
 
 
 # ============================================================================
-# איפוס מונים בין בדיקות
+# איפוס מונים וחסימת קריאות חיצוניות בין בדיקות
 # ============================================================================
 
 @pytest.fixture(autouse=True)
@@ -268,6 +268,34 @@ def _reset_counters():
     _update_counter = 0
     _wa_msg_counter = 0
     yield
+
+
+@pytest.fixture(autouse=True)
+def _mock_outbound_apis():
+    """חסימת קריאות HTTP יוצאות לטלגרם/וואטסאפ — מונע קריאות אמיתיות"""
+    with patch(
+        "app.api.webhooks.telegram.send_telegram_message",
+        new_callable=AsyncMock,
+    ), patch(
+        "app.api.webhooks.telegram.answer_callback_query",
+        new_callable=AsyncMock,
+    ), patch(
+        "app.api.webhooks.telegram.send_welcome_message",
+        new_callable=AsyncMock,
+    ), patch(
+        "app.domain.services.admin_notification_service.AdminNotificationService._send_telegram_message",
+        new_callable=AsyncMock,
+        return_value=True,
+    ), patch(
+        "app.domain.services.admin_notification_service.AdminNotificationService._send_telegram_message_with_inline_keyboard",
+        new_callable=AsyncMock,
+        return_value=True,
+    ), patch(
+        "app.domain.services.admin_notification_service.AdminNotificationService._forward_photo",
+        new_callable=AsyncMock,
+        return_value=True,
+    ):
+        yield
 
 
 # ============================================================================

@@ -143,28 +143,19 @@ class TestDepositAndCredit:
             context={},
         )
 
-        # שליח שולח "ארנק" — מצפים למעבר ל-VIEW_WALLET
-        data = await send_tg(test_client, chat_id, "💰 ארנק")
-        # הכפתור המדויק עשוי להיות שונה — נבדוק שהגענו ל-state ארנק
+        # שלב 1: שליח שולח "💳 הפקדה" מתפריט — מצפים למעבר ל-DEPOSIT_UPLOAD
+        data = await send_tg(test_client, chat_id, "💳 הפקדה")
         new_state = data.get("new_state", "")
-        assert "WALLET" in new_state or "DEPOSIT" in new_state or "MENU" in new_state
+        assert new_state == CourierState.DEPOSIT_UPLOAD.value, (
+            f"צפי: {CourierState.DEPOSIT_UPLOAD.value}, בפועל: {new_state}"
+        )
 
-        # אם הגענו ל-VIEW_WALLET, ננסה לבקש הפקדה
-        if "WALLET" in new_state:
-            data = await send_tg_callback(test_client, chat_id, "💰 בקשת הפקדה")
-            new_state = data.get("new_state", "")
-
-        # אם הגענו ל-DEPOSIT_REQUEST, נשלח סכום
-        if "DEPOSIT_REQUEST" in new_state:
-            data = await send_tg(test_client, chat_id, "100")
-            new_state = data.get("new_state", "")
-
-        # אם הגענו ל-DEPOSIT_UPLOAD, נשלח תמונה
-        if "DEPOSIT_UPLOAD" in new_state:
-            data = await send_tg_photo(test_client, chat_id, "deposit_screenshot")
-            # אימות: חוזרים ל-WALLET או MENU
-            new_state = data.get("new_state", "")
-            assert "WALLET" in new_state or "MENU" in new_state
+        # שלב 2: שליח מעלה צילום מסך — מצפים לחזרה לתפריט (אחרי אישור הבקשה)
+        data = await send_tg_photo(test_client, chat_id, "deposit_screenshot")
+        new_state = data.get("new_state", "")
+        assert new_state == CourierState.MENU.value, (
+            f"צפי: {CourierState.MENU.value}, בפועל: {new_state}"
+        )
 
     @pytest.mark.asyncio
     async def test_multiple_captures_accumulate_debt(
