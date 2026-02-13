@@ -42,6 +42,14 @@ class Settings(BaseSettings):
 
     # WhatsApp Gateway
     WHATSAPP_GATEWAY_URL: str = "http://localhost:3000"
+
+    @field_validator("WHATSAPP_GATEWAY_URL", mode="before")
+    @classmethod
+    def normalize_gateway_url(cls, v: str) -> str:
+        """Render fromService hostport מחזיר host:port בלבד — מוסיף http:// אם חסר"""
+        if v and not v.startswith("http"):
+            v = f"http://{v}"
+        return v.rstrip("/")
     WHATSAPP_ADMIN_GROUP_ID: Optional[str] = None  # קבוצת מנהלים - לסיכומי אישור/דחייה
 
     # מנהלים פרטיים - לשליחת כרטיסי נהג לאישור עם כפתורים
