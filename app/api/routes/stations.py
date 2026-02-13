@@ -1,12 +1,18 @@
 """
 Station API Routes - ניהול תחנות משלוחים
+
+כל ה-endpoints דורשים אימות אדמין (X-Admin-API-Key).
 """
-from typing import Optional
+from typing import List, Optional
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, field_validator
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.dependencies.admin_auth import require_admin_api_key
 from app.db.database import get_db
+from app.db.models.station import Station
 from app.db.models.user import UserRole
 from app.domain.services.station_service import StationService
 from app.core.logging import get_logger
@@ -49,27 +55,71 @@ class StationResponse(BaseModel):
         from_attributes = True
 
 
+class StationListResponse(BaseModel):
+    """סכמת תגובה לרשימת תחנות"""
+    stations: List[StationResponse]
+    total: int
+
+
+@router.get(
+    "/",
+    response_model=StationListResponse,
+    summary="רשימת כל התחנות הפעילות",
+    description="מחזיר את כל התחנות הפעילות במערכת. דורש מפתח אדמין.",
+    responses={
+        200: {"description": "רשימת תחנות"},
+        401: {"description": "מפתח API חסר"},
+        403: {"description": "מפתח API שגוי"},
+    },
+    tags=["Stations"],
+)
+async def list_stations(
+    _: None = Depends(require_admin_api_key),
+    db: AsyncSession = Depends(get_db),
+) -> StationListResponse:
+    """רשימת כל התחנות הפעילות — לאדמין בלבד"""
+    result = await db.execute(
+        select(Station).where(
+            Station.is_active == True  # noqa: E712
+        ).order_by(Station.id)
+    )
+    stations = list(result.scalars().all())
+
+    logger.info(
+        "Admin listed stations",
+        extra_data={"count": len(stations)},
+    )
+
+    return StationListResponse(
+        stations=[StationResponse.model_validate(s) for s in stations],
+        total=len(stations),
+    )
+
+
 @router.post(
     "/",
     response_model=StationResponse,
     summary="יצירת תחנה חדשה",
     description=(
         "יצירת תחנה חדשה והקצאת בעלים לפי מספר טלפון. "
-        "המשתמש הופך אוטומטית ל-STATION_OWNER."
+        "המשתמש הופך אוטומטית ל-STATION_OWNER. דורש מפתח אדמין."
     ),
     responses={
         200: {"description": "התחנה נוצרה בהצלחה"},
         400: {"description": "למשתמש כבר יש תחנה פעילה"},
+        401: {"description": "מפתח API חסר"},
+        403: {"description": "מפתח API שגוי"},
         422: {"description": "שגיאת ולידציה"},
     },
     tags=["Stations"],
 )
 async def create_station(
     station_data: StationCreate,
+    _: None = Depends(require_admin_api_key),
     db: AsyncSession = Depends(get_db),
 ) -> StationResponse:
     """
-    יצירת תחנה חדשה.
+    יצירת תחנה חדשה — דורש מפתח אדמין.
 
     - **name**: שם התחנה
     - **owner_phone**: מספר טלפון של בעל התחנה (אם לא קיים — ייווצר אוטומטית)
@@ -88,7 +138,7 @@ async def create_station(
             user.role = UserRole.STATION_OWNER
             await db.commit()
             logger.info(
-                "Fixed user role to STATION_OWNER for existing station",
+                "תוקן תפקיד המשתמש ל-STATION_OWNER עבור תחנה קיימת",
                 extra_data={
                     "station_id": existing.id,
                     "owner_id": user.id,
@@ -110,7 +160,7 @@ async def create_station(
     await db.refresh(station)
 
     logger.info(
-        "Station created via API",
+        "תחנה נוצרה ע\"י אדמין",
         extra_data={
             "station_id": station.id,
             "owner_id": user.id,
@@ -124,15 +174,21 @@ async def create_station(
     "/{station_id}",
     response_model=StationResponse,
     summary="קבלת תחנה לפי מזהה",
-    description="מחזיר תחנה פעילה לפי מזהה.",
-    responses={200: {"description": "התחנה נמצאה"}, 404: {"description": "תחנה לא נמצאה"}},
+    description="מחזיר תחנה פעילה לפי מזהה. דורש מפתח אדמין.",
+    responses={
+        200: {"description": "התחנה נמצאה"},
+        401: {"description": "מפתח API חסר"},
+        403: {"description": "מפתח API שגוי"},
+        404: {"description": "תחנה לא נמצאה"},
+    },
     tags=["Stations"],
 )
 async def get_station(
     station_id: int,
+    _: None = Depends(require_admin_api_key),
     db: AsyncSession = Depends(get_db),
 ) -> StationResponse:
-    """קבלת תחנה לפי ID"""
+    """קבלת תחנה לפי ID — דורש מפתח אדמין"""
     station_service = StationService(db)
     station = await station_service.get_station(station_id)
     if not station:

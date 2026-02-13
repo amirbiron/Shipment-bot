@@ -86,7 +86,16 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str = ""  # חובה בפרודקשן — openssl rand -hex 32
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 480  # 8 שעות
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 30  # חודש — refresh token ב-Redis
     OTP_EXPIRE_SECONDS: int = 300  # 5 דקות
+
+    @field_validator("REFRESH_TOKEN_EXPIRE_DAYS", mode="after")
+    @classmethod
+    def validate_refresh_token_expire_days(cls, v: int) -> int:
+        """ערך חייב להיות חיובי — אחרת setex ב-Redis יכשל ותהליך login ישבר"""
+        if v < 1:
+            raise ValueError("REFRESH_TOKEN_EXPIRE_DAYS must be at least 1")
+        return v
 
     @field_validator("JWT_SECRET_KEY", mode="after")
     @classmethod
