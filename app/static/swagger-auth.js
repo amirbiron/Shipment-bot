@@ -29,11 +29,14 @@
     el.className = "qa-msg " + (cls || "");
   }
 
-  /** מניעת XSS — escaping של תווים מיוחדים ב-HTML */
+  /** מניעת XSS — escaping של תווים מיוחדים ב-HTML (כולל מירכאות לשימוש ב-attributes) */
   function escapeHtml(str) {
-    var div = document.createElement("div");
-    div.appendChild(document.createTextNode(String(str)));
-    return div.innerHTML;
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
   }
 
   /* ── בניית הווידג'ט ── */

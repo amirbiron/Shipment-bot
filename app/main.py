@@ -230,6 +230,9 @@ _SWAGGER_HTML_TEMPLATE = """\
             SwaggerUIBundle.SwaggerUIStandalonePreset,
         ],
         layout: "StandaloneLayout",
+        deepLinking: true,
+        showExtensions: true,
+        showCommonExtensions: true,
         displayRequestDuration: true,
         defaultModelsExpandDepth: 1,
     });

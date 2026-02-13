@@ -106,6 +106,15 @@ class TestSwaggerAuthStatic:
         assert "escapeHtml(s.station_name)" in content
 
     @pytest.mark.asyncio
+    async def test_auth_js_escape_handles_quotes(self, test_client):
+        """escapeHtml חייבת לטפל גם במירכאות — בטוח לשימוש ב-HTML attributes"""
+        response = await test_client.get("/static/swagger-auth.js")
+        content = response.text
+        # וידוא ש-escapeHtml מטפלת ב-" ו-' (נדרש ל-attribute context)
+        assert "&quot;" in content
+        assert "&#39;" in content
+
+    @pytest.mark.asyncio
     async def test_auth_js_resets_stations_on_new_otp(self, test_client):
         """בקשת OTP חדשה מאפסת את בורר התחנות מבקשה קודמת"""
         response = await test_client.get("/static/swagger-auth.js")
@@ -114,14 +123,20 @@ class TestSwaggerAuthStatic:
         assert "_pendingStations = null" in content
 
 
-class TestSwaggerStandalonePreset:
-    """בדיקה שתבנית ה-HTML טוענת את Standalone Preset"""
+class TestSwaggerDefaultParams:
+    """בדיקה שתבנית ה-HTML כוללת את ברירות המחדל של FastAPI"""
 
     @pytest.mark.asyncio
     async def test_docs_loads_standalone_preset_script(self, test_client):
         """דף הדוקומנטציה טוען את swagger-ui-standalone-preset.js"""
         response = await test_client.get("/docs")
         assert "swagger-ui-standalone-preset.js" in response.text
+
+    @pytest.mark.asyncio
+    async def test_docs_has_deep_linking(self, test_client):
+        """deepLinking מופעל — תמיכה בקישורים ישירים ל-endpoints"""
+        response = await test_client.get("/docs")
+        assert "deepLinking: true" in response.text
 
 
 class TestRedocStillWorks:
