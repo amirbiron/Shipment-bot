@@ -4,11 +4,15 @@ Wallet Service - Handles courier wallet and credit operations
 from decimal import Decimal
 from typing import Optional, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 
 from app.db.models.courier_wallet import CourierWallet
 from app.db.models.wallet_ledger import WalletLedger, LedgerEntryType
 from app.core.config import settings
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class WalletService:
@@ -17,22 +21,44 @@ class WalletService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def get_or_create_wallet(self, courier_id: int) -> CourierWallet:
-        """Get existing wallet or create new one"""
-        result = await self.db.execute(
-            select(CourierWallet).where(CourierWallet.courier_id == courier_id)
-        )
+    async def get_or_create_wallet(
+        self, courier_id: int, for_update: bool = False
+    ) -> CourierWallet:
+        """שליפת ארנק קיים או יצירת חדש.
+
+        משתמש ב-savepoint + IntegrityError fallback למניעת race condition
+        כשבקשות מקבילות מנסות ליצור ארנק לאותו שליח.
+        """
+        query = select(CourierWallet).where(CourierWallet.courier_id == courier_id)
+        if for_update:
+            query = query.with_for_update()
+        result = await self.db.execute(query)
         wallet = result.scalar_one_or_none()
 
         if not wallet:
-            wallet = CourierWallet(
-                courier_id=courier_id,
-                balance=Decimal("0.00"),
-                credit_limit=Decimal(str(settings.DEFAULT_CREDIT_LIMIT))
-            )
-            self.db.add(wallet)
-            await self.db.commit()
-            await self.db.refresh(wallet)
+            try:
+                async with self.db.begin_nested():
+                    wallet = CourierWallet(
+                        courier_id=courier_id,
+                        balance=Decimal("0.00"),
+                        credit_limit=Decimal(str(settings.DEFAULT_CREDIT_LIMIT))
+                    )
+                    self.db.add(wallet)
+            except IntegrityError:
+                # race condition — ארנק נוצר במקביל על ידי בקשה אחרת
+                logger.info(
+                    "IntegrityError ביצירת ארנק — כנראה נוצר במקביל, מנסה למצוא",
+                    extra_data={"courier_id": courier_id},
+                )
+                # שומר על נעילת שורה אם נדרשה — אחרת debit/credit
+                # ימשיכו מקריאה לא נעולה ועלולים לדרוס עדכון מקבילי
+                retry_query = select(CourierWallet).where(
+                    CourierWallet.courier_id == courier_id
+                )
+                if for_update:
+                    retry_query = retry_query.with_for_update()
+                result = await self.db.execute(retry_query)
+                wallet = result.scalar_one()
 
         return wallet
 
@@ -69,7 +95,7 @@ class WalletService:
         Returns ledger entry or None if debit failed.
         Note: This should be called within an atomic transaction.
         """
-        wallet = await self.get_or_create_wallet(courier_id)
+        wallet = await self.get_or_create_wallet(courier_id, for_update=True)
 
         # Calculate new balance
         fee_decimal = Decimal(str(fee))
@@ -99,10 +125,14 @@ class WalletService:
         self,
         courier_id: int,
         delivery_id: int,
-        amount: float
+        amount: float,
+        auto_commit: bool = True,
     ) -> WalletLedger:
-        """Credit wallet for completed delivery"""
-        wallet = await self.get_or_create_wallet(courier_id)
+        """זיכוי ארנק שליח עבור משלוח שהושלם.
+
+        כש-auto_commit=False, רק flush — הקורא אחראי על commit.
+        """
+        wallet = await self.get_or_create_wallet(courier_id, for_update=True)
 
         amount_decimal = Decimal(str(amount))
         new_balance = wallet.balance + amount_decimal
@@ -117,7 +147,11 @@ class WalletService:
             description=f"תשלום עבור משלוח #{delivery_id}"
         )
         self.db.add(ledger_entry)
-        await self.db.commit()
+
+        if auto_commit:
+            await self.db.commit()
+        else:
+            await self.db.flush()
 
         return ledger_entry
 

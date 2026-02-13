@@ -45,6 +45,7 @@ async def get_wallet(
     """Get wallet for courier"""
     service = WalletService(db)
     wallet = await service.get_or_create_wallet(courier_id)
+    await db.commit()
     return wallet
 
 
@@ -60,6 +61,7 @@ async def get_balance(
     """Get current balance for courier"""
     service = WalletService(db)
     balance = await service.get_balance(courier_id)
+    await db.commit()
     return {"courier_id": courier_id, "balance": float(balance)}
 
 
@@ -93,4 +95,5 @@ async def check_can_capture(
     """Check if courier can capture a delivery with given fee"""
     service = WalletService(db)
     can_capture, message = await service.check_can_capture(courier_id, fee)
+    await db.commit()
     return {"can_capture": can_capture, "message": message}
