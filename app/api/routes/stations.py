@@ -5,11 +5,9 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 
 from app.db.database import get_db
-from app.db.models.user import User, UserRole
-from app.db.models.station import Station
+from app.db.models.user import UserRole
 from app.domain.services.station_service import StationService
 from app.core.logging import get_logger
 from app.core.validation import PhoneNumberValidator, TextSanitizer
@@ -61,7 +59,6 @@ class StationResponse(BaseModel):
     ),
     responses={
         200: {"description": "התחנה נוצרה בהצלחה"},
-        404: {"description": "המשתמש לא נמצא"},
         400: {"description": "למשתמש כבר יש תחנה פעילה"},
         422: {"description": "שגיאת ולידציה"},
     },
@@ -75,18 +72,15 @@ async def create_station(
     יצירת תחנה חדשה.
 
     - **name**: שם התחנה
-    - **owner_phone**: מספר טלפון של בעל התחנה (חייב להיות משתמש קיים)
+    - **owner_phone**: מספר טלפון של בעל התחנה (אם לא קיים — ייווצר אוטומטית)
     """
-    # חיפוש המשתמש לפי מספר טלפון
-    result = await db.execute(
-        select(User).where(User.phone_number == station_data.owner_phone)
+    # חיפוש המשתמש לפי מספר טלפון — אם לא קיים, יוצרים אותו אוטומטית
+    station_service = StationService(db)
+    user = await station_service.get_or_create_user_by_phone(
+        station_data.owner_phone, context="בעת יצירת תחנה",
     )
-    user = result.scalar_one_or_none()
-    if not user:
-        raise HTTPException(status_code=404, detail="משתמש לא נמצא עם מספר הטלפון הזה")
 
     # בדיקה שאין כבר תחנה פעילה לבעלים הזה
-    station_service = StationService(db)
     existing = await station_service.get_station_by_owner(user.id)
     if existing:
         # תיקון תפקיד המשתמש אם נדרש (למקרה שהתחנה נוצרה אבל הרול לא עודכן)

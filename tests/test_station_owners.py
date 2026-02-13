@@ -128,6 +128,38 @@ class TestStationOwnerService:
         assert new_owner.role == UserRole.STATION_OWNER
 
     @pytest.mark.asyncio
+    async def test_add_owner_auto_creates_user(self, user_factory, db_session):
+        """הוספת בעלים עם מספר טלפון שלא קיים במערכת — יוצרת משתמש אוטומטית"""
+        owner = await user_factory(
+            phone_number="+972501234567",
+            role=UserRole.STATION_OWNER,
+        )
+        station = Station(name="תחנה", owner_id=owner.id)
+        db_session.add(station)
+        await db_session.flush()
+        wallet = StationWallet(station_id=station.id)
+        db_session.add(wallet)
+        db_session.add(StationOwner(station_id=station.id, user_id=owner.id))
+        await db_session.commit()
+
+        service = StationService(db_session)
+        # מספר טלפון שלא קיים במערכת
+        success, msg = await service.add_owner(station.id, "+972509999999")
+        assert success is True
+        assert "נוסף בהצלחה" in msg
+
+        # ולידציה שהמשתמש נוצר עם תפקיד STATION_OWNER
+        from sqlalchemy import select
+        from app.db.models.user import User
+        result = await db_session.execute(
+            select(User).where(User.phone_number == "+972509999999")
+        )
+        new_user = result.scalar_one_or_none()
+        assert new_user is not None
+        assert new_user.role == UserRole.STATION_OWNER
+        assert await service.is_owner_of_station(new_user.id, station.id) is True
+
+    @pytest.mark.asyncio
     async def test_add_duplicate_owner_rejected(self, user_factory, db_session):
         """הוספת בעלים כפול — נדחה"""
         owner = await user_factory(
@@ -387,6 +419,44 @@ class TestStationOwnerService:
         assert len(stations) == 2
 
 
+    @pytest.mark.asyncio
+    async def test_create_station_auto_creates_user(self, db_session):
+        """יצירת תחנה עם מספר טלפון שלא קיים במערכת — יוצרת משתמש אוטומטית"""
+        from sqlalchemy import select
+        from app.db.models.user import User
+
+        service = StationService(db_session)
+
+        # ניסיון יצירת תחנה דרך ה-API עם מספר טלפון שלא קיים
+        from httpx import AsyncClient, ASGITransport
+        from app.main import app
+        from app.db.database import get_db
+
+        async def override_get_db():
+            yield db_session
+
+        app.dependency_overrides[get_db] = override_get_db
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post("/api/stations/", json={
+                "name": "תחנת בדיקה",
+                "owner_phone": "0509999999",
+            })
+        app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["name"] == "תחנת בדיקה"
+
+        # ולידציה שהמשתמש נוצר עם תפקיד STATION_OWNER
+        result = await db_session.execute(
+            select(User).where(User.phone_number == "+972509999999")
+        )
+        new_user = result.scalar_one_or_none()
+        assert new_user is not None
+        assert new_user.role == UserRole.STATION_OWNER
+
+
 class TestMultiOwnerAuth:
     """בדיקות אימות עם ריבוי בעלים"""
 
@@ -578,6 +648,33 @@ class TestOwnerPanelEndpoints:
         response = await test_client.post(
             "/api/panel/owners",
             json={"phone_number": "0502222222"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_add_owner_auto_creates_user_via_api(
+        self, test_client, user_factory, db_session,
+    ):
+        """הוספת בעלים שלא קיים במערכת דרך ה-API — יוצרת משתמש אוטומטית"""
+        owner = await user_factory(
+            phone_number="+972501234567",
+            role=UserRole.STATION_OWNER,
+        )
+        station = Station(name="תחנה", owner_id=owner.id)
+        db_session.add(station)
+        await db_session.flush()
+        wallet = StationWallet(station_id=station.id)
+        db_session.add(wallet)
+        db_session.add(StationOwner(station_id=station.id, user_id=owner.id))
+        await db_session.commit()
+
+        token = create_access_token(owner.id, station.id, "station_owner")
+        # מספר טלפון של משתמש שלא קיים במערכת
+        response = await test_client.post(
+            "/api/panel/owners",
+            json={"phone_number": "0509999999"},
             headers={"Authorization": f"Bearer {token}"},
         )
         assert response.status_code == 200

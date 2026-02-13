@@ -6,6 +6,7 @@ Station Service - ניהול תחנות, סדרנים, ארנק תחנה ורש�
 from datetime import datetime
 from typing import List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 
 from app.db.models.station import Station
@@ -31,6 +32,57 @@ class StationService:
 
     def __init__(self, db: AsyncSession):
         self.db = db
+
+    async def get_or_create_user_by_phone(
+        self,
+        normalized_phone: str,
+        context: str = "",
+    ) -> User:
+        """חיפוש משתמש לפי מספר טלפון מנורמל — אם לא קיים, יוצרים אוטומטית.
+
+        משתמש ב-savepoint + IntegrityError fallback למניעת race condition
+        כשבקשות מקבילות מנסות ליצור אותו משתמש.
+        הפלטפורמה תתעדכן בפעם הראשונה שהמשתמש יתחבר דרך הבוט.
+        """
+        result = await self.db.execute(
+            select(User).where(User.phone_number == normalized_phone)
+        )
+        user = result.scalar_one_or_none()
+        if user:
+            return user
+
+        try:
+            async with self.db.begin_nested():
+                user = User(
+                    phone_number=normalized_phone,
+                    platform="telegram",
+                    role=UserRole.SENDER,
+                )
+                self.db.add(user)
+        except IntegrityError:
+            # race condition — משתמש נוצר במקביל עם אותו phone_number
+            logger.info(
+                "IntegrityError ביצירת משתמש — כנראה נוצר במקביל, מנסה למצוא",
+                extra_data={"phone": PhoneNumberValidator.mask(normalized_phone)},
+            )
+            result = await self.db.execute(
+                select(User).where(User.phone_number == normalized_phone)
+            )
+            user = result.scalar_one_or_none()
+            if not user:
+                raise ValueError(
+                    f"לא ניתן ליצור או למצוא משתמש: {PhoneNumberValidator.mask(normalized_phone)}"
+                )
+            return user
+
+        logger.info(
+            f"יצירת משתמש אוטומטית {context}",
+            extra_data={
+                "user_id": user.id,
+                "phone": PhoneNumberValidator.mask(normalized_phone),
+            }
+        )
+        return user
 
     # ==================== ניהול תחנה ====================
 
@@ -163,14 +215,8 @@ class StationService:
 
         normalized = PhoneNumberValidator.normalize(phone_number)
 
-        # חיפוש המשתמש
-        result = await self.db.execute(
-            select(User).where(User.phone_number == normalized)
-        )
-        user = result.scalar_one_or_none()
-
-        if not user:
-            return False, "משתמש לא נמצא עם מספר הטלפון הזה."
+        # חיפוש המשתמש — אם לא קיים, יוצרים אותו אוטומטית
+        user = await self.get_or_create_user_by_phone(normalized, context="בעת הוספת בעלים")
 
         # בדיקה שלא כבר בעלים בתחנה
         existing = await self.db.execute(
@@ -299,14 +345,8 @@ class StationService:
 
         normalized = PhoneNumberValidator.normalize(phone_number)
 
-        # חיפוש המשתמש לפי מספר טלפון
-        result = await self.db.execute(
-            select(User).where(User.phone_number == normalized)
-        )
-        user = result.scalar_one_or_none()
-
-        if not user:
-            return False, "משתמש לא נמצא עם מספר הטלפון הזה."
+        # חיפוש המשתמש לפי מספר טלפון — אם לא קיים, יוצרים אותו אוטומטית
+        user = await self.get_or_create_user_by_phone(normalized, context="בעת הוספת סדרן")
 
         # בדיקה שהמשתמש לא כבר סדרן בתחנה הזו
         existing = await self.db.execute(
