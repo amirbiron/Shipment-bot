@@ -5,7 +5,7 @@ Manual Charge Model - חיוב ידני
 כולל: שם הנהג, סכום, פרטי המשלוח.
 """
 from datetime import datetime
-from sqlalchemy import Column, Integer, BigInteger, Float, DateTime, ForeignKey, String, Text, Boolean
+from sqlalchemy import Column, Integer, BigInteger, Numeric, DateTime, ForeignKey, String, Text, Boolean
 
 from app.db.database import Base
 
@@ -24,7 +24,7 @@ class ManualCharge(Base):
 
     # פרטי החיוב
     driver_name = Column(String(200), nullable=False)
-    amount = Column(Float, nullable=False)
+    amount = Column(Numeric(10, 2), nullable=False)
     description = Column(Text, nullable=True)
 
     # סימון תשלום - לצורך מעקב גבייה וחסימה אוטומטית

@@ -8,6 +8,7 @@ Fixtures ו-helpers לבדיקות תרחיש מקצה לקצה.
 - פונקציות אימות DB (סטטוס משלוח, outbox, ארנק)
 """
 import pytest
+from decimal import Decimal
 from unittest.mock import patch, AsyncMock
 from typing import Optional
 
@@ -349,7 +350,7 @@ async def assert_wallet_balance(
         ).execution_options(populate_existing=True)
     )
     wallet = result.scalar_one()
-    assert abs(wallet.balance - expected_balance) < 0.01, (
+    assert abs(wallet.balance - Decimal(str(expected_balance))) < Decimal("0.01"), (
         f"צפי: {expected_balance}, בפועל: {wallet.balance}"
     )
     return wallet

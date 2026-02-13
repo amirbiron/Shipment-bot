@@ -5,6 +5,7 @@ Implements the atomic capture + credit debit pattern using PostgreSQL
 row locks to ensure data consistency.
 """
 from datetime import datetime
+from decimal import Decimal
 from typing import Tuple, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
@@ -122,8 +123,8 @@ class CaptureService:
                 # Create wallet if doesn't exist
                 wallet = CourierWallet(
                     courier_id=courier_id,
-                    balance=0.0,
-                    credit_limit=-100.0
+                    balance=Decimal("0.00"),
+                    credit_limit=Decimal("-100.00")
                 )
                 self.db.add(wallet)
                 await self.db.flush()

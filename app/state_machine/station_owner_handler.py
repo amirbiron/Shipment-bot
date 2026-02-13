@@ -7,6 +7,7 @@ Station Owner State Handler - פאנל ניהול תחנה [שלב 3.3]
 - דוח גבייה (ה-28 לחודש)
 - רשימה שחורה (נהגים שלא שילמו חודשיים רצופים)
 """
+from decimal import Decimal
 from typing import Tuple
 from html import escape
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -349,7 +350,7 @@ class StationOwnerStateHandler:
 
         if report:
             text += "<b>נהגים עם חוב:</b>\n"
-            total = 0.0
+            total = Decimal("0")
             for item in report:
                 name = item["driver_name"]
                 debt = item["total_debt"]

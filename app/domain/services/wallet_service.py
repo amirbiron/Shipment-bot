@@ -1,6 +1,7 @@
 """
 Wallet Service - Handles courier wallet and credit operations
 """
+from decimal import Decimal
 from typing import Optional, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -26,8 +27,8 @@ class WalletService:
         if not wallet:
             wallet = CourierWallet(
                 courier_id=courier_id,
-                balance=0.0,
-                credit_limit=settings.DEFAULT_CREDIT_LIMIT
+                balance=Decimal("0.00"),
+                credit_limit=Decimal(str(settings.DEFAULT_CREDIT_LIMIT))
             )
             self.db.add(wallet)
             await self.db.commit()
@@ -50,7 +51,7 @@ class WalletService:
         Returns (can_capture, reason_message)
         """
         wallet = await self.get_or_create_wallet(courier_id)
-        future_balance = wallet.balance - fee
+        future_balance = wallet.balance - Decimal(str(fee))
 
         if future_balance < wallet.credit_limit:
             return False, f"יתרה לא מספיקה. יתרה נוכחית: {wallet.balance}₪, מגבלת אשראי: {wallet.credit_limit}₪"
@@ -71,7 +72,8 @@ class WalletService:
         wallet = await self.get_or_create_wallet(courier_id)
 
         # Calculate new balance
-        new_balance = wallet.balance - fee
+        fee_decimal = Decimal(str(fee))
+        new_balance = wallet.balance - fee_decimal
 
         # Check credit limit
         if new_balance < wallet.credit_limit:
@@ -85,7 +87,7 @@ class WalletService:
             courier_id=courier_id,
             delivery_id=delivery_id,
             entry_type=LedgerEntryType.DELIVERY_FEE_DEBIT,
-            amount=-fee,
+            amount=-fee_decimal,
             balance_after=new_balance,
             description=f"עמלה עבור משלוח #{delivery_id}"
         )
@@ -102,14 +104,15 @@ class WalletService:
         """Credit wallet for completed delivery"""
         wallet = await self.get_or_create_wallet(courier_id)
 
-        new_balance = wallet.balance + amount
+        amount_decimal = Decimal(str(amount))
+        new_balance = wallet.balance + amount_decimal
         wallet.balance = new_balance
 
         ledger_entry = WalletLedger(
             courier_id=courier_id,
             delivery_id=delivery_id,
             entry_type=LedgerEntryType.DELIVERY_COMPLETED_CREDIT,
-            amount=amount,
+            amount=amount_decimal,
             balance_after=new_balance,
             description=f"תשלום עבור משלוח #{delivery_id}"
         )

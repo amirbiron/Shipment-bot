@@ -4,7 +4,7 @@ Station Wallet Model - ארנק תחנה
 כל תחנה מקבלת 10% עמלה מכל משלוח שמבוצע דרכה.
 """
 from datetime import datetime
-from sqlalchemy import Column, Integer, Float, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, Numeric, DateTime, ForeignKey
 from sqlalchemy.orm import relationship
 
 from app.db.database import Base
@@ -18,8 +18,8 @@ class StationWallet(Base):
     id = Column(Integer, primary_key=True, index=True)
     station_id = Column(Integer, ForeignKey("stations.id"), unique=True, nullable=False)
 
-    balance = Column(Float, default=0.0)
-    commission_rate = Column(Float, default=0.10)  # 10% ברירת מחדל
+    balance = Column(Numeric(10, 2), default=0.0)
+    commission_rate = Column(Numeric(10, 2), default=0.10)  # 10% ברירת מחדל
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

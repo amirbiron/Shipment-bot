@@ -3,7 +3,7 @@ Wallet Ledger Model - Immutable Transaction History
 """
 import enum
 from datetime import datetime
-from sqlalchemy import Column, Integer, BigInteger, Float, DateTime, ForeignKey, String, Enum as SQLEnum, UniqueConstraint
+from sqlalchemy import Column, Integer, BigInteger, Numeric, DateTime, ForeignKey, String, Enum as SQLEnum, UniqueConstraint
 
 from app.db.database import Base
 
@@ -26,8 +26,8 @@ class WalletLedger(Base):
     delivery_id = Column(Integer, ForeignKey("deliveries.id"), nullable=True)
 
     entry_type = Column(SQLEnum(LedgerEntryType), nullable=False)
-    amount = Column(Float, nullable=False)  # Positive for credit, negative for debit
-    balance_after = Column(Float, nullable=False)
+    amount = Column(Numeric(10, 2), nullable=False)  # Positive for credit, negative for debit
+    balance_after = Column(Numeric(10, 2), nullable=False)
 
     description = Column(String(500), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)

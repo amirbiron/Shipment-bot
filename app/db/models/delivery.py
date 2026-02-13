@@ -4,7 +4,7 @@ Delivery Model - Shipment Records
 import enum
 import secrets
 from datetime import datetime
-from sqlalchemy import Column, Integer, BigInteger, String, DateTime, Enum as SQLEnum, Float, ForeignKey, Text
+from sqlalchemy import Column, Integer, BigInteger, String, DateTime, Enum as SQLEnum, Numeric, ForeignKey, Text
 from sqlalchemy.orm import relationship
 
 from app.db.database import Base
@@ -51,7 +51,7 @@ class Delivery(Base):
     # Delivery info
     status = Column(SQLEnum(DeliveryStatus), default=DeliveryStatus.OPEN, index=True)
     courier_id = Column(BigInteger, ForeignKey("users.id"), nullable=True)
-    fee = Column(Float, default=10.0)
+    fee = Column(Numeric(10, 2), default=10.0)
 
     # תחנה שיצרה את המשלוח (nullable - משלוחים ישירים לא שייכים לתחנה)
     station_id = Column(Integer, ForeignKey("stations.id"), nullable=True, index=True)

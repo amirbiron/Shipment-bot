@@ -4,6 +4,7 @@ Station Service - ניהול תחנות, סדרנים, ארנק תחנה ורש�
 שירות מרכזי לכל הלוגיקה העסקית הקשורה לתחנות משלוחים [שלב 3].
 """
 from datetime import datetime
+from decimal import Decimal
 from typing import List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
@@ -550,11 +551,12 @@ class StationService:
                     extra_data={"courier_id": courier_id, "driver_name": normalized_name}
                 )
 
+        amount_decimal = Decimal(str(amount))
         charge = ManualCharge(
             station_id=station_id,
             dispatcher_id=dispatcher_id,
             driver_name=normalized_name,
-            amount=amount,
+            amount=amount_decimal,
             description=description,
             courier_id=courier_id,
         )
@@ -562,7 +564,7 @@ class StationService:
 
         # עדכון ארנק התחנה - נעילת שורה למניעת race condition
         wallet = await self._get_or_create_station_wallet(station_id, for_update=True)
-        wallet.balance += amount
+        wallet.balance += amount_decimal
         wallet.updated_at = datetime.utcnow()
 
         # רישום בלדג'ר
@@ -635,7 +637,7 @@ class StationService:
             raise ValidationException("עמלת משלוח חייבת להיות חיובית", field="fee")
 
         wallet = await self._get_or_create_station_wallet(station_id, for_update=True)
-        commission = fee * wallet.commission_rate
+        commission = Decimal(str(fee)) * wallet.commission_rate
         wallet.balance += commission
         wallet.updated_at = datetime.utcnow()
 
@@ -848,7 +850,7 @@ class StationService:
         for charge in charges:
             name = charge.driver_name
             if name not in report:
-                report[name] = {"total_debt": 0.0, "charge_count": 0}
+                report[name] = {"total_debt": Decimal("0"), "charge_count": 0}
             report[name]["total_debt"] += charge.amount
             report[name]["charge_count"] += 1
 
