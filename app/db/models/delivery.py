@@ -35,7 +35,7 @@ class Delivery(Base):
     token = Column(String(32), unique=True, nullable=False, default=generate_secure_token, index=True)
 
     # Sender info
-    sender_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
+    sender_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
 
     # Pickup details
     pickup_address = Column(String(500), nullable=False)
@@ -51,14 +51,14 @@ class Delivery(Base):
 
     # Delivery info
     status = Column(SQLEnum(DeliveryStatus), default=DeliveryStatus.OPEN, index=True)
-    courier_id = Column(BigInteger, ForeignKey("users.id"), nullable=True)
+    courier_id = Column(BigInteger, ForeignKey("users.id"), nullable=True, index=True)
     fee = Column(Numeric(10, 2), default=Decimal("10.00"))
 
     # תחנה שיצרה את המשלוח (nullable - משלוחים ישירים לא שייכים לתחנה)
     station_id = Column(Integer, ForeignKey("stations.id"), nullable=True, index=True)
 
     # שלב 4: שדות זרימת אישור משלוח
-    requesting_courier_id = Column(BigInteger, ForeignKey("users.id"), nullable=True)  # שליח שביקש את המשלוח
+    requesting_courier_id = Column(BigInteger, ForeignKey("users.id"), nullable=True, index=True)  # שליח שביקש את המשלוח
     requested_at = Column(DateTime, nullable=True)  # מתי הוגשה הבקשה
     approved_by_id = Column(BigInteger, ForeignKey("users.id"), nullable=True)  # סדרן שאישר/דחה
     approved_at = Column(DateTime, nullable=True)  # מתי התקבלה ההחלטה

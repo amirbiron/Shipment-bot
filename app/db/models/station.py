@@ -20,7 +20,7 @@ class Station(Base):
     name = Column(String(200), nullable=False)
 
     # בעל התחנה
-    owner_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
+    owner_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
 
     is_active = Column(Boolean, default=True)
 

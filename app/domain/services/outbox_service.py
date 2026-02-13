@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from html import escape
 from typing import List
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from app.core.config import settings
 from app.db.models.outbox_message import OutboxMessage, MessagePlatform, MessageStatus
@@ -298,10 +298,22 @@ class OutboxService:
         return messages
 
     async def get_pending_messages(self, limit: int = 100) -> List[OutboxMessage]:
-        """Get pending messages for processing"""
+        """שליפת הודעות ממתינות לעיבוד.
+
+        מסנן ברמת SQL גם לפי next_retry_at כדי לנצל את האינדקס החלקי
+        idx_outbox_next_retry (ראה schema.sql) ולמנוע שליפת הודעות
+        שעדיין לא הגיע זמן ה-retry שלהן.
+        """
+        now = datetime.utcnow()
         result = await self.db.execute(
             select(OutboxMessage)
-            .where(OutboxMessage.status == MessageStatus.PENDING)
+            .where(
+                OutboxMessage.status == MessageStatus.PENDING,
+                or_(
+                    OutboxMessage.next_retry_at.is_(None),
+                    OutboxMessage.next_retry_at <= now,
+                ),
+            )
             .order_by(OutboxMessage.created_at)
             .limit(limit)
         )
