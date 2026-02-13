@@ -129,12 +129,67 @@ async def shutdown() -> None:
 
 @app.get(
     "/health",
-    summary="בדיקת בריאות (Health Check)",
-    description="Endpoint פשוט לבדיקת זמינות השרת (משמש גם ל-Monitoring ול-Load Balancers).",
+    summary="בדיקת חיוּת (Liveness Probe)",
+    description=(
+        "בדיקה קלה שהתהליך חי ומגיב. "
+        "משמש ל-Render/Load Balancer להחלטת restart. "
+        "לא בודק תלויות חיצוניות — כדי למנוע restart מיותר בגלל כשלון DB/Redis."
+    ),
+    tags=["Health"],
 )
 async def health_check() -> dict[str, str]:
-    """Health check endpoint"""
+    """Liveness probe — התהליך חי ומגיב."""
     return {"status": "healthy"}
+
+
+@app.get(
+    "/health/ready",
+    summary="בדיקת מוכנות (Readiness Probe)",
+    description=(
+        "בדיקה מקיפה של כל התלויות: DB, Redis, WhatsApp Gateway, Celery broker. "
+        "מחזיר status=healthy אם הכל תקין, או status=degraded עם פירוט השגיאה."
+    ),
+    responses={
+        200: {
+            "description": "כל התלויות תקינות",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "status": "healthy",
+                        "db": "ok",
+                        "redis": "ok",
+                        "whatsapp_gateway": "ok",
+                        "celery": "ok",
+                    }
+                }
+            },
+        },
+        503: {
+            "description": "לפחות תלות אחת לא זמינה",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "status": "degraded",
+                        "db": "ok",
+                        "redis": "ok",
+                        "whatsapp_gateway": "error: 404",
+                        "celery": "ok",
+                    }
+                }
+            },
+        },
+    },
+    tags=["Health"],
+)
+async def readiness_check() -> dict[str, str]:
+    """Readiness probe — בדיקת כל התלויות החיצוניות."""
+    from starlette.responses import JSONResponse
+
+    from app.domain.services.health_service import check_readiness
+
+    result = await check_readiness()
+    status_code = 200 if result["status"] == "healthy" else 503
+    return JSONResponse(content=result, status_code=status_code)
 
 
 @app.get("/docs", include_in_schema=False)
