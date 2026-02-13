@@ -16,10 +16,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import (
     TokenPayload,
     create_access_token,
+    create_refresh_token,
     generate_otp,
     store_otp,
     try_set_otp_cooldown_by_phone,
     verify_otp,
+    verify_refresh_token,
 )
 from app.core.logging import get_logger
 from app.core.validation import PhoneNumberValidator
@@ -81,6 +83,7 @@ class StationOption(BaseModel):
 class TokenResponse(BaseModel):
     """תגובת התחברות"""
     access_token: str
+    refresh_token: str
     token_type: str = "bearer"
     station_id: int
     station_name: str
@@ -90,6 +93,18 @@ class StationPickerResponse(BaseModel):
     """תגובה כשיש כמה תחנות — המשתמש צריך לבחור"""
     choose_station: bool = True
     stations: List[StationOption]
+
+
+class RefreshRequest(BaseModel):
+    """בקשת רענון טוקן"""
+    refresh_token: str
+
+    @field_validator("refresh_token")
+    @classmethod
+    def validate_refresh_token(cls, v: str) -> str:
+        if not v or len(v) < 10:
+            raise ValueError("refresh token לא תקין")
+        return v
 
 
 class MeResponse(BaseModel):
@@ -281,8 +296,13 @@ async def verify_otp_endpoint(
     else:
         station = stations[0]
 
-    # הנפקת JWT
+    # הנפקת JWT + refresh token
     token = create_access_token(
+        user_id=user.id,
+        station_id=station.id,
+        role=user.role.value,
+    )
+    refresh = await create_refresh_token(
         user_id=user.id,
         station_id=station.id,
         role=user.role.value,
@@ -295,6 +315,7 @@ async def verify_otp_endpoint(
 
     return TokenResponse(
         access_token=token,
+        refresh_token=refresh,
         station_id=station.id,
         station_name=station.name,
     )
@@ -324,4 +345,90 @@ async def get_me(
         station_id=auth.station_id,
         station_name=station.name if station else "",
         role=auth.role,
+    )
+
+
+@router.post(
+    "/refresh",
+    response_model=TokenResponse,
+    summary="רענון טוקן",
+    description=(
+        "שליחת refresh token לקבלת access token חדש + refresh token חדש. "
+        "ה-refresh token הישן נמחק (rotation) — כל טוקן חד-פעמי."
+    ),
+    responses={
+        200: {"description": "טוקנים חדשים הונפקו"},
+        401: {"description": "refresh token לא תקין או פג תוקף"},
+        403: {"description": "המשתמש/תחנה לא פעילים"},
+    },
+    tags=["Panel - אימות"],
+)
+async def refresh_access_token(
+    data: RefreshRequest,
+    db: AsyncSession = Depends(get_db),
+) -> TokenResponse:
+    """רענון טוקן — מנפיק access + refresh חדשים עם ולידציה מלאה"""
+    # אימות refresh token (מוחק אותו מ-Redis — rotation)
+    token_data = await verify_refresh_token(data.refresh_token)
+    if not token_data:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="refresh token לא תקין או פג תוקף",
+        )
+
+    # ולידציה שהמשתמש עדיין פעיל ובעל תחנה
+    user_result = await db.execute(
+        select(User).where(User.id == token_data.user_id)
+    )
+    user = user_result.scalar_one_or_none()
+    if not user or not user.is_active or user.role != UserRole.STATION_OWNER:
+        logger.warning(
+            "Refresh rejected — user invalid",
+            extra_data={"user_id": token_data.user_id},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="חשבון המשתמש אינו פעיל או שאינו בעל תחנה",
+        )
+
+    # ולידציה שהתחנה עדיין פעילה והמשתמש עדיין בעלים
+    station_service = StationService(db)
+    station = await station_service.get_station(token_data.station_id)
+    if not station:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="התחנה לא פעילה",
+        )
+
+    is_owner = await station_service.is_owner_of_station(
+        token_data.user_id, token_data.station_id
+    )
+    if not is_owner:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="אין הרשאה — הבעלות על התחנה השתנתה",
+        )
+
+    # הנפקת טוקנים חדשים
+    new_access = create_access_token(
+        user_id=user.id,
+        station_id=station.id,
+        role=user.role.value,
+    )
+    new_refresh = await create_refresh_token(
+        user_id=user.id,
+        station_id=station.id,
+        role=user.role.value,
+    )
+
+    logger.info(
+        "Token refreshed",
+        extra_data={"user_id": user.id, "station_id": station.id},
+    )
+
+    return TokenResponse(
+        access_token=new_access,
+        refresh_token=new_refresh,
+        station_id=station.id,
+        station_name=station.name,
     )

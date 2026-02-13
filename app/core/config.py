@@ -86,6 +86,7 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str = ""  # חובה בפרודקשן — openssl rand -hex 32
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 480  # 8 שעות
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 30  # חודש — refresh token ב-Redis
     OTP_EXPIRE_SECONDS: int = 300  # 5 דקות
 
     @field_validator("JWT_SECRET_KEY", mode="after")

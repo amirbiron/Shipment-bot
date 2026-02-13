@@ -6,9 +6,11 @@
 שלב 3.3: פאנל ניהול תחנה - ניהול סדרנים, ארנק תחנה, דוח גבייה, רשימה שחורה
 """
 import pytest
+from unittest.mock import patch
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
+from app.core.config import settings
 from app.state_machine.states import (
     DispatcherState,
     StationOwnerState,
@@ -938,10 +940,12 @@ class TestStationCreationAPI:
             platform="whatsapp",
         )
 
-        response = await test_client.post(
-            "/api/stations/",
-            json={"name": "תחנת אטומיות", "owner_phone": "0501230001"},
-        )
+        with patch.object(settings, "ADMIN_API_KEY", "test-key"):
+            response = await test_client.post(
+                "/api/stations/",
+                json={"name": "תחנת אטומיות", "owner_phone": "0501230001"},
+                headers={"X-Admin-API-Key": "test-key"},
+            )
 
         assert response.status_code == 200
         data = response.json()
@@ -976,10 +980,12 @@ class TestStationCreationAPI:
         await db_session.commit()
 
         # ניסיון ליצור תחנה - צריך להיכשל עם 400 אבל לתקן את הרול
-        response = await test_client.post(
-            "/api/stations/",
-            json={"name": "תחנה כפולה", "owner_phone": "0501230002"},
-        )
+        with patch.object(settings, "ADMIN_API_KEY", "test-key"):
+            response = await test_client.post(
+                "/api/stations/",
+                json={"name": "תחנה כפולה", "owner_phone": "0501230002"},
+                headers={"X-Admin-API-Key": "test-key"},
+            )
         assert response.status_code == 400
 
         # וידוא שהתפקיד תוקן למרות השגיאה

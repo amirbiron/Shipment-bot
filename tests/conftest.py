@@ -379,6 +379,7 @@ def set_jwt_secret():
     with patch.object(settings, "JWT_SECRET_KEY", _TEST_JWT_SECRET), \
          patch.object(settings, "JWT_ALGORITHM", "HS256"), \
          patch.object(settings, "JWT_ACCESS_TOKEN_EXPIRE_MINUTES", 480), \
+         patch.object(settings, "REFRESH_TOKEN_EXPIRE_DAYS", 30), \
          patch.object(settings, "OTP_EXPIRE_SECONDS", 300):
         yield
 

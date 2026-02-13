@@ -2,8 +2,10 @@
 בדיקות ריבוי בעלים לתחנה — StationOwner
 """
 import pytest
+from unittest.mock import patch
 
 from app.core.auth import create_access_token, store_otp
+from app.core.config import settings
 from app.db.models.user import UserRole
 from app.db.models.station import Station
 from app.db.models.station_owner import StationOwner
@@ -437,11 +439,12 @@ class TestStationOwnerService:
 
         app.dependency_overrides[get_db] = override_get_db
         transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
-            response = await client.post("/api/stations/", json={
-                "name": "תחנת בדיקה",
-                "owner_phone": "0509999999",
-            })
+        with patch.object(settings, "ADMIN_API_KEY", "test-key"):
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                response = await client.post("/api/stations/", json={
+                    "name": "תחנת בדיקה",
+                    "owner_phone": "0509999999",
+                }, headers={"X-Admin-API-Key": "test-key"})
         app.dependency_overrides.clear()
 
         assert response.status_code == 200

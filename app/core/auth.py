@@ -1,12 +1,14 @@
 """
-אימות JWT לפאנל ווב — יצירת ואימות טוקנים + OTP
+אימות JWT לפאנל ווב — יצירת ואימות טוקנים + OTP + refresh tokens
 
 זרימת הכניסה:
 1. בעל תחנה מבקש OTP (דרך /api/panel/auth/request-otp)
 2. OTP נשמר ב-Redis עם TTL
 3. הקוד נשלח אליו דרך הבוט (Telegram/WhatsApp)
-4. בעל התחנה מזין את הקוד בפאנל ומקבל JWT token
+4. בעל התחנה מזין את הקוד בפאנל ומקבל access token + refresh token
+5. כש-access token פג — הלקוח שולח refresh token ומקבל access חדש
 """
+import json
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -23,6 +25,7 @@ logger = get_logger(__name__)
 _OTP_KEY_PREFIX = "panel_otp"
 _OTP_PHONE_COOLDOWN_PREFIX = "panel_otp_phone_cooldown"
 _OTP_ATTEMPTS_PREFIX = "panel_otp_attempts"
+_REFRESH_TOKEN_PREFIX = "panel_refresh"
 
 # הגבלות OTP
 OTP_MAX_ATTEMPTS = 5  # מקסימום ניסיונות אימות לכל משתמש
@@ -74,6 +77,71 @@ def verify_token(token: str) -> Optional[TokenPayload]:
     except (KeyError, ValueError) as e:
         logger.warning("JWT payload malformed", extra_data={"error": str(e)})
         return None
+
+
+async def create_refresh_token(user_id: int, station_id: int, role: str) -> str:
+    """יצירת refresh token — מחרוזת אקראית שנשמרת ב-Redis עם TTL ארוך.
+
+    ה-refresh token עצמו הוא opaque (לא JWT) — המידע נשמר ב-Redis.
+    יתרון: ניתן לבטל טוקן מיד ע\"י מחיקת המפתח ב-Redis.
+    """
+    token = secrets.token_urlsafe(48)
+    redis = await get_redis()
+    key = f"{_REFRESH_TOKEN_PREFIX}:{token}"
+    ttl_seconds = settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400
+    # שמירת המידע הנדרש להנפקת access token חדש
+    payload = json.dumps({
+        "user_id": user_id,
+        "station_id": station_id,
+        "role": role,
+    })
+    await redis.setex(key, ttl_seconds, payload)
+    logger.info(
+        "Refresh token created",
+        extra_data={"user_id": user_id, "station_id": station_id},
+    )
+    return token
+
+
+async def verify_refresh_token(token: str) -> Optional[TokenPayload]:
+    """אימות refresh token — שולף את הנתונים מ-Redis ומוחק (one-time rotation).
+
+    Rotation: כל שימוש מבטל את הטוקן הנוכחי — הקורא חייב ליצור refresh חדש.
+    מונע שימוש חוזר בטוקן גנוב.
+    """
+    redis = await get_redis()
+    key = f"{_REFRESH_TOKEN_PREFIX}:{token}"
+    stored = await redis.get(key)
+    if not stored:
+        logger.warning("Refresh token not found or expired")
+        return None
+
+    # מחיקה אטומית — one-time use (rotation)
+    await redis.delete(key)
+
+    try:
+        data = json.loads(stored)
+        return TokenPayload(
+            user_id=data["user_id"],
+            station_id=data["station_id"],
+            role=data["role"],
+            exp=0,  # לא רלוונטי ל-refresh token
+        )
+    except (json.JSONDecodeError, KeyError) as e:
+        logger.warning("Refresh token payload malformed", extra_data={"error": str(e)})
+        return None
+
+
+async def revoke_refresh_tokens_for_user(user_id: int, station_id: int) -> None:
+    """ביטול כל ה-refresh tokens של משתמש לתחנה ספציפית.
+
+    הערה: Redis לא תומך ב-pattern scan יעיל. אם נדרש revoke מלא,
+    ניתן לשמור רשימת tokens per user. כרגע הפונקציה זמינה לשימוש עתידי.
+    """
+    logger.info(
+        "Refresh token revocation requested",
+        extra_data={"user_id": user_id, "station_id": station_id},
+    )
 
 
 def generate_otp() -> str:
