@@ -34,7 +34,7 @@ services:
       - key: TELEGRAM_BOT_TOKEN
         sync: false  # Set manually in dashboard
       - key: WHATSAPP_GATEWAY_URL
-        sync: false  # כתובת פנימית ב-Render — להגדיר ידנית בדשבורד (לדוגמה: http://shipment-bot-wa-gateway:10000)
+        value: "http://shipment-bot-wa-gateway:10000"
       - key: JWT_SECRET_KEY
         sync: false  # Set manually in dashboard — openssl rand -hex 32
     autoDeploy: true
@@ -67,7 +67,7 @@ services:
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: WHATSAPP_GATEWAY_URL
-        sync: false  # כתובת פנימית ב-Render — להגדיר ידנית בדשבורד
+        value: "http://shipment-bot-wa-gateway:10000"
     autoDeploy: true
 
   # =====================================================
@@ -88,7 +88,7 @@ services:
       - key: NODE_ENV
         value: production
       - key: API_WEBHOOK_URL
-        sync: false  # כתובת פנימית ב-Render — להגדיר ידנית בדשבורד (לדוגמה: http://shipment-bot-api:10000/api/whatsapp/webhook)
+        value: "http://shipment-bot-api:10000/api/whatsapp/webhook"
 
   # =====================================================
   # Redis

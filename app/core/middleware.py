@@ -187,10 +187,12 @@ def setup_middleware(app: FastAPI) -> None:
     """Setup all middleware for the application"""
     from app.core.config import settings
 
-    # Order matters - correlation ID should be first, security headers last (outermost)
-    app.add_middleware(SecurityHeadersMiddleware, debug=settings.DEBUG)
+    # ב-Starlette, ה-middleware האחרון שנוסף הוא ה-outermost (עוטף את כולם).
+    # סדר עיבוד בקשה: SecurityHeaders → CorrelationId → RequestLogging → app
+    # כך SecurityHeaders תופס את *כל* התשובות, כולל short-circuit מ-CORS.
     app.add_middleware(RequestLoggingMiddleware)
     app.add_middleware(CorrelationIdMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware, debug=settings.DEBUG)
 
     # Register exception handlers
     app.add_exception_handler(AppException, app_exception_handler)
