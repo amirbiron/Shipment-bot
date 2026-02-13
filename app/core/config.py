@@ -79,6 +79,9 @@ class Settings(BaseSettings):
             raise ValueError("WHATSAPP_MAX_RETRIES must be at least 1")
         return v
 
+    # Admin debug endpoints — מפתח API לגישה ל-endpoints דיאגנוסטיים
+    ADMIN_API_KEY: str = ""  # openssl rand -hex 32
+
     # JWT — פאנל ווב
     JWT_SECRET_KEY: str = ""  # חובה בפרודקשן — openssl rand -hex 32
     JWT_ALGORITHM: str = "HS256"
