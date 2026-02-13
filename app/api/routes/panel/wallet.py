@@ -131,7 +131,7 @@ async def get_ledger(
     summary_result = await db.execute(
         select(
             StationLedger.entry_type,
-            func.coalesce(func.sum(StationLedger.amount), 0.0),
+            func.coalesce(func.sum(StationLedger.amount), 0),
         )
         .where(*base_where)
         .group_by(StationLedger.entry_type)

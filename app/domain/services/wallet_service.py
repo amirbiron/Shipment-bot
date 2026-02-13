@@ -36,8 +36,8 @@ class WalletService:
 
         return wallet
 
-    async def get_balance(self, courier_id: int) -> float:
-        """Get current balance for courier"""
+    async def get_balance(self, courier_id: int) -> Decimal:
+        """קבלת יתרה נוכחית של שליח"""
         wallet = await self.get_or_create_wallet(courier_id)
         return wallet.balance
 

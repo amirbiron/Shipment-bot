@@ -113,7 +113,7 @@ async def get_dashboard(
 
     # הכנסות היום (סכום כל תנועות הלדג'ר מהיום)
     today_revenue_result = await db.execute(
-        select(func.coalesce(func.sum(StationLedger.amount), 0.0)).where(
+        select(func.coalesce(func.sum(StationLedger.amount), 0)).where(
             StationLedger.station_id == station_id,
             StationLedger.created_at >= today_start,
             StationLedger.entry_type.in_([

@@ -181,7 +181,7 @@ async def get_revenue_report(
     result = await db.execute(
         select(
             StationLedger.entry_type,
-            func.coalesce(func.sum(StationLedger.amount), 0.0),
+            func.coalesce(func.sum(StationLedger.amount), 0),
         )
         .where(
             StationLedger.station_id == station_id,

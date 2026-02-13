@@ -60,7 +60,7 @@ async def get_balance(
     """Get current balance for courier"""
     service = WalletService(db)
     balance = await service.get_balance(courier_id)
-    return {"courier_id": courier_id, "balance": balance}
+    return {"courier_id": courier_id, "balance": float(balance)}
 
 
 @router.get(

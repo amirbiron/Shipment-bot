@@ -571,7 +571,7 @@ class StationService:
         ledger_entry = StationLedger(
             station_id=station_id,
             entry_type=StationLedgerEntryType.MANUAL_CHARGE,
-            amount=amount,
+            amount=amount_decimal,
             balance_after=wallet.balance,
             description=f"חיוב ידני: {normalized_name} - {description}",
         )
