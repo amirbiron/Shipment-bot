@@ -69,6 +69,23 @@ class TestPanelDispatchers:
         assert response.json()["success"] is True
 
     @pytest.mark.asyncio
+    async def test_add_dispatcher_auto_creates_user(
+        self, test_client, user_factory, db_session,
+    ):
+        """הוספת סדרן שלא קיים במערכת — יוצרת משתמש אוטומטית"""
+        user, station = await self._setup_station(user_factory, db_session)
+        token = self._get_token(user.id, station.id)
+
+        # מספר טלפון של משתמש שלא קיים במערכת
+        response = await test_client.post(
+            "/api/panel/dispatchers",
+            json={"phone_number": "0509999999"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+
+    @pytest.mark.asyncio
     async def test_add_dispatcher_invalid_phone(
         self, test_client, user_factory, db_session,
     ):

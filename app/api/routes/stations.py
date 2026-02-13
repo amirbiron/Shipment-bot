@@ -77,13 +77,26 @@ async def create_station(
     - **name**: שם התחנה
     - **owner_phone**: מספר טלפון של בעל התחנה (חייב להיות משתמש קיים)
     """
-    # חיפוש המשתמש לפי מספר טלפון
+    # חיפוש המשתמש לפי מספר טלפון — אם לא קיים, יוצרים אותו אוטומטית
     result = await db.execute(
         select(User).where(User.phone_number == station_data.owner_phone)
     )
     user = result.scalar_one_or_none()
     if not user:
-        raise HTTPException(status_code=404, detail="משתמש לא נמצא עם מספר הטלפון הזה")
+        user = User(
+            phone_number=station_data.owner_phone,
+            platform="telegram",
+            role=UserRole.SENDER,
+        )
+        db.add(user)
+        await db.flush()
+        logger.info(
+            "יצירת משתמש אוטומטית בעת יצירת תחנה",
+            extra_data={
+                "user_id": user.id,
+                "phone": PhoneNumberValidator.mask(station_data.owner_phone),
+            }
+        )
 
     # בדיקה שאין כבר תחנה פעילה לבעלים הזה
     station_service = StationService(db)

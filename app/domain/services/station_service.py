@@ -163,14 +163,27 @@ class StationService:
 
         normalized = PhoneNumberValidator.normalize(phone_number)
 
-        # חיפוש המשתמש
+        # חיפוש המשתמש — אם לא קיים, יוצרים אותו אוטומטית
         result = await self.db.execute(
             select(User).where(User.phone_number == normalized)
         )
         user = result.scalar_one_or_none()
 
         if not user:
-            return False, "משתמש לא נמצא עם מספר הטלפון הזה."
+            user = User(
+                phone_number=normalized,
+                platform="telegram",
+                role=UserRole.SENDER,
+            )
+            self.db.add(user)
+            await self.db.flush()
+            logger.info(
+                "יצירת משתמש אוטומטית בעת הוספת בעלים",
+                extra_data={
+                    "user_id": user.id,
+                    "phone": PhoneNumberValidator.mask(normalized),
+                }
+            )
 
         # בדיקה שלא כבר בעלים בתחנה
         existing = await self.db.execute(
@@ -299,14 +312,27 @@ class StationService:
 
         normalized = PhoneNumberValidator.normalize(phone_number)
 
-        # חיפוש המשתמש לפי מספר טלפון
+        # חיפוש המשתמש לפי מספר טלפון — אם לא קיים, יוצרים אותו אוטומטית
         result = await self.db.execute(
             select(User).where(User.phone_number == normalized)
         )
         user = result.scalar_one_or_none()
 
         if not user:
-            return False, "משתמש לא נמצא עם מספר הטלפון הזה."
+            user = User(
+                phone_number=normalized,
+                platform="telegram",
+                role=UserRole.SENDER,
+            )
+            self.db.add(user)
+            await self.db.flush()
+            logger.info(
+                "יצירת משתמש אוטומטית בעת הוספת סדרן",
+                extra_data={
+                    "user_id": user.id,
+                    "phone": PhoneNumberValidator.mask(normalized),
+                }
+            )
 
         # בדיקה שהמשתמש לא כבר סדרן בתחנה הזו
         existing = await self.db.execute(
