@@ -5,6 +5,7 @@ Provides request/response middleware for:
 - Correlation ID injection
 - Request logging
 - Global error handling
+- Security headers (HSTS, CSP upgrade-insecure-requests)
 """
 import time
 from typing import Callable
@@ -149,9 +150,45 @@ async def generic_exception_handler(
     )
 
 
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """
+    Middleware להוספת כותרות אבטחה לכל תשובה.
+
+    - Content-Security-Policy: upgrade-insecure-requests — מונע אזהרות mixed content
+      ע"י הנחיית הדפדפן לשדרג אוטומטית בקשות HTTP ל-HTTPS.
+    - Strict-Transport-Security (HSTS) — מחייב את הדפדפן לגשת רק ב-HTTPS.
+    - X-Content-Type-Options: nosniff — מונע MIME sniffing.
+
+    הערה: הכותרות מוחלות רק כשאפליקציה לא במצב DEBUG, כדי לא לחסום פיתוח מקומי ב-HTTP.
+    """
+
+    def __init__(self, app: FastAPI, *, debug: bool = False) -> None:
+        super().__init__(app)
+        self._debug = debug
+
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Callable,
+    ) -> Response:
+        response = await call_next(request)
+
+        if not self._debug:
+            response.headers["Content-Security-Policy"] = "upgrade-insecure-requests"
+            response.headers["Strict-Transport-Security"] = (
+                "max-age=31536000; includeSubDomains"
+            )
+            response.headers["X-Content-Type-Options"] = "nosniff"
+
+        return response
+
+
 def setup_middleware(app: FastAPI) -> None:
     """Setup all middleware for the application"""
-    # Order matters - correlation ID should be first
+    from app.core.config import settings
+
+    # Order matters - correlation ID should be first, security headers last (outermost)
+    app.add_middleware(SecurityHeadersMiddleware, debug=settings.DEBUG)
     app.add_middleware(RequestLoggingMiddleware)
     app.add_middleware(CorrelationIdMiddleware)
 
