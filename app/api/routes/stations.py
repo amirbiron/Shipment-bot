@@ -76,7 +76,7 @@ async def create_station(
     """
     # חיפוש המשתמש לפי מספר טלפון — אם לא קיים, יוצרים אותו אוטומטית
     station_service = StationService(db)
-    user = await station_service._get_or_create_user_by_phone(
+    user = await station_service.get_or_create_user_by_phone(
         station_data.owner_phone, context="בעת יצירת תחנה",
     )
 

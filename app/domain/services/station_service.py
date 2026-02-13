@@ -33,7 +33,7 @@ class StationService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def _get_or_create_user_by_phone(
+    async def get_or_create_user_by_phone(
         self,
         normalized_phone: str,
         context: str = "",
@@ -216,7 +216,7 @@ class StationService:
         normalized = PhoneNumberValidator.normalize(phone_number)
 
         # חיפוש המשתמש — אם לא קיים, יוצרים אותו אוטומטית
-        user = await self._get_or_create_user_by_phone(normalized, context="בעת הוספת בעלים")
+        user = await self.get_or_create_user_by_phone(normalized, context="בעת הוספת בעלים")
 
         # בדיקה שלא כבר בעלים בתחנה
         existing = await self.db.execute(
@@ -346,7 +346,7 @@ class StationService:
         normalized = PhoneNumberValidator.normalize(phone_number)
 
         # חיפוש המשתמש לפי מספר טלפון — אם לא קיים, יוצרים אותו אוטומטית
-        user = await self._get_or_create_user_by_phone(normalized, context="בעת הוספת סדרן")
+        user = await self.get_or_create_user_by_phone(normalized, context="בעת הוספת סדרן")
 
         # בדיקה שהמשתמש לא כבר סדרן בתחנה הזו
         existing = await self.db.execute(
