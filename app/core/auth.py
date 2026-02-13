@@ -104,20 +104,18 @@ async def create_refresh_token(user_id: int, station_id: int, role: str) -> str:
 
 
 async def verify_refresh_token(token: str) -> Optional[TokenPayload]:
-    """אימות refresh token — שולף את הנתונים מ-Redis ומוחק (one-time rotation).
+    """אימות refresh token — שולף ומוחק אטומית (one-time rotation).
 
-    Rotation: כל שימוש מבטל את הטוקן הנוכחי — הקורא חייב ליצור refresh חדש.
-    מונע שימוש חוזר בטוקן גנוב.
+    משתמש ב-GETDEL — פעולה אטומית אחת ב-Redis ששולפת ומוחקת בו-זמנית.
+    מונע race condition שבו שני requests מקבילים שולפים את אותו טוקן לפני המחיקה.
     """
     redis = await get_redis()
     key = f"{_REFRESH_TOKEN_PREFIX}:{token}"
-    stored = await redis.get(key)
+    # GETDEL אטומי — שולף ומוחק בפעולה אחת, מונע שימוש כפול
+    stored = await redis.getdel(key)
     if not stored:
         logger.warning("Refresh token not found or expired")
         return None
-
-    # מחיקה אטומית — one-time use (rotation)
-    await redis.delete(key)
 
     try:
         data = json.loads(stored)
