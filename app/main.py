@@ -230,8 +230,7 @@ _SWAGGER_HTML_TEMPLATE = """\
 </head>
 <body>
     <div id="swagger-ui"></div>
-    <script src="https://unpkg.com/swagger-ui-dist@5.18.2/swagger-ui-bundle.js"></script>
-    <script src="https://unpkg.com/swagger-ui-dist@5.18.2/swagger-ui-standalone-preset.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.9.0/swagger-ui-bundle.js"></script>
     <script>
     window.ui = SwaggerUIBundle({
         url: __OPENAPI_URL_JS__,
@@ -240,7 +239,7 @@ _SWAGGER_HTML_TEMPLATE = """\
             SwaggerUIBundle.presets.apis,
             SwaggerUIBundle.SwaggerUIStandalonePreset,
         ],
-        layout: "StandaloneLayout",
+        layout: "BaseLayout",
         deepLinking: true,
         showExtensions: true,
         showCommonExtensions: true,

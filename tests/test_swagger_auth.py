@@ -142,10 +142,10 @@ class TestSwaggerDefaultParams:
     """בדיקה שתבנית ה-HTML כוללת את ברירות המחדל של FastAPI"""
 
     @pytest.mark.asyncio
-    async def test_docs_loads_standalone_preset_script(self, test_client):
-        """דף הדוקומנטציה טוען את swagger-ui-standalone-preset.js"""
+    async def test_docs_loads_swagger_ui_bundle(self, test_client):
+        """דף הדוקומנטציה טוען את swagger-ui-bundle.js"""
         response = await test_client.get("/docs")
-        assert "swagger-ui-standalone-preset.js" in response.text
+        assert "swagger-ui-bundle.js" in response.text
 
     @pytest.mark.asyncio
     async def test_docs_has_deep_linking(self, test_client):

@@ -1,4 +1,4 @@
-@import url("https://unpkg.com/swagger-ui-dist@5.18.2/swagger-ui.css");
+@import url("https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.9.0/swagger-ui.css");
 
 /* RTL + Hebrew-friendly defaults for Swagger UI */
 html,
