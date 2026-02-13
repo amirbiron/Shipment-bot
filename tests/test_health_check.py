@@ -67,7 +67,7 @@ class TestReadinessProbe:
         with patch(
             "app.domain.services.health_service._check_db",
             new_callable=AsyncMock,
-            return_value="error: connection refused",
+            return_value="error: db_unavailable",
         ), patch(
             "app.domain.services.health_service._check_redis",
             new_callable=AsyncMock,
@@ -86,14 +86,14 @@ class TestReadinessProbe:
         assert response.status_code == 503
         data = response.json()
         assert data["status"] == "degraded"
-        assert "error" in data["db"]
+        assert data["db"] == "error: db_unavailable"
         assert data["redis"] == "ok"
 
     @pytest.mark.unit
     async def test_readiness_whatsapp_gateway_down(
         self, test_client: httpx.AsyncClient
     ) -> None:
-        """כש-WhatsApp Gateway מחזיר 404 — status=degraded ו-HTTP 503."""
+        """כש-WhatsApp Gateway לא זמין — status=degraded ו-HTTP 503."""
         with patch(
             "app.domain.services.health_service._check_db",
             new_callable=AsyncMock,
@@ -105,7 +105,7 @@ class TestReadinessProbe:
         ), patch(
             "app.domain.services.health_service._check_whatsapp_gateway",
             new_callable=AsyncMock,
-            return_value="error: 404",
+            return_value="error: whatsapp_unavailable",
         ), patch(
             "app.domain.services.health_service._check_celery",
             new_callable=AsyncMock,
@@ -116,7 +116,7 @@ class TestReadinessProbe:
         assert response.status_code == 503
         data = response.json()
         assert data["status"] == "degraded"
-        assert data["whatsapp_gateway"] == "error: 404"
+        assert data["whatsapp_gateway"] == "error: whatsapp_unavailable"
         assert data["db"] == "ok"
 
     @pytest.mark.unit
@@ -127,11 +127,11 @@ class TestReadinessProbe:
         with patch(
             "app.domain.services.health_service._check_db",
             new_callable=AsyncMock,
-            return_value="error: timeout",
+            return_value="error: db_unavailable",
         ), patch(
             "app.domain.services.health_service._check_redis",
             new_callable=AsyncMock,
-            return_value="error: connection refused",
+            return_value="error: redis_unavailable",
         ), patch(
             "app.domain.services.health_service._check_whatsapp_gateway",
             new_callable=AsyncMock,
@@ -146,8 +146,8 @@ class TestReadinessProbe:
         assert response.status_code == 503
         data = response.json()
         assert data["status"] == "degraded"
-        assert "error" in data["db"]
-        assert "error" in data["redis"]
+        assert data["db"] == "error: db_unavailable"
+        assert data["redis"] == "error: redis_unavailable"
         assert data["whatsapp_gateway"] == "ok"
         assert data["celery"] == "ok"
 
@@ -171,14 +171,14 @@ class TestReadinessProbe:
         ), patch(
             "app.domain.services.health_service._check_celery",
             new_callable=AsyncMock,
-            return_value="error: connection refused",
+            return_value="error: celery_unavailable",
         ):
             response = await test_client.get("/health/ready")
 
         assert response.status_code == 503
         data = response.json()
         assert data["status"] == "degraded"
-        assert "error" in data["celery"]
+        assert data["celery"] == "error: celery_unavailable"
 
 
 # ============================================================================
@@ -208,7 +208,7 @@ class TestHealthCheckFunctions:
 
     @pytest.mark.unit
     async def test_check_db_failure(self) -> None:
-        """_check_db מחזיר error כש-DB לא זמין."""
+        """_check_db מחזיר הודעת שגיאה מסוננת כש-DB לא זמין."""
         mock_session = AsyncMock()
         mock_session.execute = AsyncMock(side_effect=ConnectionError("refused"))
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
@@ -221,7 +221,7 @@ class TestHealthCheckFunctions:
             from app.domain.services.health_service import _check_db
             result = await _check_db()
 
-        assert result.startswith("error:")
+        assert result == "error: db_unavailable"
 
     @pytest.mark.unit
     async def test_check_redis_success(self) -> None:
@@ -241,7 +241,7 @@ class TestHealthCheckFunctions:
 
     @pytest.mark.unit
     async def test_check_redis_failure(self) -> None:
-        """_check_redis מחזיר error כש-Redis לא זמין."""
+        """_check_redis מחזיר הודעת שגיאה מסוננת כש-Redis לא זמין."""
         with patch(
             "app.domain.services.health_service.get_redis",
             new_callable=AsyncMock,
@@ -250,13 +250,14 @@ class TestHealthCheckFunctions:
             from app.domain.services.health_service import _check_redis
             result = await _check_redis()
 
-        assert result.startswith("error:")
+        assert result == "error: redis_unavailable"
 
     @pytest.mark.unit
     async def test_check_whatsapp_gateway_success(self) -> None:
-        """_check_whatsapp_gateway מחזיר ok כש-Gateway זמין."""
+        """_check_whatsapp_gateway מחזיר ok כש-Gateway זמין ומחובר."""
         mock_response = MagicMock()
         mock_response.status_code = 200
+        mock_response.json.return_value = {"status": "ok", "connected": True}
 
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(return_value=mock_response)
@@ -270,8 +271,26 @@ class TestHealthCheckFunctions:
         assert result == "ok"
 
     @pytest.mark.unit
+    async def test_check_whatsapp_gateway_disconnected(self) -> None:
+        """_check_whatsapp_gateway מחזיר שגיאת ניתוק כש-Gateway מחזיר connected=false."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"status": "ok", "connected": False}
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("app.domain.services.health_service.httpx.AsyncClient", return_value=mock_client):
+            from app.domain.services.health_service import _check_whatsapp_gateway
+            result = await _check_whatsapp_gateway()
+
+        assert result == "error: whatsapp_disconnected"
+
+    @pytest.mark.unit
     async def test_check_whatsapp_gateway_404(self) -> None:
-        """_check_whatsapp_gateway מחזיר error: 404 כש-Gateway מחזיר 404."""
+        """_check_whatsapp_gateway מחזיר הודעת שגיאה מסוננת כש-Gateway מחזיר 404."""
         mock_response = MagicMock()
         mock_response.status_code = 404
 
@@ -284,11 +303,11 @@ class TestHealthCheckFunctions:
             from app.domain.services.health_service import _check_whatsapp_gateway
             result = await _check_whatsapp_gateway()
 
-        assert result == "error: 404"
+        assert result == "error: whatsapp_unavailable"
 
     @pytest.mark.unit
     async def test_check_whatsapp_gateway_connection_error(self) -> None:
-        """_check_whatsapp_gateway מחזיר error כשאין חיבור ל-Gateway."""
+        """_check_whatsapp_gateway מחזיר הודעת שגיאה מסוננת כשאין חיבור ל-Gateway."""
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(side_effect=httpx.ConnectError("refused"))
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -298,7 +317,7 @@ class TestHealthCheckFunctions:
             from app.domain.services.health_service import _check_whatsapp_gateway
             result = await _check_whatsapp_gateway()
 
-        assert result.startswith("error:")
+        assert result == "error: whatsapp_unavailable"
 
     @pytest.mark.unit
     async def test_check_celery_success(self) -> None:
@@ -318,7 +337,7 @@ class TestHealthCheckFunctions:
 
     @pytest.mark.unit
     async def test_check_celery_failure(self) -> None:
-        """_check_celery מחזיר error כש-Celery broker לא זמין."""
+        """_check_celery מחזיר הודעת שגיאה מסוננת כש-Celery broker לא זמין."""
         mock_client = AsyncMock()
         mock_client.ping = AsyncMock(side_effect=ConnectionError("refused"))
         mock_client.aclose = AsyncMock()
@@ -330,4 +349,4 @@ class TestHealthCheckFunctions:
             from app.domain.services.health_service import _check_celery
             result = await _check_celery()
 
-        assert result.startswith("error:")
+        assert result == "error: celery_unavailable"
