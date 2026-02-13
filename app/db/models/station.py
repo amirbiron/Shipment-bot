@@ -22,7 +22,7 @@ class Station(Base):
     # בעל התחנה
     owner_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
 
-    is_active = Column(Boolean, default=True, index=True)
+    is_active = Column(Boolean, default=True)
 
     # שלב 4: קבוצות תחנה לשידור וכרטיסים סגורים
     public_group_chat_id = Column(String(100), nullable=True)  # קבוצה ציבורית לשידור משלוחים

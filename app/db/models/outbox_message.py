@@ -40,7 +40,7 @@ class OutboxMessage(Base):
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
     processed_at = Column(DateTime, nullable=True)
-    next_retry_at = Column(DateTime, nullable=True, index=True)
+    next_retry_at = Column(DateTime, nullable=True)  # אינדקס חלקי ב-SQL — ראה schema.sql
 
     # Error tracking
     last_error = Column(String(1000), nullable=True)

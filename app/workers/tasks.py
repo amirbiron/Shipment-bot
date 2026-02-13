@@ -343,10 +343,6 @@ def process_outbox_messages():
 
             results = []
             for message in messages:
-                # Skip messages that are scheduled for later retry
-                if message.next_retry_at and message.next_retry_at > datetime.utcnow():
-                    continue
-
                 success, result = await _process_single_message(message)
                 results.append({
                     "message_id": message.id,
