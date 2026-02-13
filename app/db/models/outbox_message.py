@@ -28,7 +28,7 @@ class OutboxMessage(Base):
     id = Column(Integer, primary_key=True, index=True)
 
     platform = Column(SQLEnum(MessagePlatform), nullable=False)
-    recipient_id = Column(String(100), nullable=False)  # Phone, chat ID, or group ID
+    recipient_id = Column(String(100), nullable=False, index=True)  # Phone, chat ID, or group ID
 
     message_type = Column(String(50), nullable=False)  # e.g., "delivery_broadcast", "confirmation"
     message_content = Column(JSON, nullable=False)
@@ -40,7 +40,7 @@ class OutboxMessage(Base):
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
     processed_at = Column(DateTime, nullable=True)
-    next_retry_at = Column(DateTime, nullable=True)
+    next_retry_at = Column(DateTime, nullable=True, index=True)
 
     # Error tracking
     last_error = Column(String(1000), nullable=True)

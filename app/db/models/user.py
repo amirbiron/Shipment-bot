@@ -35,7 +35,7 @@ class User(Base):
     phone_number = Column(String(20), unique=True, index=True, nullable=False)
     name = Column(String(100), nullable=True)
     full_name = Column(String(150), nullable=True)  # Legal name for couriers
-    role = Column(SQLEnum(UserRole), default=UserRole.SENDER, nullable=False)
+    role = Column(SQLEnum(UserRole), default=UserRole.SENDER, nullable=False, index=True)
     is_active = Column(Boolean, default=True)
     platform = Column(String(20), nullable=False)  # whatsapp or telegram
     telegram_chat_id = Column(String(50), unique=True, nullable=True, index=True)
