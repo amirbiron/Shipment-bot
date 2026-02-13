@@ -416,6 +416,39 @@ class TestUserState:
         assert data["current_state"] == "COURIER.VIEW_AVAILABLE"
 
     @pytest.mark.unit
+    async def test_multi_platform_user_without_filter_returns_latest(
+        self, test_client: httpx.AsyncClient, db_session, user_factory
+    ) -> None:
+        """משתמש עם sessions בשתי פלטפורמות — בלי סינון מחזיר את האחרון (לא קורס)."""
+        user = await user_factory(
+            phone_number="+972509999990",
+            name="דו-פלטפורמי ללא סינון",
+            role=UserRole.COURIER,
+            platform="telegram",
+            telegram_chat_id="999990",
+        )
+        db_session.add(ConversationSession(
+            user_id=user.id, platform="telegram",
+            current_state="COURIER.MENU", context_data={},
+        ))
+        db_session.add(ConversationSession(
+            user_id=user.id, platform="whatsapp",
+            current_state="COURIER.VIEW_WALLET", context_data={"page": 2},
+        ))
+        await db_session.commit()
+
+        # ללא platform — לא צריך לקרוס עם MultipleResultsFound
+        response = await test_client.get(
+            f"/api/admin/debug/users/{user.id}/state",
+            headers=_ADMIN_HEADERS,
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["user_id"] == user.id
+        # מחזיר session כלשהו — העיקר שלא קרס
+        assert data["current_state"] in ("COURIER.MENU", "COURIER.VIEW_WALLET")
+
+    @pytest.mark.unit
     async def test_user_not_found_returns_404(
         self, test_client: httpx.AsyncClient
     ) -> None:

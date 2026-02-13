@@ -335,13 +335,18 @@ async def get_user_state(
             detail=f"משתמש {user_id} לא נמצא",
         )
 
-    # שליפת session
-    query = select(ConversationSession).where(ConversationSession.user_id == user_id)
+    # שליפת session — כשלא סוננה פלטפורמה, מחזירים את ה-session
+    # שעודכן לאחרונה (מונע MultipleResultsFound עבור משתמשים דו-פלטפורמיים)
+    query = (
+        select(ConversationSession)
+        .where(ConversationSession.user_id == user_id)
+        .order_by(ConversationSession.updated_at.desc())
+    )
     if platform:
         query = query.where(ConversationSession.platform == platform)
 
     result = await db.execute(query)
-    session = result.scalar_one_or_none()
+    session = result.scalars().first()
 
     if not session:
         raise HTTPException(
