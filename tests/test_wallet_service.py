@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 from sqlalchemy import select
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch, call
 
 from app.core.config import settings
 from app.db.models.user import UserRole
@@ -181,4 +181,86 @@ async def test_get_ledger_history_returns_latest_first(
     assert len(history) == 2
     assert history[0].delivery_id == d2.id
     assert history[1].delivery_id == d1.id
+
+
+# ============================================================================
+# בדיקות נעילת שורה (with_for_update)
+# ============================================================================
+
+
+@pytest.mark.unit
+async def test_debit_for_capture_uses_for_update(
+    user_factory, wallet_factory, delivery_factory, db_session
+):
+    """וידוא ש-debit_for_capture קורא ל-get_or_create_wallet עם for_update=True"""
+    sender = await user_factory(
+        phone_number="+972501000007",
+        role=UserRole.SENDER,
+        platform="whatsapp",
+    )
+    courier = await user_factory(
+        phone_number="+972501000008",
+        role=UserRole.COURIER,
+        platform="whatsapp",
+    )
+    delivery = await delivery_factory(sender_id=sender.id, fee=10.0)
+    wallet = await wallet_factory(courier_id=courier.id, balance=100.0, credit_limit=-500.0)
+
+    service = WalletService(db_session)
+
+    with patch.object(
+        service, "get_or_create_wallet", wraps=service.get_or_create_wallet
+    ) as mock_get_wallet:
+        await service.debit_for_capture(
+            courier_id=courier.id,
+            delivery_id=delivery.id,
+            fee=10.0,
+        )
+        mock_get_wallet.assert_awaited_once_with(courier.id, for_update=True)
+
+
+@pytest.mark.unit
+async def test_credit_for_delivery_uses_for_update(
+    user_factory, wallet_factory, delivery_factory, db_session
+):
+    """וידוא ש-credit_for_delivery קורא ל-get_or_create_wallet עם for_update=True"""
+    sender = await user_factory(
+        phone_number="+972501000009",
+        role=UserRole.SENDER,
+        platform="whatsapp",
+    )
+    courier = await user_factory(
+        phone_number="+972501000010",
+        role=UserRole.COURIER,
+        platform="whatsapp",
+    )
+    delivery = await delivery_factory(sender_id=sender.id, fee=10.0)
+    await wallet_factory(courier_id=courier.id, balance=50.0, credit_limit=-500.0)
+
+    service = WalletService(db_session)
+
+    with patch.object(
+        service, "get_or_create_wallet", wraps=service.get_or_create_wallet
+    ) as mock_get_wallet:
+        await service.credit_for_delivery(
+            courier_id=courier.id,
+            delivery_id=delivery.id,
+            amount=25.0,
+        )
+        mock_get_wallet.assert_awaited_once_with(courier.id, for_update=True)
+
+
+@pytest.mark.unit
+async def test_get_or_create_wallet_default_no_lock(user_factory, db_session):
+    """וידוא ש-get_or_create_wallet ללא for_update לא מוסיף נעילה (ברירת מחדל)"""
+    courier = await user_factory(role=UserRole.COURIER, platform="whatsapp")
+    service = WalletService(db_session)
+
+    # קריאה ראשונה - יוצרת ארנק חדש ללא נעילה
+    wallet = await service.get_or_create_wallet(courier.id)
+    assert wallet is not None
+
+    # קריאה שנייה - מחזירה ארנק קיים ללא נעילה
+    wallet2 = await service.get_or_create_wallet(courier.id, for_update=False)
+    assert wallet2.id == wallet.id
 

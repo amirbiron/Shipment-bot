@@ -17,11 +17,14 @@ class WalletService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def get_or_create_wallet(self, courier_id: int) -> CourierWallet:
+    async def get_or_create_wallet(
+        self, courier_id: int, for_update: bool = False
+    ) -> CourierWallet:
         """Get existing wallet or create new one"""
-        result = await self.db.execute(
-            select(CourierWallet).where(CourierWallet.courier_id == courier_id)
-        )
+        query = select(CourierWallet).where(CourierWallet.courier_id == courier_id)
+        if for_update:
+            query = query.with_for_update()
+        result = await self.db.execute(query)
         wallet = result.scalar_one_or_none()
 
         if not wallet:
@@ -69,7 +72,7 @@ class WalletService:
         Returns ledger entry or None if debit failed.
         Note: This should be called within an atomic transaction.
         """
-        wallet = await self.get_or_create_wallet(courier_id)
+        wallet = await self.get_or_create_wallet(courier_id, for_update=True)
 
         # Calculate new balance
         fee_decimal = Decimal(str(fee))
@@ -102,7 +105,7 @@ class WalletService:
         amount: float
     ) -> WalletLedger:
         """Credit wallet for completed delivery"""
-        wallet = await self.get_or_create_wallet(courier_id)
+        wallet = await self.get_or_create_wallet(courier_id, for_update=True)
 
         amount_decimal = Decimal(str(amount))
         new_balance = wallet.balance + amount_decimal
