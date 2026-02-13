@@ -237,7 +237,6 @@ _SWAGGER_HTML_TEMPLATE = """\
         dom_id: "#swagger-ui",
         presets: [
             SwaggerUIBundle.presets.apis,
-            SwaggerUIBundle.SwaggerUIStandalonePreset,
         ],
         layout: "BaseLayout",
         deepLinking: true,
