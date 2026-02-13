@@ -672,7 +672,7 @@ class TestStationService:
         wallet = await service.get_station_wallet(station.id)
         assert wallet is not None
         assert wallet.balance == 0.0
-        assert wallet.commission_rate == 0.10
+        assert float(wallet.commission_rate) == pytest.approx(0.10)
 
     @pytest.mark.asyncio
     async def test_add_and_remove_dispatcher(

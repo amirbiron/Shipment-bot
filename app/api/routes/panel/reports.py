@@ -4,6 +4,7 @@
 import calendar
 import csv
 import io
+from decimal import Decimal
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -180,7 +181,7 @@ async def get_revenue_report(
     result = await db.execute(
         select(
             StationLedger.entry_type,
-            func.coalesce(func.sum(StationLedger.amount), 0.0),
+            func.coalesce(func.sum(StationLedger.amount), 0),
         )
         .where(
             StationLedger.station_id == station_id,
@@ -191,9 +192,9 @@ async def get_revenue_report(
     )
     sums = {row[0]: row[1] for row in result.all()}
 
-    commissions = sums.get(StationLedgerEntryType.COMMISSION_CREDIT, 0.0)
-    manual = sums.get(StationLedgerEntryType.MANUAL_CHARGE, 0.0)
-    withdrawals = sums.get(StationLedgerEntryType.WITHDRAWAL, 0.0)
+    commissions = sums.get(StationLedgerEntryType.COMMISSION_CREDIT, Decimal("0"))
+    manual = sums.get(StationLedgerEntryType.MANUAL_CHARGE, Decimal("0"))
+    withdrawals = sums.get(StationLedgerEntryType.WITHDRAWAL, Decimal("0"))
 
     return RevenueReportResponse(
         total_commissions=commissions,

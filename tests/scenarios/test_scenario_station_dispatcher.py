@@ -144,7 +144,7 @@ class TestStationDispatcherFlow:
             ).execution_options(populate_existing=True)
         )
         station_wallet = sw_result.scalar_one()
-        assert abs(station_wallet.balance - 2.0) < 0.01
+        assert float(station_wallet.balance) == pytest.approx(2.0, abs=0.01)
 
     @pytest.mark.asyncio
     async def test_station_reject_returns_to_open(
