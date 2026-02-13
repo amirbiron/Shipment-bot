@@ -10,7 +10,6 @@ services:
     runtime: python
     region: frankfurt
     plan: starter  # upgrade to starter for production
-    privateServiceName: shipment-bot-api
     buildCommand: pip install -r requirements.txt && cd frontend && npm ci && npm run build
     preDeployCommand: python scripts/run_migrations.py
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
@@ -35,7 +34,10 @@ services:
       - key: TELEGRAM_BOT_TOKEN
         sync: false  # Set manually in dashboard
       - key: WHATSAPP_GATEWAY_URL
-        value: "http://shipment-bot-wa-gateway:10000"
+        fromService:
+          type: web
+          name: shipment-bot-wa-gateway
+          property: hostport
       - key: JWT_SECRET_KEY
         sync: false  # Set manually in dashboard — openssl rand -hex 32
       - key: ADMIN_API_KEY
@@ -70,7 +72,10 @@ services:
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: WHATSAPP_GATEWAY_URL
-        value: "http://shipment-bot-wa-gateway:10000"
+        fromService:
+          type: web
+          name: shipment-bot-wa-gateway
+          property: hostport
     autoDeploy: true
 
   # =====================================================
@@ -81,7 +86,6 @@ services:
     runtime: docker
     region: frankfurt
     plan: starter
-    privateServiceName: shipment-bot-wa-gateway
     rootDir: whatsapp_gateway
     healthCheckPath: /health
     disk:
@@ -91,8 +95,12 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      - key: API_WEBHOOK_URL
-        value: "http://shipment-bot-api:10000/api/whatsapp/webhook"
+      - key: API_HOSTPORT
+        fromService:
+          type: web
+          name: shipment-bot-api
+          property: hostport
+    autoDeploy: true
 
   # =====================================================
   # Redis

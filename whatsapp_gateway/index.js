@@ -150,8 +150,10 @@ function truncateByCodepoints(text, maxLen, suffix = '…') {
     return chars.slice(0, maxLen - 1).join('') + suffix;
 }
 
-// Get API webhook URL from environment variable
-const API_WEBHOOK_URL = process.env.API_WEBHOOK_URL || 'http://localhost:8000/api/whatsapp/webhook';
+// בניית webhook URL — Render מספק API_HOSTPORT דרך fromService (host:port בלבד)
+const API_HOSTPORT = process.env.API_HOSTPORT;
+const API_WEBHOOK_URL = process.env.API_WEBHOOK_URL
+    || (API_HOSTPORT ? `http://${API_HOSTPORT}/api/whatsapp/webhook` : 'http://localhost:8000/api/whatsapp/webhook');
 
 // Session folder path - use absolute path for Render's disk mount
 const SESSION_FOLDER = '/app/sessions';
