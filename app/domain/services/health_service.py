@@ -24,6 +24,13 @@ _STATUS_DEGRADED = "degraded"
 
 _CHECK_OK = "ok"
 
+# הודעות שגיאה מסוננות — ללא חשיפת פרטי תשתית
+_ERROR_DB = "error: db_unavailable"
+_ERROR_REDIS = "error: redis_unavailable"
+_ERROR_WHATSAPP = "error: whatsapp_unavailable"
+_ERROR_WHATSAPP_DISCONNECTED = "error: whatsapp_disconnected"
+_ERROR_CELERY = "error: celery_unavailable"
+
 
 async def _check_db() -> str:
     """בדיקת חיבור למסד הנתונים באמצעות שאילתה קלה."""
@@ -33,7 +40,7 @@ async def _check_db() -> str:
         return _CHECK_OK
     except Exception as e:
         logger.warning("בדיקת בריאות DB נכשלה", extra_data={"error": str(e)})
-        return f"error: {e}"
+        return _ERROR_DB
 
 
 async def _check_redis() -> str:
@@ -44,23 +51,36 @@ async def _check_redis() -> str:
         return _CHECK_OK
     except Exception as e:
         logger.warning("בדיקת בריאות Redis נכשלה", extra_data={"error": str(e)})
-        return f"error: {e}"
+        return _ERROR_REDIS
 
 
 async def _check_whatsapp_gateway() -> str:
-    """בדיקת זמינות WhatsApp Gateway באמצעות בקשת HTTP."""
+    """בדיקת זמינות WhatsApp Gateway באמצעות בקשת HTTP וולידציית מצב חיבור."""
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.get(f"{settings.WHATSAPP_GATEWAY_URL}/health")
-            if response.status_code == 200:
-                return _CHECK_OK
-            return f"error: {response.status_code}"
+            if response.status_code != 200:
+                logger.warning(
+                    "WhatsApp Gateway החזיר סטטוס לא תקין",
+                    extra_data={"status_code": response.status_code},
+                )
+                return _ERROR_WHATSAPP
+            # ה-Gateway מחזיר {"status": "ok", "connected": true/false}.
+            # סטטוס 200 לבד לא מעיד על חיבור תקין — חובה לבדוק את שדה connected.
+            data = response.json()
+            if not data.get("connected"):
+                logger.warning(
+                    "WhatsApp Gateway פעיל אך לא מחובר",
+                    extra_data={"response": data},
+                )
+                return _ERROR_WHATSAPP_DISCONNECTED
+            return _CHECK_OK
     except Exception as e:
         logger.warning(
             "בדיקת בריאות WhatsApp Gateway נכשלה",
             extra_data={"error": str(e)},
         )
-        return f"error: {e}"
+        return _ERROR_WHATSAPP
 
 
 async def _check_celery() -> str:
@@ -74,7 +94,7 @@ async def _check_celery() -> str:
             await client.aclose()
     except Exception as e:
         logger.warning("בדיקת בריאות Celery נכשלה", extra_data={"error": str(e)})
-        return f"error: {e}"
+        return _ERROR_CELERY
 
 
 async def check_readiness() -> dict[str, Any]:
