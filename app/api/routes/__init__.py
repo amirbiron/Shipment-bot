@@ -9,6 +9,7 @@ from app.api.routes.wallets import router as wallets_router
 from app.api.routes.stations import router as stations_router
 from app.api.routes.migrations import router as migrations_router
 from app.api.routes.panel import router as panel_router
+from app.api.routes.admin_debug import router as admin_debug_router
 from app.api.webhooks.whatsapp import router as whatsapp_router
 from app.api.webhooks.telegram import router as telegram_router
 
@@ -20,6 +21,7 @@ router.include_router(wallets_router, prefix="/wallets", tags=["Wallets"])
 router.include_router(stations_router, prefix="/stations", tags=["Stations"])
 router.include_router(migrations_router, prefix="/migrations", tags=["Migrations"])
 router.include_router(panel_router, prefix="/panel", tags=["Panel"])
+router.include_router(admin_debug_router, prefix="/admin/debug", tags=["Admin Debug"])
 # Webhook endpoints
 router.include_router(whatsapp_router, prefix="/whatsapp", tags=["Webhooks"])
 router.include_router(telegram_router, prefix="/telegram", tags=["Webhooks"])

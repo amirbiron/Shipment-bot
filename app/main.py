@@ -39,6 +39,10 @@ _OPENAPI_TAGS = [
     {"name": "Wallets", "description": "ארנק שליחים: יתרה, היסטוריית תנועות ובדיקת אשראי."},
     {"name": "Webhooks", "description": "Webhook-ים לקבלת הודעות מ-WhatsApp ו-Telegram."},
     {"name": "Migrations", "description": "Endpoints פנימיים להרצת מיגרציות/התאמות DB."},
+    {
+        "name": "Admin Debug",
+        "description": "כלי דיאגנוסטיקה לאדמין: circuit breakers, הודעות כושלות, ומצב state machine של משתמשים.",
+    },
 ]
 
 
