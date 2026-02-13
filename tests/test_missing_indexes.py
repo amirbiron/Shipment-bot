@@ -169,11 +169,12 @@ def test_migration_contains_only_new_indexes() -> None:
 
     # אינדקסים שלא צריכים להיות במיגרציה (כבר קיימים במיגרציות/schema קודמים)
     # בודקים רק שורות CREATE INDEX (לא הערות)
+    # השמות תואמים ל-schema.sql ו-migrations.py — בלי סיומת _id
     duplicate_indexes = [
-        "idx_deliveries_sender_id",
-        "idx_deliveries_courier_id",
-        "idx_deliveries_requesting_courier_id",
-        "idx_users_role",
+        "idx_deliveries_sender",              # schema.sql: ON deliveries(sender_id)
+        "idx_deliveries_courier",             # schema.sql: ON deliveries(courier_id)
+        "idx_deliveries_requesting_courier",  # migrations.py run_migration_006
+        "idx_users_role",                     # schema.sql: ON users(role)
     ]
 
     create_lines = [
@@ -182,9 +183,24 @@ def test_migration_contains_only_new_indexes() -> None:
     ]
     create_text = "\n".join(create_lines)
 
+    # בדיקה גם עם סיומת _id (למניעת כפילויות בשמות שונים על אותה עמודה)
     for index_name in duplicate_indexes:
         assert index_name not in create_text, (
             f"אינדקס {index_name} כפול — כבר קיים ב-schema.sql או במיגרציה קודמת"
+        )
+
+    # בדיקה נוספת: אין CREATE INDEX על עמודות שכבר ממוספרות
+    # (גם אם השם שונה — למשל idx_deliveries_sender_id במקום idx_deliveries_sender)
+    duplicate_columns = [
+        ("deliveries", "sender_id"),
+        ("deliveries", "courier_id"),
+        ("deliveries", "requesting_courier_id"),
+        ("users", "role"),
+    ]
+    for table, column in duplicate_columns:
+        pattern = f"ON {table}({column})"
+        assert pattern not in create_text, (
+            f"אינדקס כפול על {table}.{column} — כבר קיים ב-schema.sql או במיגרציה קודמת"
         )
 
 
