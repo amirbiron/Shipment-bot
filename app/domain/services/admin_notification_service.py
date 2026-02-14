@@ -1,6 +1,7 @@
 """
 Admin Notification Service - Notify admins about courier events
 """
+import asyncio
 import base64
 import mimetypes
 import httpx
@@ -74,31 +75,48 @@ class AdminNotificationService:
             }
             resolved_media_by_label: dict[str, Optional[str]] = {}
             wa_media_payloads: list[tuple[str, str]] = []
+            resolve_tasks: dict[str, asyncio.Task] = {}
+            should_attempt: dict[str, bool] = {}
 
             for label, file_id in file_ids.items():
                 if not file_id:
                     resolved_media_by_label[label] = None
+                    should_attempt[label] = False
                     continue
 
-                should_attempt = True
+                should_attempt[label] = True
                 if (
                     platform == "telegram"
                     and not settings.TELEGRAM_BOT_TOKEN
                     and not AdminNotificationService._is_media_url(file_id)
                 ):
-                    should_attempt = False
+                    should_attempt[label] = False
+                    resolved_media_by_label[label] = None
+                    continue
 
-                resolved_media = None
-                if should_attempt:
-                    resolved_media = await AdminNotificationService._resolve_whatsapp_media_url(
+                resolve_tasks[label] = asyncio.create_task(
+                    AdminNotificationService._resolve_whatsapp_media_url(
                         file_id=file_id,
                         platform=platform,
                     )
+                )
 
-                resolved_media_by_label[label] = resolved_media
+            if resolve_tasks:
+                resolve_results = await asyncio.gather(
+                    *resolve_tasks.values(), return_exceptions=True
+                )
+                for label, result in zip(resolve_tasks.keys(), resolve_results, strict=False):
+                    resolved_media_by_label[label] = (
+                        result if not isinstance(result, Exception) else None
+                    )
+
+            for label, file_id in file_ids.items():
+                resolved_media = resolved_media_by_label.get(label)
                 if resolved_media:
                     wa_media_payloads.append((label, resolved_media))
-                elif should_attempt:
+                    continue
+
+                if should_attempt.get(label):
                     logger.warning(
                         "Failed to prepare WhatsApp media payload",
                         extra_data={"user_id": user_id, "label": label},
@@ -150,33 +168,59 @@ class AdminNotificationService:
             else:
                 wa_keyboard = [[f"✅ אשר {user_id}", f"❌ דחה {user_id}"]]
 
-            for target in wa_targets:
+            async def _send_wa_target(target: str) -> bool:
+                target_success = False
+
                 wa_sent = await AdminNotificationService._send_whatsapp_admin_message(
                     target, wa_message, keyboard=wa_keyboard
                 )
-                # fallback: אם נכשל עם כפתורים, ננסה בלי
                 if not wa_sent and wa_keyboard:
                     logger.warning(
                         "WhatsApp admin message with keyboard failed, retrying without",
-                        extra_data={"user_id": user_id, "target": target}
+                        extra_data={
+                            "user_id": user_id,
+                            "target": PhoneNumberValidator.mask(target),
+                        },
                     )
                     wa_sent = await AdminNotificationService._send_whatsapp_admin_message(
                         target, wa_message, keyboard=None
                     )
-                success = success or wa_sent
 
-                # שליחת תמונות (כולל מסמכי Telegram) - שולחים גם אם ההודעה הטקסטית נכשלה
-                for label, media_url in wa_media_payloads:
-                    photo_sent = await AdminNotificationService._send_whatsapp_admin_photo(
-                        target, media_url
+                if wa_sent:
+                    target_success = True
+
+                if wa_media_payloads:
+                    photo_results = await asyncio.gather(
+                        *[
+                            AdminNotificationService._send_whatsapp_admin_photo(
+                                target, media_url
+                            )
+                            for _, media_url in wa_media_payloads
+                        ],
+                        return_exceptions=True,
                     )
-                    if photo_sent:
-                        success = True
-                    else:
-                        logger.warning(
-                            f"Failed to send {label} photo to WhatsApp admin",
-                            extra_data={"user_id": user_id, "target": target},
-                        )
+
+                    for (label, _), photo_sent in zip(
+                        wa_media_payloads, photo_results, strict=False
+                    ):
+                        if photo_sent is True:
+                            target_success = True
+                        else:
+                            logger.warning(
+                                f"Failed to send {label} photo to WhatsApp admin",
+                                extra_data={
+                                    "user_id": user_id,
+                                    "target": PhoneNumberValidator.mask(target),
+                                },
+                            )
+
+                return target_success
+
+            wa_results = await asyncio.gather(
+                *[asyncio.create_task(_send_wa_target(target)) for target in wa_targets],
+                return_exceptions=False,
+            )
+            success = success or any(wa_results)
 
         # --- שליחה למנהלים פרטיים בטלגרם ---
         tg_admin_ids = _parse_csv_setting(settings.TELEGRAM_ADMIN_CHAT_IDS)
@@ -230,7 +274,7 @@ class AdminNotificationService:
                     {"text": "❌ דחה", "callback_data": f"reject_courier_{user_id}"},
                 ]]
 
-            for admin_id in tg_admin_ids:
+            async def _send_tg_admin(admin_id: str) -> bool:
                 if inline_keyboard:
                     tg_sent = await AdminNotificationService._send_telegram_message_with_inline_keyboard(
                         admin_id, tg_message, inline_keyboard
@@ -239,13 +283,27 @@ class AdminNotificationService:
                     tg_sent = await AdminNotificationService._send_telegram_message(
                         admin_id, tg_message
                     )
-                success = success or tg_sent
 
-                # שליחת תמונות (רק אם מטלגרם) - גם אם הודעת הטקסט נכשלה
                 if is_telegram:
-                    for file_id in [document_file_id, selfie_file_id, vehicle_photo_file_id]:
-                        if file_id:
-                            await AdminNotificationService._forward_photo(admin_id, file_id)
+                    photo_tasks = [
+                        AdminNotificationService._forward_photo(admin_id, file_id)
+                        for file_id in [
+                            document_file_id,
+                            selfie_file_id,
+                            vehicle_photo_file_id,
+                        ]
+                        if file_id
+                    ]
+                    if photo_tasks:
+                        await asyncio.gather(*photo_tasks, return_exceptions=True)
+
+                return tg_sent
+
+            tg_results = await asyncio.gather(
+                *[asyncio.create_task(_send_tg_admin(admin_id)) for admin_id in tg_admin_ids],
+                return_exceptions=False,
+            )
+            success = success or any(tg_results)
 
         if not success:
             logger.warning(
