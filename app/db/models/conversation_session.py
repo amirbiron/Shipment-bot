@@ -2,7 +2,7 @@
 Conversation Session Model - State Machine Tracking
 """
 from datetime import datetime
-from sqlalchemy import Column, Integer, BigInteger, String, DateTime, ForeignKey, JSON
+from sqlalchemy import Column, Integer, BigInteger, String, DateTime, ForeignKey, JSON, UniqueConstraint
 
 from app.db.database import Base
 
@@ -26,3 +26,8 @@ class ConversationSession(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     last_activity_at = Column(DateTime, default=datetime.utcnow)
+
+    # מניעת sessions כפולים לאותו משתמש ופלטפורמה
+    __table_args__ = (
+        UniqueConstraint('user_id', 'platform', name='uq_user_platform_session'),
+    )

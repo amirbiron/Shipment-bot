@@ -5,7 +5,7 @@ Station Ledger Model - היסטוריית תנועות פיננסיות של ת�
 """
 import enum
 from datetime import datetime
-from sqlalchemy import Column, Integer, Numeric, DateTime, ForeignKey, String, Enum as SQLEnum
+from sqlalchemy import Column, Integer, Numeric, DateTime, ForeignKey, String, Enum as SQLEnum, UniqueConstraint
 
 from app.db.database import Base
 
@@ -31,3 +31,8 @@ class StationLedger(Base):
 
     description = Column(String(500), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+    # מניעת כפילות עמלות — בדומה ל-wallet_ledger
+    __table_args__ = (
+        UniqueConstraint('station_id', 'delivery_id', 'entry_type', name='uq_station_delivery_type'),
+    )

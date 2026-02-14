@@ -11,6 +11,7 @@ from app.db.database import get_db
 from app.db.models.user import User, UserRole
 from app.core.logging import get_logger
 from app.core.validation import PhoneNumberValidator, NameValidator, TextSanitizer
+from app.api.dependencies.admin_auth import require_admin_api_key
 
 logger = get_logger(__name__)
 
@@ -157,15 +158,24 @@ async def get_user(
 @router.get(
     "/phone/{phone_number}",
     response_model=UserResponse,
-    summary="קבלת משתמש לפי מספר טלפון",
-    description="מחזיר משתמש לפי מספר טלפון (כפי שנשמר במערכת).",
-    responses={200: {"description": "המשתמש נמצא"}, 404: {"description": "המשתמש לא נמצא"}},
+    summary="קבלת משתמש לפי מספר טלפון (אדמין בלבד)",
+    description=(
+        "מחזיר משתמש לפי מספר טלפון. "
+        "דורש מפתח API של אדמין למניעת user enumeration."
+    ),
+    responses={
+        200: {"description": "המשתמש נמצא"},
+        401: {"description": "חסר מפתח API"},
+        403: {"description": "מפתח API לא תקין"},
+        404: {"description": "המשתמש לא נמצא"},
+    },
 )
 async def get_user_by_phone(
     phone_number: str,
-    db: AsyncSession = Depends(get_db)
+    _: None = Depends(require_admin_api_key),
+    db: AsyncSession = Depends(get_db),
 ):
-    """Get user by phone number"""
+    """חיפוש משתמש לפי מספר טלפון — מוגן למניעת enumeration"""
     result = await db.execute(
         select(User).where(User.phone_number == phone_number)
     )

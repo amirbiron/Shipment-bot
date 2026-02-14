@@ -87,6 +87,10 @@ class Settings(BaseSettings):
             raise ValueError("WHATSAPP_MAX_RETRIES must be at least 1")
         return v
 
+    # Rate limiting — webhooks
+    WEBHOOK_RATE_LIMIT_MAX_REQUESTS: int = 100  # מספר בקשות מקסימלי לכל IP
+    WEBHOOK_RATE_LIMIT_WINDOW_SECONDS: int = 60  # חלון זמן בשניות
+
     # Admin debug endpoints — מפתח API לגישה ל-endpoints דיאגנוסטיים
     ADMIN_API_KEY: str = ""  # openssl rand -hex 32
 
