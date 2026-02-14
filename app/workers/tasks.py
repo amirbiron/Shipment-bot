@@ -66,12 +66,13 @@ def run_async(coro):
 async def _send_whatsapp_message(phone: str, content: dict) -> bool:
     """
     שליחת הודעה דרך ספק WhatsApp הפעיל — מאציל ל-provider.
-    ממיר אוטומטית תגי HTML לפורמט הספק.
+    ממיר תגי HTML לפורמט הספק לפני שליחה.
     """
     message_text = content.get("message_text", "")
     provider = get_whatsapp_provider()
+    formatted_text = provider.format_text(message_text)
     try:
-        await provider.send_text(to=phone, text=message_text)
+        await provider.send_text(to=phone, text=formatted_text)
         return True
     except Exception as exc:
         logger.error(

@@ -689,9 +689,10 @@ class AdminNotificationService:
 
         provider = get_whatsapp_admin_provider()
         try:
-            return await provider.send_media(
+            await provider.send_media(
                 to=phone_or_group, media_url=media_url, media_type="image"
             )
+            return True
         except Exception as exc:
             logger.error(
                 "כשלון בשליחת תמונה למנהל WhatsApp",

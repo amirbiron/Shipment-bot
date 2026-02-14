@@ -33,12 +33,17 @@ class BaseWhatsAppProvider(ABC):
         """
         שליחת הודעת טקסט.
 
+        הטקסט נשלח כמו שהוא. אם הקלט מכיל HTML, הקורא אחראי
+        לקרוא ל-format_text() לפני השליחה.
+
         Args:
             to: מספר טלפון או מזהה קבוצה (בפורמט הספק).
-            text: טקסט ההודעה. יכול להכיל תגי HTML פשוטים (<b>, <i>, <code>).
-                  הספק אחראי להמיר לפורמט הנכון.
+            text: טקסט ההודעה — נשלח as-is.
             keyboard: רשימת שורות של כפתורים (אופציונלי).
                       כל שורה = רשימת מחרוזות. לדוגמה: [["כן", "לא"], ["ביטול"]]
+
+        Raises:
+            WhatsAppError: בכשלון שליחה.
         """
 
     @abstractmethod
@@ -48,7 +53,7 @@ class BaseWhatsAppProvider(ABC):
         media_url: str,
         media_type: str = "image",
         caption: Optional[str] = None,
-    ) -> bool:
+    ) -> None:
         """
         שליחת מדיה (תמונה/מסמך).
 
@@ -58,8 +63,8 @@ class BaseWhatsAppProvider(ABC):
             media_type: סוג המדיה ("image", "document", "video").
             caption: כיתוב אופציונלי.
 
-        Returns:
-            True אם ההודעה נשלחה בהצלחה.
+        Raises:
+            WhatsAppError: בכשלון שליחה או כש-media_url ריק.
         """
 
     # ── עיצוב טקסט ──

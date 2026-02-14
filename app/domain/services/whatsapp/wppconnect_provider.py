@@ -147,14 +147,18 @@ class WPPConnectProvider(BaseWhatsAppProvider):
         text: str,
         keyboard: Optional[list[list[str]]] = None,
     ) -> None:
-        """שליחת טקסט דרך WPPConnect Gateway עם retry ו-circuit breaker."""
+        """שליחת טקסט דרך WPPConnect Gateway עם retry ו-circuit breaker.
+
+        הטקסט נשלח כמו שהוא — אם הקלט מכיל HTML, הקורא אחראי
+        לקרוא ל-format_text() לפני השליחה.
+        זורק WhatsAppError בכשלון.
+        """
         if self._should_normalize(to):
             to = self.normalize_phone(to)
-        formatted_text = self.format_text(text)
 
         payload = {
             "phone": to,
-            "message": formatted_text,
+            "message": text,
             "keyboard": keyboard,
         }
 
@@ -169,14 +173,16 @@ class WPPConnectProvider(BaseWhatsAppProvider):
         media_url: str,
         media_type: str = "image",
         caption: Optional[str] = None,
-    ) -> bool:
-        """שליחת מדיה דרך WPPConnect Gateway עם retry ו-circuit breaker."""
+    ) -> None:
+        """שליחת מדיה דרך WPPConnect Gateway עם retry ו-circuit breaker.
+
+        זורק WhatsAppError בכשלון — הקורא אחראי על טיפול בשגיאות.
+        """
         if not media_url:
-            logger.warning(
-                "לא סופק media_url לשליחה",
-                extra_data={"phone": PhoneNumberValidator.mask(to)},
+            raise WhatsAppError(
+                message="לא סופק media_url לשליחה",
+                details={"phone": PhoneNumberValidator.mask(to)},
             )
-            return False
 
         if self._should_normalize(to):
             to = self.normalize_phone(to)
@@ -192,20 +198,7 @@ class WPPConnectProvider(BaseWhatsAppProvider):
         async def _send() -> None:
             await self._request_with_retry("send-media", payload, "שליחת מדיה WhatsApp")
 
-        try:
-            await self._circuit_breaker.execute(_send)
-            return True
-        except Exception as exc:
-            logger.error(
-                "כשלון בשליחת מדיה WhatsApp",
-                extra_data={
-                    "phone": PhoneNumberValidator.mask(to),
-                    "error": str(exc),
-                    "provider": self.provider_name,
-                },
-                exc_info=True,
-            )
-            return False
+        await self._circuit_breaker.execute(_send)
 
     def format_text(self, html_text: str) -> str:
         """המרת HTML → WhatsApp markdown (WPPConnect)."""

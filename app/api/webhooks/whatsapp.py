@@ -383,13 +383,14 @@ async def send_whatsapp_message(
 ) -> None:
     """
     שליחת הודעה דרך ספק WhatsApp הפעיל.
-    מאציל לספק (WPPConnectProvider / PyWaProvider) — כולל retry, circuit breaker,
-    והמרת HTML אוטומטית.
+    מאציל לספק (WPPConnectProvider / PyWaProvider) — כולל retry ו-circuit breaker.
+    ממיר תגי HTML לפורמט הספק לפני שליחה.
     fire-and-forget: שגיאות נרשמות בלוג ולא נזרקות חזרה.
     """
     provider = get_whatsapp_provider()
+    formatted_text = provider.format_text(text)
     try:
-        await provider.send_text(to=phone_number, text=text, keyboard=keyboard)
+        await provider.send_text(to=phone_number, text=formatted_text, keyboard=keyboard)
     except Exception as exc:
         logger.error(
             "כשלון בשליחת הודעת WhatsApp",

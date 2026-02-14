@@ -110,8 +110,8 @@ class TestWPPConnectSendText:
             assert payload["keyboard"] == [["כן", "לא"]]
 
     @pytest.mark.asyncio
-    async def test_send_text_html_conversion(self) -> None:
-        """בדיקה שתגי HTML מומרים לפורמט WhatsApp markdown."""
+    async def test_send_text_does_not_auto_format(self) -> None:
+        """send_text שולח טקסט as-is — הקורא אחראי על format_text."""
         provider, _ = self._make_provider()
 
         mock_response = MagicMock(spec=Response)
@@ -129,7 +129,28 @@ class TestWPPConnectSendText:
             )
 
             payload = mock_instance.post.call_args[1]["json"]
-            # convert_html_to_whatsapp הופך <b> ל-*
+            # send_text לא ממיר — הטקסט נשלח כמו שהוא
+            assert payload["message"] == "<b>כותרת</b> רגיל"
+
+    @pytest.mark.asyncio
+    async def test_caller_applies_format_text_before_send(self) -> None:
+        """הקורא קורא ל-format_text לפני send_text — HTML מומר."""
+        provider, _ = self._make_provider()
+
+        mock_response = MagicMock(spec=Response)
+        mock_response.status_code = 200
+
+        with patch("httpx.AsyncClient") as mock_client:
+            mock_instance = AsyncMock()
+            mock_instance.post = AsyncMock(return_value=mock_response)
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=None)
+            mock_client.return_value = mock_instance
+
+            formatted = provider.format_text("<b>כותרת</b> רגיל")
+            await provider.send_text(to="+972501234567", text=formatted)
+
+            payload = mock_instance.post.call_args[1]["json"]
             assert "*כותרת*" in payload["message"]
 
     @pytest.mark.asyncio
@@ -212,27 +233,27 @@ class TestWPPConnectSendMedia:
             mock_instance.__aexit__ = AsyncMock(return_value=None)
             mock_client.return_value = mock_instance
 
-            result = await provider.send_media(
+            # send_media לא זורק — הצלחה
+            await provider.send_media(
                 to="+972501234567",
                 media_url="https://example.com/photo.jpg",
                 media_type="image",
             )
 
-            assert result is True
             payload = mock_instance.post.call_args[1]["json"]
             assert payload["media_url"] == "https://example.com/photo.jpg"
             assert payload["media_type"] == "image"
 
     @pytest.mark.asyncio
-    async def test_send_media_empty_url_returns_false(self) -> None:
-        """media_url ריק — מחזיר False בלי לשלוח."""
+    async def test_send_media_empty_url_raises(self) -> None:
+        """media_url ריק — זורק WhatsAppError."""
         provider = self._make_provider()
-        result = await provider.send_media(to="+972501234567", media_url="")
-        assert result is False
+        with pytest.raises(WhatsAppError):
+            await provider.send_media(to="+972501234567", media_url="")
 
     @pytest.mark.asyncio
-    async def test_send_media_failure_returns_false(self) -> None:
-        """כשלון בשליחת מדיה — מחזיר False."""
+    async def test_send_media_failure_raises(self) -> None:
+        """כשלון בשליחת מדיה — זורק WhatsAppError."""
         provider = self._make_provider()
 
         error_response = MagicMock(spec=Response)
@@ -246,12 +267,11 @@ class TestWPPConnectSendMedia:
             mock_instance.__aexit__ = AsyncMock(return_value=None)
             mock_client.return_value = mock_instance
 
-            result = await provider.send_media(
-                to="+972501234567",
-                media_url="https://example.com/photo.jpg",
-            )
-
-            assert result is False
+            with pytest.raises(WhatsAppError):
+                await provider.send_media(
+                    to="+972501234567",
+                    media_url="https://example.com/photo.jpg",
+                )
 
 
 # ============================================================================
@@ -355,12 +375,12 @@ class TestWPPConnectSendMediaRetry:
             mock_instance.__aexit__ = AsyncMock(return_value=None)
             mock_client.return_value = mock_instance
 
-            result = await provider.send_media(
+            # לא זורק — retry הצליח
+            await provider.send_media(
                 to="+972501234567",
                 media_url="https://example.com/photo.jpg",
             )
 
-            assert result is True
             assert mock_instance.post.call_count == 2
 
 
