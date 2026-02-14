@@ -329,8 +329,8 @@ class TestOwnerManagementGetOwners:
         assert owners[0].user_id == owner1.id
 
     @pytest.mark.asyncio
-    async def test_get_owners_empty(self, user_factory, db_session):
-        """get_owners מחזיר רשימה ריקה אם אין בעלים"""
+    async def test_get_owners_legacy_fallback(self, user_factory, db_session):
+        """get_owners מחזיר בעלים מ-owner_id גם בלי רשומה ב-junction (תאימות לאחור)"""
         owner = await user_factory(
             phone_number="+972501234567",
             role=UserRole.STATION_OWNER,
@@ -339,10 +339,12 @@ class TestOwnerManagementGetOwners:
         db_session.add(station)
         await db_session.flush()
         db_session.add(StationWallet(station_id=station.id))
-        # לא מוסיפים StationOwner
+        # לא מוסיפים StationOwner — מדמה תחנה לפני מיגרציה
         await db_session.commit()
 
         service = StationService(db_session)
         owners = await service.get_owners(station.id)
 
-        assert len(owners) == 0
+        # fallback ל-owner_id — מחזיר בעלים אחד
+        assert len(owners) == 1
+        assert owners[0].user_id == owner.id
