@@ -3,7 +3,8 @@
 
 בודק ש:
 - בפרודקשן (DEBUG=False): כותרות CSP, HSTS ו-nosniff מוחזרות בכל תשובה.
-- בפיתוח (DEBUG=True): הכותרות לא מתווספות (לא לחסום HTTP מקומי).
+- בפיתוח (DEBUG=True): CSP ו-HSTS לא מתווספות (לא לחסום HTTP מקומי),
+  אבל nosniff מוחל תמיד (בטוח ולא חוסם פיתוח).
 """
 import pytest
 
@@ -62,18 +63,26 @@ class TestSecurityHeadersProduction:
 
 
 class TestSecurityHeadersDebugMode:
-    """כותרות אבטחה כש-DEBUG=True — הכותרות לא מתווספות."""
+    """כותרות אבטחה כש-DEBUG=True — CSP ו-HSTS לא מתווספות, nosniff תמיד."""
 
     @pytest.mark.unit
-    def test_no_security_headers_in_debug(self) -> None:
-        """במצב DEBUG, ה-middleware לא מוסיף כותרות אבטחה."""
+    def test_no_hsts_csp_in_debug(self) -> None:
+        """במצב DEBUG, ה-middleware לא מוסיף CSP ו-HSTS (חוסמות HTTP מקומי)."""
         app = _build_test_app(debug=True)
         with TestClient(app) as client:
             response = client.get("/test")
             assert response.status_code == 200
             assert "content-security-policy" not in response.headers
             assert "strict-transport-security" not in response.headers
-            assert "x-content-type-options" not in response.headers
+
+    @pytest.mark.unit
+    def test_nosniff_always_present_even_in_debug(self) -> None:
+        """X-Content-Type-Options: nosniff מוחל גם במצב DEBUG — בטוח ולא חוסם פיתוח."""
+        app = _build_test_app(debug=True)
+        with TestClient(app) as client:
+            response = client.get("/test")
+            assert response.status_code == 200
+            assert response.headers.get("x-content-type-options") == "nosniff"
 
     @pytest.mark.unit
     def test_security_headers_when_not_debug(self) -> None:

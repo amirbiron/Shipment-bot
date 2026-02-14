@@ -185,12 +185,14 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     ) -> Response:
         response = await call_next(request)
 
+        # X-Content-Type-Options בטוח תמיד — מונע MIME sniffing גם בפיתוח
+        response.headers["X-Content-Type-Options"] = "nosniff"
+
         if not self._debug:
             response.headers["Content-Security-Policy"] = "upgrade-insecure-requests"
             response.headers["Strict-Transport-Security"] = (
                 "max-age=31536000; includeSubDomains"
             )
-            response.headers["X-Content-Type-Options"] = "nosniff"
 
         return response
 
