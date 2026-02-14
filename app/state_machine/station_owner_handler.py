@@ -36,6 +36,8 @@ class StationOwnerStateHandler:
 
     # מפתחות קונטקסט של ניהול סדרנים ורשימה שחורה — מנוקים בחזרה ל-MENU
     _MANAGEMENT_CONTEXT_KEYS = {
+        # ניהול בעלים
+        "owner_map", "remove_owner_id", "remove_owner_name",
         # ניהול סדרנים
         "dispatcher_map", "remove_dispatcher_id", "remove_dispatcher_name",
         # רשימה שחורה
@@ -115,6 +117,12 @@ class StationOwnerStateHandler:
         handlers = {
             StationOwnerState.MENU.value: self._handle_menu,
 
+            # ניהול בעלים
+            StationOwnerState.MANAGE_OWNERS.value: self._handle_manage_owners,
+            StationOwnerState.ADD_OWNER_PHONE.value: self._handle_add_owner,
+            StationOwnerState.REMOVE_OWNER_SELECT.value: self._handle_remove_owner_select,
+            StationOwnerState.CONFIRM_REMOVE_OWNER.value: self._handle_confirm_remove_owner,
+
             # ניהול סדרנים
             StationOwnerState.MANAGE_DISPATCHERS.value: self._handle_manage_dispatchers,
             StationOwnerState.ADD_DISPATCHER_PHONE.value: self._handle_add_dispatcher,
@@ -156,9 +164,9 @@ class StationOwnerStateHandler:
             f"💰 יתרת ארנק: {balance:.2f} ₪\n\n"
             "בחר פעולה:",
             keyboard=[
-                ["👥 ניהול סדרנים", "💰 ארנק תחנה"],
-                ["📊 דוח גבייה", "🚫 רשימה שחורה"],
-                ["⚙️ הגדרות קבוצות"],
+                ["👤 ניהול בעלים", "👥 ניהול סדרנים"],
+                ["💰 ארנק תחנה", "📊 דוח גבייה"],
+                ["🚫 רשימה שחורה", "⚙️ הגדרות קבוצות"],
             ],
             inline=True
         )
@@ -168,7 +176,10 @@ class StationOwnerStateHandler:
         """תפריט ראשי של בעל תחנה"""
         msg = message.strip()
 
-        if "סדרנים" in msg or "ניהול" in msg:
+        if "ניהול בעלים" in msg or "בעלים" in msg:
+            return await self._show_manage_owners(user, context)
+
+        if "סדרנים" in msg or "ניהול סדרנים" in msg:
             return await self._show_manage_dispatchers(user, context)
 
         if "ארנק" in msg or "כספים" in msg:
@@ -184,6 +195,182 @@ class StationOwnerStateHandler:
             return await self._show_group_settings(user, context)
 
         return await self._show_menu(user, context)
+
+    # ==================== ניהול בעלים ====================
+
+    async def _show_manage_owners(self, user: User, context: dict):
+        """הצגת מסך ניהול בעלים"""
+        owners = await self.station_service.get_owners(self.station_id)
+
+        text = "👤 <b>ניהול בעלים</b>\n\n"
+        if owners:
+            for i, o in enumerate(owners, 1):
+                result = await self.db.execute(
+                    select(User).where(User.id == o.user_id)
+                )
+                owner_user = result.scalar_one_or_none()
+                name = (
+                    owner_user.full_name or owner_user.name or "לא ידוע"
+                ) if owner_user else "לא ידוע"
+                is_self = " (אתה)" if o.user_id == user.id else ""
+                text += f"{i}. {escape(name)}{is_self}\n"
+        else:
+            text += "אין בעלים רשומים.\n"
+
+        text += "\nבחר פעולה:"
+
+        response = MessageResponse(
+            text,
+            keyboard=[
+                ["➕ הוספת בעלים", "➖ הסרת בעלים"],
+                ["🔙 חזרה לתפריט"],
+            ]
+        )
+        return response, StationOwnerState.MANAGE_OWNERS.value, {}
+
+    async def _handle_manage_owners(
+        self, user: User, message: str, context: dict
+    ):
+        """תפריט ניהול בעלים"""
+        if "חזרה" in message:
+            return await self._show_menu(user, context)
+
+        if "הוספת" in message or "הוספה" in message:
+            response = MessageResponse(
+                "👤 <b>הוספת בעלים</b>\n\n"
+                "הזן את מספר הטלפון של הבעלים החדש:"
+            )
+            return response, StationOwnerState.ADD_OWNER_PHONE.value, {}
+
+        if "הסרה" in message or "הסר" in message:
+            return await self._show_owner_list_for_removal(user, context)
+
+        return await self._show_manage_owners(user, context)
+
+    async def _handle_add_owner(
+        self, user: User, message: str, context: dict
+    ):
+        """הוספת בעלים לפי מספר טלפון"""
+        if "חזרה" in message:
+            return await self._show_manage_owners(user, context)
+
+        phone = message.strip()
+        success, msg = await self.station_service.add_owner(
+            self.station_id, phone
+        )
+
+        response = MessageResponse(
+            msg,
+            keyboard=[
+                ["➕ הוספת בעלים", "➖ הסרת בעלים"],
+                ["🔙 חזרה לתפריט"],
+            ]
+        )
+        return response, StationOwnerState.MANAGE_OWNERS.value, {}
+
+    async def _show_owner_list_for_removal(
+        self, user: User, context: dict
+    ):
+        """הצגת רשימת בעלים להסרה"""
+        owners = await self.station_service.get_owners(self.station_id)
+
+        if len(owners) <= 1:
+            response = MessageResponse(
+                "לא ניתן להסיר בעלים — חייב להישאר לפחות בעלים אחד בתחנה.",
+                keyboard=[["🔙 חזרה לתפריט"]]
+            )
+            return response, StationOwnerState.MANAGE_OWNERS.value, {}
+
+        text = "➖ <b>הסרת בעלים</b>\n\nבחר בעלים להסרה:\n\n"
+        keyboard_items = []
+        owner_map = {}
+
+        for i, o in enumerate(owners, 1):
+            result = await self.db.execute(
+                select(User).where(User.id == o.user_id)
+            )
+            owner_user = result.scalar_one_or_none()
+            name = (
+                owner_user.full_name or owner_user.name or "לא ידוע"
+            ) if owner_user else "לא ידוע"
+            is_self = " (אתה)" if o.user_id == user.id else ""
+            text += f"{i}. {escape(name)}{is_self}\n"
+            keyboard_items.append([f"הסר {i}"])
+            owner_map[str(i)] = o.user_id
+
+        keyboard_items.append(["🔙 חזרה"])
+
+        response = MessageResponse(text, keyboard=keyboard_items)
+        return response, StationOwnerState.REMOVE_OWNER_SELECT.value, {
+            "owner_map": owner_map
+        }
+
+    async def _handle_remove_owner_select(
+        self, user: User, message: str, context: dict
+    ):
+        """בחירת בעלים להסרה — מעביר לשלב אישור"""
+        if "חזרה" in message:
+            return await self._show_manage_owners(user, context)
+
+        import re
+        numbers = re.findall(r'\d+', message)
+        owner_map = context.get("owner_map", {})
+
+        if numbers and numbers[0] in owner_map:
+            owner_user_id = owner_map[numbers[0]]
+            # שליפת שם הבעלים להצגה בהודעת האישור
+            result = await self.db.execute(
+                select(User).where(User.id == owner_user_id)
+            )
+            owner_user = result.scalar_one_or_none()
+            name = (
+                owner_user.full_name or owner_user.name or "לא ידוע"
+            ) if owner_user else "לא ידוע"
+
+            response = MessageResponse(
+                f"⚠️ <b>אישור הסרת בעלים</b>\n\n"
+                f"האם אתה בטוח שברצונך להסיר את <b>{escape(name)}</b> מרשימת הבעלים?",
+                keyboard=[["✅ כן, הסר", "❌ ביטול"]],
+                inline=True
+            )
+            return response, StationOwnerState.CONFIRM_REMOVE_OWNER.value, {
+                "remove_owner_id": owner_user_id,
+                "remove_owner_name": name,
+            }
+
+        # בחירה לא תקינה — מציגים מחדש את רשימת הבעלים עם הכפתורים
+        return await self._show_owner_list_for_removal(user, context)
+
+    async def _handle_confirm_remove_owner(
+        self, user: User, message: str, context: dict
+    ):
+        """אישור הסרת בעלים"""
+        if "ביטול" in message or "❌" in message:
+            return await self._show_manage_owners(user, context)
+
+        if "כן" in message or "✅" in message or "הסר" in message:
+            owner_user_id = context.get("remove_owner_id")
+            if not owner_user_id:
+                return await self._show_manage_owners(user, context)
+
+            success, msg = await self.station_service.remove_owner(
+                self.station_id, owner_user_id
+            )
+            response = MessageResponse(
+                msg,
+                keyboard=[
+                    ["➕ הוספת בעלים", "➖ הסרת בעלים"],
+                    ["🔙 חזרה לתפריט"],
+                ]
+            )
+            return response, StationOwnerState.MANAGE_OWNERS.value, {}
+
+        response = MessageResponse(
+            "אנא בחר:\n✅ כן, הסר\n❌ ביטול",
+            keyboard=[["✅ כן, הסר", "❌ ביטול"]],
+            inline=True
+        )
+        return response, StationOwnerState.CONFIRM_REMOVE_OWNER.value, {}
 
     # ==================== ניהול סדרנים ====================
 

@@ -328,6 +328,50 @@ class StationService:
         )
         return True, "הבעלים הוסר בהצלחה מהתחנה."
 
+    async def get_owners(self, station_id: int) -> List[StationOwner]:
+        """קבלת רשימת בעלים פעילים בתחנה — כולל מיגרציה אוטומטית מ-owner_id ישן"""
+        result = await self.db.execute(
+            select(StationOwner).where(
+                StationOwner.station_id == station_id,
+                StationOwner.is_active == True  # noqa: E712
+            )
+        )
+        owners = list(result.scalars().all())
+        junction_user_ids = {o.user_id for o in owners}
+
+        # מיגרציה אוטומטית: בעלים מ-Station.owner_id שלא קיים ב-junction (תחנה לפני מיגרציה)
+        # יוצרים רשומת StationOwner אמיתית כדי שפעולות כמו remove_owner יעבדו נכון
+        station = await self.get_station(station_id)
+        if station and station.owner_id and station.owner_id not in junction_user_ids:
+            # בדיקה אם יש רשומה לא פעילה — הפעלה מחדש במקום הכנסה חדשה
+            # (מונע התנגשות עם UniqueConstraint על station_id + user_id)
+            existing_result = await self.db.execute(
+                select(StationOwner).where(
+                    StationOwner.station_id == station_id,
+                    StationOwner.user_id == station.owner_id,
+                    StationOwner.is_active == False,  # noqa: E712
+                )
+            )
+            inactive_owner = existing_result.scalar_one_or_none()
+            if inactive_owner:
+                inactive_owner.is_active = True
+                legacy_owner = inactive_owner
+            else:
+                legacy_owner = StationOwner(
+                    station_id=station_id,
+                    user_id=station.owner_id,
+                    is_active=True,
+                )
+                self.db.add(legacy_owner)
+            await self.db.flush()
+            owners.append(legacy_owner)
+            logger.info(
+                "מיגרציה אוטומטית של בעלים מ-owner_id לטבלת junction",
+                extra_data={"station_id": station_id, "user_id": station.owner_id},
+            )
+
+        return owners
+
     # ==================== ניהול סדרנים [3.3] ====================
 
     async def add_dispatcher(

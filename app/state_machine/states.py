@@ -263,6 +263,12 @@ class StationOwnerState(str, Enum):
     # תפריט ראשי
     MENU = "STATION.MENU"
 
+    # ניהול בעלים
+    MANAGE_OWNERS = "STATION.MANAGE_OWNERS"
+    ADD_OWNER_PHONE = "STATION.ADD_OWNER.PHONE"
+    REMOVE_OWNER_SELECT = "STATION.REMOVE_OWNER.SELECT"
+    CONFIRM_REMOVE_OWNER = "STATION.CONFIRM_REMOVE_OWNER"
+
     # ניהול סדרנים
     MANAGE_DISPATCHERS = "STATION.MANAGE_DISPATCHERS"
     ADD_DISPATCHER_PHONE = "STATION.ADD_DISPATCHER.PHONE"
@@ -293,11 +299,33 @@ class StationOwnerState(str, Enum):
 STATION_OWNER_TRANSITIONS = {
     # תפריט ראשי
     StationOwnerState.MENU: [
+        StationOwnerState.MANAGE_OWNERS,
         StationOwnerState.MANAGE_DISPATCHERS,
         StationOwnerState.VIEW_WALLET,
         StationOwnerState.COLLECTION_REPORT,
         StationOwnerState.VIEW_BLACKLIST,
         StationOwnerState.GROUP_SETTINGS,
+    ],
+
+    # ניהול בעלים
+    StationOwnerState.MANAGE_OWNERS: [
+        StationOwnerState.ADD_OWNER_PHONE,
+        StationOwnerState.REMOVE_OWNER_SELECT,
+        StationOwnerState.MENU,
+    ],
+    StationOwnerState.ADD_OWNER_PHONE: [
+        StationOwnerState.MANAGE_OWNERS,
+        StationOwnerState.MENU,
+    ],
+    StationOwnerState.REMOVE_OWNER_SELECT: [
+        StationOwnerState.CONFIRM_REMOVE_OWNER,
+        StationOwnerState.MANAGE_OWNERS,
+        StationOwnerState.MENU,
+    ],
+    StationOwnerState.CONFIRM_REMOVE_OWNER: [
+        StationOwnerState.MANAGE_OWNERS,
+        StationOwnerState.REMOVE_OWNER_SELECT,
+        StationOwnerState.MENU,
     ],
 
     # ניהול סדרנים
