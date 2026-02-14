@@ -49,8 +49,7 @@ class DispatcherStateHandler:
 
     # מפתחות קונטקסט של חיוב ידני — מנוקים בחזרה ל-MENU
     _MANUAL_CHARGE_CONTEXT_KEYS = {
-        "charge_driver_name", "charge_driver_id", "charge_amount",
-        "charge_description",
+        "charge_driver_name", "charge_amount", "charge_description",
     }
 
     def _is_add_shipment_flow_state(self, state: str) -> bool:

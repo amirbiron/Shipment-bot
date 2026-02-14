@@ -36,9 +36,12 @@ class StationOwnerStateHandler:
 
     # מפתחות קונטקסט של ניהול סדרנים ורשימה שחורה — מנוקים בחזרה ל-MENU
     _MANAGEMENT_CONTEXT_KEYS = {
-        "dispatcher_phone", "dispatcher_id", "dispatcher_name",
-        "blacklist_phone", "blacklist_reason", "blacklist_id",
-        "remove_dispatcher_id", "remove_blacklist_id",
+        # ניהול סדרנים
+        "dispatcher_map", "remove_dispatcher_id", "remove_dispatcher_name",
+        # רשימה שחורה
+        "blacklist_phone", "blacklist_map",
+        "remove_blacklist_courier_id", "remove_blacklist_name",
+        # הגדרות קבוצות
         "public_group_id", "private_group_id",
     }
 

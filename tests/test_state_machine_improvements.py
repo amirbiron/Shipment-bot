@@ -467,9 +467,11 @@ class TestContextCleanup:
         handler = StationOwnerStateHandler(db_session, station.id, platform="telegram")
         state_manager = StateManager(db_session)
 
-        # מדמים בעל תחנה ב-MANAGE_DISPATCHERS
+        # מדמים בעל תחנה ב-MANAGE_DISPATCHERS עם קונטקסט ניהולי אמיתי
         mgmt_context = {
-            "dispatcher_phone": "+972501234567",
+            "dispatcher_map": {"1": 123, "2": 456},
+            "remove_dispatcher_id": 123,
+            "remove_dispatcher_name": "נהג בדיקה",
             "other_key": "should_remain",
         }
         await state_manager.force_state(
@@ -486,5 +488,8 @@ class TestContextCleanup:
 
         # בודקים שקונטקסט ניהולי נוקה
         context = await state_manager.get_context(owner.id, "telegram")
-        assert "dispatcher_phone" not in context
+        assert "dispatcher_map" not in context
+        assert "remove_dispatcher_id" not in context
+        assert "remove_dispatcher_name" not in context
+        # מפתח אחר צריך להישאר
         assert context.get("other_key") == "should_remain"
