@@ -46,6 +46,16 @@ class WPPConnectProvider(BaseWhatsAppProvider):
     def provider_name(self) -> str:
         return "wppconnect"
 
+    def _should_normalize(self, identifier: str) -> bool:
+        """האם צריך לנרמל — רק מספרי טלפון רגילים, לא קבוצות/LID/placeholder."""
+        if not identifier:
+            return False
+        if "@" in identifier:
+            return False
+        if identifier.startswith("wa:"):
+            return False
+        return True
+
     async def send_text(
         self,
         to: str,
@@ -53,6 +63,8 @@ class WPPConnectProvider(BaseWhatsAppProvider):
         keyboard: Optional[list[list[str]]] = None,
     ) -> None:
         """שליחת טקסט דרך WPPConnect Gateway עם retry ו-circuit breaker."""
+        if self._should_normalize(to):
+            to = self.normalize_phone(to)
         formatted_text = self.format_text(text)
 
         async def _send_with_retry() -> None:
@@ -138,7 +150,7 @@ class WPPConnectProvider(BaseWhatsAppProvider):
         media_type: str = "image",
         caption: Optional[str] = None,
     ) -> bool:
-        """שליחת מדיה דרך WPPConnect Gateway."""
+        """שליחת מדיה דרך WPPConnect Gateway עם retry ו-circuit breaker."""
         if not media_url:
             logger.warning(
                 "לא סופק media_url לשליחה",
@@ -146,7 +158,10 @@ class WPPConnectProvider(BaseWhatsAppProvider):
             )
             return False
 
-        async def _send() -> bool:
+        if self._should_normalize(to):
+            to = self.normalize_phone(to)
+
+        async def _send_with_retry() -> bool:
             payload: dict = {
                 "phone": to,
                 "media_url": media_url,
@@ -155,22 +170,77 @@ class WPPConnectProvider(BaseWhatsAppProvider):
             if caption:
                 payload["caption"] = self.format_text(caption)
 
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{self._gateway_url}/send-media",
-                    json=payload,
-                    timeout=30.0,
-                )
-                if response.status_code != 200:
-                    raise WhatsAppError.from_response(
-                        "send-media",
-                        response,
-                        message=f"gateway /send-media returned status {response.status_code}",
-                    )
-                return True
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                for attempt in range(self._max_retries):
+                    try:
+                        response = await client.post(
+                            f"{self._gateway_url}/send-media",
+                            json=payload,
+                        )
+                        if response.status_code == 200:
+                            return True
+
+                        if (
+                            response.status_code in self._transient_status_codes
+                            and attempt < self._max_retries - 1
+                        ):
+                            backoff = 2 ** attempt
+                            logger.warning(
+                                "שגיאה זמנית בשליחת מדיה WhatsApp, מנסה שוב",
+                                extra_data={
+                                    "phone": PhoneNumberValidator.mask(to),
+                                    "status_code": response.status_code,
+                                    "attempt": attempt + 1,
+                                    "backoff_seconds": backoff,
+                                },
+                            )
+                            await asyncio.sleep(backoff)
+                            continue
+
+                        raise WhatsAppError.from_response(
+                            "send-media",
+                            response,
+                            message=f"gateway /send-media returned status {response.status_code}",
+                        )
+                    except httpx.TimeoutException:
+                        if attempt < self._max_retries - 1:
+                            backoff = 2 ** attempt
+                            logger.warning(
+                                "WhatsApp send-media timeout, מנסה שוב",
+                                extra_data={
+                                    "phone": PhoneNumberValidator.mask(to),
+                                    "attempt": attempt + 1,
+                                    "backoff_seconds": backoff,
+                                },
+                            )
+                            await asyncio.sleep(backoff)
+                            continue
+                        raise WhatsAppError(
+                            message="gateway /send-media timeout after retries",
+                            details={"timeout": True, "attempts": self._max_retries},
+                        )
+                    except httpx.RequestError as exc:
+                        if attempt < self._max_retries - 1:
+                            backoff = 2 ** attempt
+                            logger.warning(
+                                "שגיאת רשת בשליחת מדיה WhatsApp, מנסה שוב",
+                                extra_data={
+                                    "phone": PhoneNumberValidator.mask(to),
+                                    "error": str(exc),
+                                    "attempt": attempt + 1,
+                                    "backoff_seconds": backoff,
+                                },
+                            )
+                            await asyncio.sleep(backoff)
+                            continue
+                        raise WhatsAppError(
+                            message=f"gateway /send-media network error: {str(exc)}",
+                            details={"network_error": True, "attempts": self._max_retries},
+                        )
+            return False  # לא אמור להגיע לכאן
 
         try:
-            return await self._circuit_breaker.execute(_send)
+            return await self._circuit_breaker.execute(_send_with_retry)
         except Exception as exc:
             logger.error(
                 "כשלון בשליחת מדיה WhatsApp",

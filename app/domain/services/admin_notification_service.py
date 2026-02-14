@@ -8,9 +8,9 @@ from typing import Optional
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.core.circuit_breaker import get_telegram_circuit_breaker, get_whatsapp_admin_circuit_breaker
-from app.core.exceptions import TelegramError, WhatsAppError
-from app.core.validation import TextSanitizer
+from app.core.circuit_breaker import get_telegram_circuit_breaker
+from app.core.exceptions import TelegramError
+from app.core.validation import PhoneNumberValidator, TextSanitizer
 from app.domain.services.whatsapp import get_whatsapp_admin_provider
 
 logger = get_logger(__name__)
@@ -668,7 +668,10 @@ class AdminNotificationService:
         except Exception as exc:
             logger.error(
                 "כשלון בשליחת הודעת WhatsApp למנהל",
-                extra_data={"target": phone_or_group, "error": str(exc)},
+                extra_data={
+                    "target": PhoneNumberValidator.mask(phone_or_group),
+                    "error": str(exc),
+                },
                 exc_info=True,
             )
             return False
@@ -685,6 +688,17 @@ class AdminNotificationService:
             return False
 
         provider = get_whatsapp_admin_provider()
-        return await provider.send_media(
-            to=phone_or_group, media_url=media_url, media_type="image"
-        )
+        try:
+            return await provider.send_media(
+                to=phone_or_group, media_url=media_url, media_type="image"
+            )
+        except Exception as exc:
+            logger.error(
+                "כשלון בשליחת תמונה למנהל WhatsApp",
+                extra_data={
+                    "target": PhoneNumberValidator.mask(phone_or_group),
+                    "error": str(exc),
+                },
+                exc_info=True,
+            )
+            return False

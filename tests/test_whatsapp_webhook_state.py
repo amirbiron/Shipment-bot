@@ -416,7 +416,7 @@ async def test_whatsapp_admin_root_menu_matches_reply_to_or_from_number(
         else {}
     )
     if "phone" in sent_payload:
-        assert sent_payload["phone"] == "0501234567"
+        assert sent_payload["phone"] == "+972501234567"
 
 
 @pytest.mark.asyncio

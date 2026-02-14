@@ -5,6 +5,9 @@ from pydantic_settings import BaseSettings
 from pydantic import field_validator, model_validator
 from typing import Optional
 
+# ספקי WhatsApp נתמכים — בעתיד: "pywa"
+VALID_WHATSAPP_PROVIDERS = {"wppconnect"}
+
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables"""
@@ -44,6 +47,18 @@ class Settings(BaseSettings):
     WHATSAPP_GATEWAY_URL: str = "http://localhost:3000"
     # סוג ספק WhatsApp: "wppconnect" (ברירת מחדל) או "pywa" (Cloud API — בעתיד)
     WHATSAPP_PROVIDER: str = "wppconnect"
+
+    @field_validator("WHATSAPP_PROVIDER", mode="before")
+    @classmethod
+    def validate_whatsapp_provider(cls, v: str) -> str:
+        """נרמול ובדיקת ערכים מותרים — נכשל מהר בהפעלה ולא בזמן ריצה"""
+        v = v.strip().lower()
+        if v not in VALID_WHATSAPP_PROVIDERS:
+            raise ValueError(
+                f"WHATSAPP_PROVIDER='{v}' לא נתמך. "
+                f"ערכים מותרים: {', '.join(sorted(VALID_WHATSAPP_PROVIDERS))}"
+            )
+        return v
 
     @field_validator("WHATSAPP_GATEWAY_URL", mode="before")
     @classmethod

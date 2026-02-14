@@ -6,7 +6,6 @@ import asyncio
 import re
 from datetime import datetime, timedelta, timezone
 
-import httpx
 from fastapi import APIRouter, Depends, BackgroundTasks
 from pydantic import BaseModel
 from typing import Optional
@@ -25,10 +24,8 @@ from app.state_machine.manager import StateManager
 from app.domain.services import AdminNotificationService
 from app.domain.services.courier_approval_service import CourierApprovalService
 from app.core.logging import get_logger
-from app.core.circuit_breaker import get_whatsapp_circuit_breaker
-from app.core.validation import PhoneNumberValidator, convert_html_to_whatsapp
+from app.core.validation import PhoneNumberValidator
 from app.core.config import settings
-from app.core.exceptions import WhatsAppError
 from app.domain.services.whatsapp import get_whatsapp_provider
 
 logger = get_logger(__name__)

@@ -22,9 +22,9 @@ from app.db.models.user import User, UserRole, ApprovalStatus
 from app.domain.services.outbox_service import OutboxService
 from app.domain.services.whatsapp import get_whatsapp_provider
 from app.core.logging import get_logger, set_correlation_id
-from app.core.circuit_breaker import get_telegram_circuit_breaker, get_whatsapp_circuit_breaker
-from app.core.exceptions import TelegramError, WhatsAppError
-from app.core.validation import PhoneNumberValidator, convert_html_to_whatsapp
+from app.core.circuit_breaker import get_telegram_circuit_breaker
+from app.core.exceptions import TelegramError
+from app.core.validation import PhoneNumberValidator
 from sqlalchemy import select
 
 logger = get_logger(__name__)

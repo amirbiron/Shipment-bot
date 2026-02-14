@@ -291,6 +291,124 @@ class TestWPPConnectHelpers:
         provider = self._make_provider()
         assert provider.provider_name == "wppconnect"
 
+    @pytest.mark.unit
+    def test_should_normalize_regular_phone(self) -> None:
+        """מספר טלפון רגיל — צריך לנרמל."""
+        provider = self._make_provider()
+        assert provider._should_normalize("0501234567") is True
+        assert provider._should_normalize("+972501234567") is True
+
+    @pytest.mark.unit
+    def test_should_not_normalize_group_id(self) -> None:
+        """מזהה קבוצה (@g.us) — לא לנרמל."""
+        provider = self._make_provider()
+        assert provider._should_normalize("123456@g.us") is False
+
+    @pytest.mark.unit
+    def test_should_not_normalize_lid(self) -> None:
+        """מזהה LID (@lid) — לא לנרמל."""
+        provider = self._make_provider()
+        assert provider._should_normalize("123456@lid") is False
+
+    @pytest.mark.unit
+    def test_should_not_normalize_placeholder(self) -> None:
+        """placeholder (wa:xxx) — לא לנרמל."""
+        provider = self._make_provider()
+        assert provider._should_normalize("wa:abc123") is False
+
+    @pytest.mark.unit
+    def test_should_not_normalize_empty(self) -> None:
+        provider = self._make_provider()
+        assert provider._should_normalize("") is False
+
+
+# ============================================================================
+# WPPConnectProvider — send_media retry
+# ============================================================================
+
+
+class TestWPPConnectSendMediaRetry:
+    """בדיקות retry בשליחת מדיה."""
+
+    def _make_provider(self) -> WPPConnectProvider:
+        cb = CircuitBreaker("test_media_retry", CircuitBreakerConfig(failure_threshold=5))
+        return WPPConnectProvider(circuit_breaker=cb)
+
+    @pytest.mark.asyncio
+    async def test_send_media_retry_on_transient_error(self) -> None:
+        """retry על שגיאה זמנית (502) ואז הצלחה."""
+        provider = self._make_provider()
+
+        error_response = MagicMock(spec=Response)
+        error_response.status_code = 502
+
+        ok_response = MagicMock(spec=Response)
+        ok_response.status_code = 200
+
+        with patch("httpx.AsyncClient") as mock_client, \
+             patch("asyncio.sleep", new_callable=AsyncMock):
+            mock_instance = AsyncMock()
+            mock_instance.post = AsyncMock(
+                side_effect=[error_response, ok_response]
+            )
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=None)
+            mock_client.return_value = mock_instance
+
+            result = await provider.send_media(
+                to="+972501234567",
+                media_url="https://example.com/photo.jpg",
+            )
+
+            assert result is True
+            assert mock_instance.post.call_count == 2
+
+
+# ============================================================================
+# WHATSAPP_PROVIDER config validation
+# ============================================================================
+
+
+class TestWhatsAppProviderConfig:
+    """בדיקות ולידציה להגדרת WHATSAPP_PROVIDER."""
+
+    @pytest.mark.unit
+    def test_invalid_provider_config_raises(self) -> None:
+        """ערך לא תקין ב-WHATSAPP_PROVIDER — ValueError בהפעלה."""
+        from pydantic import ValidationError
+        from app.core.config import Settings
+
+        with pytest.raises(ValidationError, match="לא נתמך"):
+            Settings(
+                WHATSAPP_PROVIDER="invalid_provider",
+                JWT_SECRET_KEY="test-key",
+                DEBUG=True,
+            )
+
+    @pytest.mark.unit
+    def test_provider_config_strips_whitespace(self) -> None:
+        """רווחים מסביב לערך — נמחקים."""
+        from app.core.config import Settings
+
+        s = Settings(
+            WHATSAPP_PROVIDER="  wppconnect  ",
+            JWT_SECRET_KEY="test-key",
+            DEBUG=True,
+        )
+        assert s.WHATSAPP_PROVIDER == "wppconnect"
+
+    @pytest.mark.unit
+    def test_provider_config_case_insensitive(self) -> None:
+        """אותיות גדולות — מנורמל ל-lowercase."""
+        from app.core.config import Settings
+
+        s = Settings(
+            WHATSAPP_PROVIDER="WPPConnect",
+            JWT_SECRET_KEY="test-key",
+            DEBUG=True,
+        )
+        assert s.WHATSAPP_PROVIDER == "wppconnect"
+
 
 # ============================================================================
 # Provider Factory
