@@ -25,6 +25,7 @@ from app.core.logging import get_logger
 from app.core.circuit_breaker import get_telegram_circuit_breaker
 from app.core.config import settings
 from app.core.exceptions import TelegramError
+from app.api.dependencies.webhook_auth import verify_telegram_webhook_token
 
 logger = get_logger(__name__)
 
@@ -706,13 +707,16 @@ async def _route_to_role_menu(
     summary="Webhook - Telegram (קבלת עדכונים נכנסים)",
     description=(
         "נקודת כניסה לקבלת עדכונים מ-Telegram Bot API. "
-        "תומכת גם בהודעות טקסט/תמונות וגם ב-callback queries (כפתורים)."
+        "תומכת גם בהודעות טקסט/תמונות וגם ב-callback queries (כפתורים). "
+        "מאומת באמצעות X-Telegram-Bot-Api-Secret-Token."
     ),
+    responses={403: {"description": "טוקן אימות webhook חסר או שגוי"}},
 )
 async def telegram_webhook(
     update: TelegramUpdate,
     background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(verify_telegram_webhook_token),
 ):
     """
     Handle incoming Telegram messages.

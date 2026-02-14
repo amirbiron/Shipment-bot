@@ -63,6 +63,7 @@ class Settings(BaseSettings):
     # Telegram
     TELEGRAM_BOT_TOKEN: Optional[str] = None
     TELEGRAM_ADMIN_CHAT_ID: Optional[str] = None  # קבוצת מנהלים בטלגרם - לסיכומי אישור/דחייה
+    TELEGRAM_WEBHOOK_SECRET_TOKEN: str = ""  # אימות webhook — openssl rand -hex 32
 
     # Credit settings
     DEFAULT_CREDIT_LIMIT: float = -500.0  # Minimum balance allowed (500₪ credit)
@@ -114,7 +115,8 @@ class Settings(BaseSettings):
         """ולידציות חוצות-שדות לסביבת פרודקשן.
 
         1. JWT_SECRET_KEY ריק בפרודקשן — זורק ValueError שעוצר את ההפעלה.
-        2. DEBUG=True עם DB חיצוני — אזהרה שייתכן ששכחו לכבות DEBUG.
+        2. TELEGRAM_WEBHOOK_SECRET_TOKEN ריק — אזהרה (webhook לא מאומת).
+        3. DEBUG=True עם DB חיצוני — אזהרה שייתכן ששכחו לכבות DEBUG.
         """
         import warnings
 
@@ -128,6 +130,15 @@ class Settings(BaseSettings):
                 )
             warnings.warn(
                 "JWT_SECRET_KEY ריק — הפאנל לא יעבוד. הגדר בסביבת הייצור: openssl rand -hex 32",
+                stacklevel=2,
+            )
+
+        # --- TELEGRAM_WEBHOOK_SECRET_TOKEN ---
+        if not self.TELEGRAM_WEBHOOK_SECRET_TOKEN and self.TELEGRAM_BOT_TOKEN:
+            warnings.warn(
+                "TELEGRAM_WEBHOOK_SECRET_TOKEN ריק — webhook של טלגרם לא מאומת. "
+                "הגדר: export TELEGRAM_WEBHOOK_SECRET_TOKEN=$(openssl rand -hex 32) "
+                "ועדכן את ה-secret_token בקריאת setWebhook.",
                 stacklevel=2,
             )
 
