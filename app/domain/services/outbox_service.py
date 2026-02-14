@@ -150,16 +150,23 @@ class OutboxService:
     async def queue_capture_notification(
         self,
         delivery: Delivery,
-        courier_id: int
+        courier_id: int,
+        sender: User | None = None,
     ) -> List[OutboxMessage]:
-        """Queue notifications when a delivery is captured"""
+        """Queue notifications when a delivery is captured.
+
+        Args:
+            sender: אובייקט שולח טעון מראש (eager loaded).
+                    אם לא סופק — נשלף מה-DB כ-fallback.
+        """
         messages = []
 
-        # שליפת פרטי השולח לקביעת פלטפורמה ומזהה נמען
-        sender_result = await self.db.execute(
-            select(User).where(User.id == delivery.sender_id)
-        )
-        sender = sender_result.scalar_one_or_none()
+        # שימוש בשולח שהועבר, או שליפה מה-DB כ-fallback
+        if sender is None:
+            sender_result = await self.db.execute(
+                select(User).where(User.id == delivery.sender_id)
+            )
+            sender = sender_result.scalar_one_or_none()
         if not sender:
             return messages
 

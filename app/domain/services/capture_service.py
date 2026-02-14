@@ -13,6 +13,7 @@ from sqlalchemy import select, text
 from app.db.models.delivery import Delivery, DeliveryStatus
 from app.db.models.courier_wallet import CourierWallet
 from app.db.models.wallet_ledger import WalletLedger, LedgerEntryType
+from app.db.queries import delivery_with_sender
 from app.domain.services.outbox_service import OutboxService
 
 
@@ -85,13 +86,14 @@ class CaptureService:
         """
         try:
             # Start atomic operation
-            # 1. Lock delivery record
+            # 1. Lock delivery record (עם eager load של sender לחיסכון query נוסף בהתראה)
             delivery_result = await self.db.execute(
                 select(Delivery)
+                .options(*delivery_with_sender())
                 .where(Delivery.id == delivery_id)
                 .with_for_update()
             )
-            delivery = delivery_result.scalar_one_or_none()
+            delivery = delivery_result.scalars().unique().one_or_none()
 
             if not delivery:
                 return False, "המשלוח לא נמצא", None
@@ -155,8 +157,10 @@ class CaptureService:
             )
             self.db.add(ledger_entry)
 
-            # Queue notification messages via outbox
-            await self.outbox_service.queue_capture_notification(delivery, courier_id)
+            # Queue notification messages via outbox (sender כבר טעון — חוסך query נוסף)
+            await self.outbox_service.queue_capture_notification(
+                delivery, courier_id, sender=delivery.sender
+            )
 
             # 8. Commit או flush — כשנקרא מ-workflow, הקורא מנהל את הטרנזקציה
             if auto_commit:
