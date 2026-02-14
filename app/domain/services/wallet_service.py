@@ -159,8 +159,8 @@ class WalletService:
         self,
         courier_id: int,
         limit: int = 20
-    ) -> list:
-        """Get transaction history for courier"""
+    ) -> list[WalletLedger]:
+        """שליפת היסטוריית תנועות ארנק של שליח"""
         result = await self.db.execute(
             select(WalletLedger)
             .where(WalletLedger.courier_id == courier_id)

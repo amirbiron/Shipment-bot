@@ -5,9 +5,15 @@ Implements the worker side of the Transactional Outbox pattern.
 Processes pending messages from the outbox table and sends them
 via WhatsApp or Telegram.
 """
+from __future__ import annotations
+
 import asyncio
 from datetime import datetime, timedelta, timezone
 from contextlib import contextmanager
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.workers.celery_app import celery_app
 from app.db.database import get_task_session
@@ -143,7 +149,7 @@ async def _send_telegram_message(chat_id: str, content: dict) -> bool:
         return False
 
 
-async def _get_courier_recipients(db, platform: MessagePlatform) -> list:
+async def _get_courier_recipients(db: "AsyncSession", platform: MessagePlatform) -> list[User]:
     """שליפת שליחים מאושרים ופעילים לפלטפורמה נתונה"""
     result = await db.execute(
         select(User).where(
@@ -157,8 +163,8 @@ async def _get_courier_recipients(db, platform: MessagePlatform) -> list:
 
 
 async def _get_dispatcher_recipients(
-    db, station_id: int, platform: MessagePlatform
-) -> list:
+    db: "AsyncSession", station_id: int, platform: MessagePlatform
+) -> list[User]:
     """שלב 4: שליפת סדרנים פעילים של תחנה פעילה לפלטפורמה נתונה"""
     from app.db.models.station_dispatcher import StationDispatcher
     from app.db.models.station import Station
@@ -423,10 +429,19 @@ def broadcast_to_couriers(message_text: str, delivery_id: int = None):
             # Execute all sends in parallel
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
-            # Filter out exceptions and convert to proper results
+            # סינון exceptions עם לוג מפורט — מונע אובדן מידע דיאגנוסטי
             final_results = []
             for r in results:
                 if isinstance(r, Exception):
+                    logger.error(
+                        "כשלון בשליחת broadcast לשליח",
+                        extra_data={
+                            "delivery_id": delivery_id,
+                            "error": str(r),
+                            "error_type": type(r).__name__,
+                        },
+                        exc_info=r,
+                    )
                     final_results.append({"success": False, "error": str(r)})
                 else:
                     final_results.append(r)

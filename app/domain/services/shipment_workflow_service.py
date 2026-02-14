@@ -208,9 +208,8 @@ class ShipmentWorkflowService:
         delivery.approved_at = datetime.now(timezone.utc)
         delivery.approval_decision = "approved"
 
-        # שליפת משתמשים + הודעות outbox לפני ה-commit — אטומיות מלאה
-        courier = await self._get_user(courier_id)
-        dispatcher = await self._get_user(dispatcher_id)
+        # שליפת שני משתמשים בשאילתה אחת במקום שתיים נפרדות
+        courier, dispatcher = await self._get_users_batch(courier_id, dispatcher_id)
 
         if courier:
             await self._notify_courier_approved(delivery, courier)
@@ -276,9 +275,8 @@ class ShipmentWorkflowService:
         delivery.approved_at = datetime.now(timezone.utc)
         delivery.approval_decision = "rejected"
 
-        # שליפת משתמשים + הודעות outbox לפני ה-commit — אטומיות מלאה
-        courier = await self._get_user(courier_id)
-        dispatcher = await self._get_user(dispatcher_id)
+        # שליפת שני משתמשים בשאילתה אחת במקום שתיים נפרדות
+        courier, dispatcher = await self._get_users_batch(courier_id, dispatcher_id)
 
         if courier:
             await self._notify_courier_rejected(delivery, courier)
@@ -354,6 +352,20 @@ class ShipmentWorkflowService:
             select(User).where(User.id == user_id)
         )
         return result.scalar_one_or_none()
+
+    async def _get_users_batch(
+        self, *user_ids: int
+    ) -> tuple[Optional[User], ...]:
+        """שליפת מספר משתמשים בשאילתה אחת — חוסך round-trip ל-DB"""
+        valid_ids = [uid for uid in user_ids if uid]
+        if not valid_ids:
+            return tuple(None for _ in user_ids)
+
+        result = await self.db.execute(
+            select(User).where(User.id.in_(valid_ids))
+        )
+        users_by_id: dict[int, User] = {u.id: u for u in result.scalars().all()}
+        return tuple(users_by_id.get(uid) for uid in user_ids)
 
     async def _notify_courier_approved(
         self, delivery: Delivery, courier: User

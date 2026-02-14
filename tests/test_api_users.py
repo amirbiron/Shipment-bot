@@ -2,9 +2,11 @@
 Tests for User API Endpoints
 """
 import pytest
+from unittest.mock import patch
 from httpx import AsyncClient
 
 from app.db.models.user import User, UserRole
+from app.core.config import settings
 
 
 class TestUserAPI:
@@ -85,10 +87,12 @@ class TestUserAPI:
         test_client: AsyncClient,
         sample_sender: User
     ):
-        """Test getting user by phone number"""
-        response = await test_client.get(
-            f"/api/users/phone/{sample_sender.phone_number}"
-        )
+        """Test getting user by phone number (requires admin API key)"""
+        with patch.object(settings, "ADMIN_API_KEY", "test-key"):
+            response = await test_client.get(
+                f"/api/users/phone/{sample_sender.phone_number}",
+                headers={"X-Admin-API-Key": "test-key"},
+            )
 
         assert response.status_code == 200
         data = response.json()
