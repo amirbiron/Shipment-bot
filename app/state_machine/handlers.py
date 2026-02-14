@@ -730,6 +730,16 @@ class CourierStateHandler:
 
         return None
 
+    # מפתחות קונטקסט של רישום KYC — מנוקים בחזרה ל-MENU
+    _KYC_CONTEXT_KEYS = {
+        "document_file_id", "selfie_file_id", "vehicle_category",
+        "vehicle_photo_file_id", "changing_area",
+    }
+
+    def _is_registration_flow_state(self, state: str) -> bool:
+        """בודק אם המצב שייך לזרימת רישום שליח"""
+        return state.startswith("COURIER.REGISTER.") or state == CourierState.PENDING_APPROVAL.value
+
     async def handle_message(
         self,
         user: User,
@@ -744,11 +754,44 @@ class CourierStateHandler:
         handler = self._get_handler(current_state)
         response, new_state, context_update = await handler(user, message, context, photo_file_id)
 
-        if new_state != current_state:
+        # ניקוי קונטקסט KYC בחזרה ל-MENU מזרימת רישום
+        if (
+            new_state == CourierState.MENU.value
+            and self._is_registration_flow_state(current_state)
+        ):
+            clean_context = {
+                k: v for k, v in context.items()
+                if k not in self._KYC_CONTEXT_KEYS
+            }
+            if context_update:
+                for k, v in context_update.items():
+                    if k not in self._KYC_CONTEXT_KEYS:
+                        clean_context[k] = v
             await self.state_manager.force_state(
-                user.id, platform, new_state,
-                {**context, **context_update} if context_update else context
+                user.id, platform, new_state, clean_context
             )
+            return response, new_state
+
+        if new_state != current_state:
+            # ניסיון מעבר מצב עם ולידציה
+            success = await self.state_manager.transition_to(
+                user.id, platform, new_state, context_update
+            )
+            if not success:
+                # המעבר נכשל - כפיית מעבר (דילוג על ולידציה)
+                logger.info(
+                    "כפיית מעבר מצב בשליח",
+                    extra_data={
+                        "user_id": user.id,
+                        "platform": platform,
+                        "current_state": current_state,
+                        "new_state": new_state
+                    }
+                )
+                await self.state_manager.force_state(
+                    user.id, platform, new_state,
+                    {**context, **context_update} if context_update else context
+                )
         elif context_update:
             for key, value in context_update.items():
                 await self.state_manager.update_context(user.id, platform, key, value)
@@ -775,6 +818,14 @@ class CourierStateHandler:
             CourierState.VIEW_HISTORY.value: self._handle_view_history,
             CourierState.VIEW_ACTIVE.value: self._handle_view_active,
             CourierState.SUPPORT.value: self._handle_support,
+
+            # מצבים המטופלים בעיקר דרך webhook קבוצתי (callback queries).
+            # כאשר שליח שולח הודעה ישירה בעודו באחד מהמצבים הללו,
+            # ה-handler מציג הודעת הכוונה ומחזיר לתפריט.
+            CourierState.VIEW_AVAILABLE.value: self._handle_view_available,
+            CourierState.CAPTURE_CONFIRM.value: self._handle_capture_confirm,
+            CourierState.MARK_PICKED_UP.value: self._handle_mark_picked_up,
+            CourierState.MARK_DELIVERED.value: self._handle_mark_delivered,
         }
         return handlers.get(state, self._handle_unknown)
 
@@ -1179,6 +1230,60 @@ class CourierStateHandler:
             keyboard=[["🔙 חזרה לתפריט"]]
         )
         return response, CourierState.SUPPORT.value, {}
+
+    # ==================== מצבי משלוח (webhook קבוצתי) ====================
+    # מצבים אלה מופעלים בעיקר דרך callback queries בקבוצת טלגרם.
+    # כאשר שליח שולח הודעה ישירה בעודו באחד מהמצבים הללו,
+    # ה-handlers מציגים הנחיה מתאימה.
+
+    async def _handle_view_available(self, user: User, message: str, context: dict, photo_file_id: str):
+        """צפייה במשלוחים זמינים - מטופל בעיקר דרך הקבוצה"""
+        if "חזרה" in message or "תפריט" in message:
+            return await self._handle_menu(user, "תפריט", context, None)
+
+        response = MessageResponse(
+            "📋 <b>משלוחים זמינים</b>\n\n"
+            "משלוחים זמינים מוצגים בקבוצת הטלגרם.\n"
+            "לחץ על 'תפוס' בקבוצה כדי לתפוס משלוח.",
+            keyboard=[["🔙 חזרה לתפריט"]]
+        )
+        return response, CourierState.MENU.value, {}
+
+    async def _handle_capture_confirm(self, user: User, message: str, context: dict, photo_file_id: str):
+        """אישור תפיסת משלוח - מטופל בעיקר דרך callback query"""
+        if "חזרה" in message or "תפריט" in message:
+            return await self._handle_menu(user, "תפריט", context, None)
+
+        response = MessageResponse(
+            "📦 <b>תפיסת משלוח</b>\n\n"
+            "כדי לתפוס משלוח, לחץ על כפתור 'תפוס' בהודעת המשלוח בקבוצה.",
+            keyboard=[["🔙 חזרה לתפריט"]]
+        )
+        return response, CourierState.MENU.value, {}
+
+    async def _handle_mark_picked_up(self, user: User, message: str, context: dict, photo_file_id: str):
+        """סימון איסוף משלוח - מטופל בעיקר דרך callback query"""
+        if "חזרה" in message or "תפריט" in message:
+            return await self._handle_menu(user, "תפריט", context, None)
+
+        response = MessageResponse(
+            "📦 <b>סימון איסוף</b>\n\n"
+            "כדי לסמן שאספת את המשלוח, השתמש בכפתורים בהודעת המשלוח.",
+            keyboard=[["🔙 חזרה לתפריט"]]
+        )
+        return response, CourierState.MENU.value, {}
+
+    async def _handle_mark_delivered(self, user: User, message: str, context: dict, photo_file_id: str):
+        """סימון מסירת משלוח - מטופל בעיקר דרך callback query"""
+        if "חזרה" in message or "תפריט" in message:
+            return await self._handle_menu(user, "תפריט", context, None)
+
+        response = MessageResponse(
+            "📦 <b>סימון מסירה</b>\n\n"
+            "כדי לסמן שמסרת את המשלוח, השתמש בכפתורים בהודעת המשלוח.",
+            keyboard=[["🔙 חזרה לתפריט"]]
+        )
+        return response, CourierState.MENU.value, {}
 
     async def _handle_unknown(self, user: User, message: str, context: dict, photo_file_id: str):
         """Handle unknown state - restart registration or show appropriate screen"""

@@ -40,6 +40,30 @@ class DispatcherStateHandler:
         self.station_service = StationService(db)
         self.delivery_service = DeliveryService(db)
 
+    # מפתחות קונטקסט של הוספת משלוח — מנוקים בחזרה ל-MENU
+    _SHIPMENT_CONTEXT_KEYS = {
+        "pickup_city", "pickup_street", "pickup_number", "pickup_address",
+        "dropoff_city", "dropoff_street", "dropoff_number", "dropoff_address",
+        "description", "fee",
+    }
+
+    # מפתחות קונטקסט של חיוב ידני — מנוקים בחזרה ל-MENU
+    _MANUAL_CHARGE_CONTEXT_KEYS = {
+        "charge_driver_name", "charge_amount", "charge_description",
+    }
+
+    def _is_add_shipment_flow_state(self, state: str) -> bool:
+        """בודק אם המצב שייך לזרימת הוספת משלוח"""
+        return state.startswith("DISPATCHER.ADD_SHIPMENT.")
+
+    def _is_manual_charge_flow_state(self, state: str) -> bool:
+        """בודק אם המצב שייך לזרימת חיוב ידני"""
+        return state.startswith("DISPATCHER.MANUAL_CHARGE.")
+
+    def _is_multi_step_flow_state(self, state: str) -> bool:
+        """בודק אם המצב שייך לזרימה רב-שלבית"""
+        return self._is_add_shipment_flow_state(state) or self._is_manual_charge_flow_state(state)
+
     async def handle_message(
         self,
         user: User,
@@ -54,11 +78,42 @@ class DispatcherStateHandler:
         handler = self._get_handler(current_state)
         response, new_state, context_update = await handler(user, message, context)
 
-        if new_state != current_state:
+        # ניקוי קונטקסט זרימת משלוח/חיוב בחזרה ל-MENU
+        if new_state == DispatcherState.MENU.value and self._is_multi_step_flow_state(current_state):
+            keys_to_clean = self._SHIPMENT_CONTEXT_KEYS | self._MANUAL_CHARGE_CONTEXT_KEYS
+            clean_context = {
+                k: v for k, v in context.items()
+                if k not in keys_to_clean
+            }
+            if context_update:
+                for k, v in context_update.items():
+                    if k not in keys_to_clean:
+                        clean_context[k] = v
             await self.state_manager.force_state(
-                user.id, platform, new_state,
-                {**context, **context_update} if context_update else context
+                user.id, platform, new_state, clean_context
             )
+            return response, new_state
+
+        if new_state != current_state:
+            # ניסיון מעבר מצב עם ולידציה
+            success = await self.state_manager.transition_to(
+                user.id, platform, new_state, context_update
+            )
+            if not success:
+                # המעבר נכשל - כפיית מעבר (דילוג על ולידציה)
+                logger.info(
+                    "כפיית מעבר מצב בסדרן",
+                    extra_data={
+                        "user_id": user.id,
+                        "platform": platform,
+                        "current_state": current_state,
+                        "new_state": new_state
+                    }
+                )
+                await self.state_manager.force_state(
+                    user.id, platform, new_state,
+                    {**context, **context_update} if context_update else context
+                )
         elif context_update:
             for key, value in context_update.items():
                 await self.state_manager.update_context(user.id, platform, key, value)
@@ -569,5 +624,9 @@ class DispatcherStateHandler:
     # ==================== Unknown ====================
 
     async def _handle_unknown(self, user: User, message: str, context: dict):
-        """ניתוב ברירת מחדל - חזרה לתפריט סדרן"""
-        return await self._handle_menu(user, "תפריט", context)
+        """ניתוב ברירת מחדל - הצגת תפריט סדרן ללא ניתוב מילות מפתח (guard)"""
+        logger.warning(
+            "סדרן במצב לא מוכר, מחזיר לתפריט",
+            extra_data={"user_id": user.id, "message_length": len(message)}
+        )
+        return await self._show_menu(user, context)
