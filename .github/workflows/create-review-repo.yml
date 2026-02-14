@@ -1,0 +1,73 @@
+name: יצירת ריפו לסקירת קוד
+
+# הפעלה ידנית מ-GitHub UI
+on:
+  workflow_dispatch:
+    inputs:
+      repo_name:
+        description: 'שם הריפו לסקירה (ייווצר כריפו פרטי)'
+        required: true
+        default: 'shipment-review'
+      reviewer:
+        description: 'שם משתמש GitHub של הסוקר (אופציונלי - יתווסף כ-collaborator עם הרשאת Read)'
+        required: false
+        default: ''
+
+jobs:
+  create-review-repo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: הגדרת Git
+        run: |
+          git config --global user.name "Review Bot"
+          git config --global user.email "noreply@review.local"
+
+      - name: יצירת ריפו מסונן ודחיפה ל-GitHub
+        env:
+          GH_TOKEN: ${{ secrets.REVIEW_REPO_PAT }}
+        run: |
+          bash scripts/create_review_repo.sh --github "${{ inputs.repo_name }}"
+
+      - name: הוספת סוקר כ-collaborator
+        if: inputs.reviewer != ''
+        env:
+          GH_TOKEN: ${{ secrets.REVIEW_REPO_PAT }}
+        run: |
+          GITHUB_USER=$(gh api user --jq '.login')
+          gh api "repos/${GITHUB_USER}/${{ inputs.repo_name }}/collaborators/${{ inputs.reviewer }}" \
+            -X PUT -f permission=pull
+          echo "הסוקר ${{ inputs.reviewer }} הוזמן בהצלחה"
+
+      - name: סיכום
+        env:
+          GH_TOKEN: ${{ secrets.REVIEW_REPO_PAT }}
+        run: |
+          GITHUB_USER=$(gh api user --jq '.login')
+          REPO_URL="https://github.com/${GITHUB_USER}/${{ inputs.repo_name }}"
+
+          echo "## ריפו לסקירת קוד נוצר בהצלחה" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**קישור:** [${REPO_URL}](${REPO_URL})" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [[ -n "${{ inputs.reviewer }}" ]]; then
+            echo "**סוקר:** \`${{ inputs.reviewer }}\` הוזמן עם הרשאת Read" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "### קבצים שנכללו" >> $GITHUB_STEP_SUMMARY
+          echo "- \`app/\` - קוד בקאנד" >> $GITHUB_STEP_SUMMARY
+          echo "- \`tests/\` - בדיקות" >> $GITHUB_STEP_SUMMARY
+          echo "- \`frontend/src/\` - קוד פרונטאנד" >> $GITHUB_STEP_SUMMARY
+          echo "- \`pytest.ini\`, \`mypy.ini\` - הגדרות בדיקות" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### לאחר סיום הסקירה - מחיקת הריפו" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "gh repo delete ${GITHUB_USER}/${{ inputs.repo_name }} --yes" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
