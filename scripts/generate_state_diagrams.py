@@ -95,6 +95,10 @@ DISPATCHER_LABELS: dict[str, str] = {
 
 STATION_OWNER_LABELS: dict[str, str] = {
     StationOwnerState.MENU.value: "תפריט תחנה",
+    StationOwnerState.MANAGE_OWNERS.value: "ניהול בעלים",
+    StationOwnerState.ADD_OWNER_PHONE.value: "טלפון בעלים חדש",
+    StationOwnerState.REMOVE_OWNER_SELECT.value: "בחירת בעלים להסרה",
+    StationOwnerState.CONFIRM_REMOVE_OWNER.value: "אישור הסרת בעלים",
     StationOwnerState.MANAGE_DISPATCHERS.value: "ניהול סדרנים",
     StationOwnerState.ADD_DISPATCHER_PHONE.value: "טלפון סדרן חדש",
     StationOwnerState.REMOVE_DISPATCHER_SELECT.value: "בחירת סדרן להסרה",
