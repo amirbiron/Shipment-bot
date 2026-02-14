@@ -42,6 +42,8 @@ class Settings(BaseSettings):
 
     # WhatsApp Gateway
     WHATSAPP_GATEWAY_URL: str = "http://localhost:3000"
+    # סוג ספק WhatsApp: "wppconnect" (ברירת מחדל) או "pywa" (Cloud API — בעתיד)
+    WHATSAPP_PROVIDER: str = "wppconnect"
 
     @field_validator("WHATSAPP_GATEWAY_URL", mode="before")
     @classmethod

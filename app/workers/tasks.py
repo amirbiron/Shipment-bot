@@ -20,6 +20,7 @@ from app.db.database import get_task_session
 from app.db.models.outbox_message import OutboxMessage, MessagePlatform, MessageStatus
 from app.db.models.user import User, UserRole, ApprovalStatus
 from app.domain.services.outbox_service import OutboxService
+from app.domain.services.whatsapp import get_whatsapp_provider
 from app.core.logging import get_logger, set_correlation_id
 from app.core.circuit_breaker import get_telegram_circuit_breaker, get_whatsapp_circuit_breaker
 from app.core.exceptions import TelegramError, WhatsAppError
@@ -64,43 +65,19 @@ def run_async(coro):
 
 async def _send_whatsapp_message(phone: str, content: dict) -> bool:
     """
-    Send message via WhatsApp Gateway with circuit breaker protection.
-    ממיר אוטומטית תגי HTML לפורמט וואטסאפ.
+    שליחת הודעה דרך ספק WhatsApp הפעיל — מאציל ל-provider.
+    ממיר אוטומטית תגי HTML לפורמט הספק.
     """
-    import httpx
-    from app.core.config import settings
-
-    # המרת תגי HTML לפורמט וואטסאפ (לדוגמה: <b> -> *)
     message_text = content.get("message_text", "")
-    formatted_text = convert_html_to_whatsapp(message_text)
-
-    circuit_breaker = get_whatsapp_circuit_breaker()
-
-    async def _send():
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{settings.WHATSAPP_GATEWAY_URL}/send",
-                json={
-                    "phone": phone,
-                    "message": formatted_text
-                },
-                timeout=30.0
-            )
-            if response.status_code != 200:
-                raise WhatsAppError.from_response(
-                    "send",
-                    response,
-                    message=f"gateway /send returned status {response.status_code}",
-                )
-            return True
-
+    provider = get_whatsapp_provider()
     try:
-        return await circuit_breaker.execute(_send)
-    except Exception as e:
+        await provider.send_text(to=phone, text=message_text)
+        return True
+    except Exception as exc:
         logger.error(
             "WhatsApp send error",
-            extra_data={"phone": PhoneNumberValidator.mask(phone), "error": str(e)},
-            exc_info=True
+            extra_data={"phone": PhoneNumberValidator.mask(phone), "error": str(exc)},
+            exc_info=True,
         )
         return False
 

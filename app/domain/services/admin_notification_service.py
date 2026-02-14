@@ -11,6 +11,7 @@ from app.core.logging import get_logger
 from app.core.circuit_breaker import get_telegram_circuit_breaker, get_whatsapp_admin_circuit_breaker
 from app.core.exceptions import TelegramError, WhatsAppError
 from app.core.validation import TextSanitizer
+from app.domain.services.whatsapp import get_whatsapp_admin_provider
 
 logger = get_logger(__name__)
 
@@ -655,45 +656,26 @@ class AdminNotificationService:
         text: str,
         keyboard: list = None
     ) -> bool:
-        """שליחת הודעה למנהל/קבוצה בוואטסאפ"""
+        """שליחת הודעה למנהל/קבוצה בוואטסאפ — דרך ספק WhatsApp admin."""
         if not settings.WHATSAPP_GATEWAY_URL:
             logger.warning("WhatsApp gateway URL not configured")
             return False
 
-        circuit_breaker = get_whatsapp_admin_circuit_breaker()
-
-        async def _send():
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{settings.WHATSAPP_GATEWAY_URL}/send",
-                    json={
-                        "phone": phone_or_group,
-                        "message": text,
-                        "keyboard": keyboard
-                    },
-                    timeout=30.0
-                )
-                if response.status_code != 200:
-                    raise WhatsAppError.from_response(
-                        "send",
-                        response,
-                        message=f"gateway /send returned status {response.status_code}",
-                    )
-                return True
-
+        provider = get_whatsapp_admin_provider()
         try:
-            return await circuit_breaker.execute(_send)
-        except Exception as e:
+            await provider.send_text(to=phone_or_group, text=text, keyboard=keyboard)
+            return True
+        except Exception as exc:
             logger.error(
-                "Error sending WhatsApp admin message",
-                extra_data={"target": phone_or_group, "error": str(e)},
-                exc_info=True
+                "כשלון בשליחת הודעת WhatsApp למנהל",
+                extra_data={"target": phone_or_group, "error": str(exc)},
+                exc_info=True,
             )
             return False
 
     @staticmethod
     async def _send_whatsapp_admin_photo(phone_or_group: str, media_url: str) -> bool:
-        """שליחת תמונה למנהל/קבוצה בוואטסאפ"""
+        """שליחת תמונה למנהל/קבוצה בוואטסאפ — דרך ספק WhatsApp admin."""
         if not settings.WHATSAPP_GATEWAY_URL:
             logger.warning("WhatsApp gateway URL not configured for photo sending")
             return False
@@ -702,33 +684,7 @@ class AdminNotificationService:
             logger.warning("No media_url provided for WhatsApp admin photo")
             return False
 
-        circuit_breaker = get_whatsapp_admin_circuit_breaker()
-
-        async def _send():
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{settings.WHATSAPP_GATEWAY_URL}/send-media",
-                    json={
-                        "phone": phone_or_group,
-                        "media_url": media_url,
-                        "media_type": "image"
-                    },
-                    timeout=30.0
-                )
-                if response.status_code != 200:
-                    raise WhatsAppError.from_response(
-                        "send-media",
-                        response,
-                        message=f"gateway /send-media returned status {response.status_code}",
-                    )
-                return True
-
-        try:
-            return await circuit_breaker.execute(_send)
-        except Exception as e:
-            logger.error(
-                "Error sending WhatsApp admin photo",
-                extra_data={"target": phone_or_group, "error": str(e)},
-                exc_info=True
-            )
-            return False
+        provider = get_whatsapp_admin_provider()
+        return await provider.send_media(
+            to=phone_or_group, media_url=media_url, media_type="image"
+        )

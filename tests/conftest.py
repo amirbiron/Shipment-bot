@@ -298,6 +298,15 @@ def reset_circuit_breakers():
     CircuitBreaker.reset_all()
 
 
+@pytest.fixture(autouse=True)
+def reset_whatsapp_providers():
+    """איפוס ספקי WhatsApp בין בדיקות — מונע זליגת state בין טסטים"""
+    from app.domain.services.whatsapp.provider_factory import reset_providers
+    reset_providers()
+    yield
+    reset_providers()
+
+
 class FakeRedis:
     """תחליף ל-Redis לבדיקות — in-memory dict עם ממשק תואם ומעקב TTL."""
 
