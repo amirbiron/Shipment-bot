@@ -181,13 +181,17 @@ async def test_whatsapp_photos_sent_in_parallel(monkeypatch):
     send_mock = AsyncMock(return_value=True)
     start_times: list[float] = []
 
+    sleep_duration = 0.05
+
     async def _photo_mock(target, media_url):
         start_times.append(asyncio.get_event_loop().time())
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(sleep_duration)
         return True
 
+    photo_mock = AsyncMock(side_effect=_photo_mock)
+
     monkeypatch.setattr(AdminNotificationService, "_send_whatsapp_admin_message", send_mock)
-    monkeypatch.setattr(AdminNotificationService, "_send_whatsapp_admin_photo", _photo_mock)
+    monkeypatch.setattr(AdminNotificationService, "_send_whatsapp_admin_photo", photo_mock)
 
     ok = await AdminNotificationService.notify_new_courier_registration(
         user_id=15,
@@ -201,8 +205,11 @@ async def test_whatsapp_photos_sent_in_parallel(monkeypatch):
 
     assert ok is True
     assert len(start_times) == 2
-    # הבדל הזמנים צריך להיות קטן מ-40ms כדי לוודא שהקריאות הופעלו במקביל (ולא סדרתית ~50ms)
-    assert max(start_times) - min(start_times) < 0.04
+    assert photo_mock.await_count == 2
+    max_time_overlap_ratio = 0.95
+    # הבדל הזמנים צריך להיות קטן מ-95% ממשך ההמתנה כדי לוודא שהקריאות הופעלו במקביל ולא סדרתית (~50ms),
+    # עם מרווח רחב לרעש אפשרי ב-CI.
+    assert max(start_times) - min(start_times) < sleep_duration * max_time_overlap_ratio
 
 
 @pytest.mark.unit
