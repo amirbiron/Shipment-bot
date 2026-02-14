@@ -770,6 +770,18 @@ async def _route_to_role_menu_wa(
         return await _sender_fallback_wa(user, db, state_manager)
 
     if user.role == UserRole.SENDER or user.role == UserRole.ADMIN:
+        # בדיקה אם המשתמש הוא סדרן פעיל — סדרנים שאינם שליחים נכנסים ישירות לתפריט סדרן
+        from app.domain.services.station_service import StationService
+
+        station_service = StationService(db)
+        dispatcher_station = await station_service.get_dispatcher_station(user.id)
+        if dispatcher_station:
+            await state_manager.force_state(
+                user.id, "whatsapp", DispatcherState.MENU.value, context={}
+            )
+            handler = DispatcherStateHandler(db, dispatcher_station.id, platform="whatsapp")
+            return await handler.handle_message(user, "תפריט", None)
+
         return await _sender_fallback_wa(user, db, state_manager)
 
     # תפקיד לא מוכר
@@ -1299,10 +1311,8 @@ async def whatsapp_webhook(
                 )
                 continue
     
-            # ניתוב לתפריט סדרן (כפתור "תפריט סדרן" בתפריט נהג) [שלב 3.2]
-            if (
-                "תפריט סדרן" in text or "🏪 תפריט סדרן" in text
-            ) and user.role == UserRole.COURIER:
+            # ניתוב לתפריט סדרן (כפתור "תפריט סדרן" — פתוח לכל תפקיד שהוא סדרן פעיל) [שלב 3.2]
+            if "תפריט סדרן" in text or "🏪 תפריט סדרן" in text:
                 from app.domain.services.station_service import StationService
     
                 station_service = StationService(db)
@@ -1340,15 +1350,20 @@ async def whatsapp_webhook(
                 station = await station_service.get_dispatcher_station(user.id)
     
                 if station:
-                    # כפתור "חזרה לתפריט נהג" מחזיר לתפריט הנהג הרגיל
-                    if "חזרה לתפריט נהג" in text:
-                        await state_manager.force_state(
-                            user.id, "whatsapp", CourierState.MENU.value, context={}
-                        )
-                        handler = CourierStateHandler(db, platform="whatsapp")
-                        response, new_state = await handler.handle_message(
-                            user, "תפריט", None
-                        )
+                    # כפתור "חזרה לתפריט ראשי"/"חזרה לתפריט נהג" — חזרה לתפריט לפי תפקיד
+                    if "חזרה לתפריט נהג" in text or "חזרה לתפריט ראשי" in text:
+                        if user.role == UserRole.COURIER:
+                            await state_manager.force_state(
+                                user.id, "whatsapp", CourierState.MENU.value, context={}
+                            )
+                            handler = CourierStateHandler(db, platform="whatsapp")
+                            response, new_state = await handler.handle_message(
+                                user, "תפריט", None
+                            )
+                        else:
+                            response, new_state = await _route_to_role_menu_wa(
+                                user, db, state_manager
+                            )
                     else:
                         handler = DispatcherStateHandler(
                             db, station.id, platform="whatsapp"
