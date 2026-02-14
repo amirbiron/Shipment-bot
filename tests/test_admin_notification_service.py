@@ -8,6 +8,8 @@ Focus:
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from httpx import Response
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -164,6 +166,50 @@ async def test_whatsapp_photos_sent_even_when_text_message_fails(monkeypatch):
     assert send_mock.await_count == 2
     # photo_mock נקרא 2 פעמים: document + selfie
     assert photo_mock.await_count == 2
+
+
+@pytest.mark.unit
+async def test_whatsapp_photos_sent_in_parallel(monkeypatch):
+    """שליחת המדיה בוואטסאפ מתבצעת במקביל לשיפור זמן הריצה"""
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", None)
+    monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_ID", None)
+    monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_IDS", "")
+    monkeypatch.setattr(settings, "WHATSAPP_ADMIN_GROUP_ID", "")
+    monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "admin1")
+    monkeypatch.setattr(settings, "WHATSAPP_GATEWAY_URL", "http://localhost:3000")
+
+    send_mock = AsyncMock(return_value=True)
+    start_times: list[float] = []
+
+    sleep_duration = 0.05
+
+    async def _photo_mock(target, media_url):
+        start_times.append(asyncio.get_event_loop().time())
+        await asyncio.sleep(sleep_duration)
+        return True
+
+    photo_mock = AsyncMock(side_effect=_photo_mock)
+
+    monkeypatch.setattr(AdminNotificationService, "_send_whatsapp_admin_message", send_mock)
+    monkeypatch.setattr(AdminNotificationService, "_send_whatsapp_admin_photo", photo_mock)
+
+    ok = await AdminNotificationService.notify_new_courier_registration(
+        user_id=15,
+        full_name="Parallel Media",
+        service_area="חיפה",
+        phone_or_chat_id="972500000002@c.us",
+        document_file_id="https://example.com/doc.jpg",
+        selfie_file_id="https://example.com/selfie.jpg",
+        platform="whatsapp",
+    )
+
+    assert ok is True
+    assert len(start_times) == 2
+    assert photo_mock.await_count == 2
+    max_time_overlap_ratio = 0.95
+    # הבדל הזמנים צריך להיות קטן מ-95% ממשך ההמתנה כדי לוודא שהקריאות הופעלו במקביל ולא סדרתית (~50ms),
+    # עם מרווח רחב לרעש אפשרי ב-CI.
+    assert max(start_times) - min(start_times) < sleep_duration * max_time_overlap_ratio
 
 
 @pytest.mark.unit
@@ -405,4 +451,3 @@ async def test_send_telegram_message_non_200_returns_false(monkeypatch):
         ok = await AdminNotificationService._send_telegram_message("chat-1", "hello")
 
     assert ok is False
-
