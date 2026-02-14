@@ -385,7 +385,9 @@ class StationOwnerStateHandler:
                     select(User).where(User.id == d.user_id)
                 )
                 dispatcher_user = result.scalar_one_or_none()
-                name = dispatcher_user.name if dispatcher_user else "לא ידוע"
+                name = (
+                    dispatcher_user.full_name or dispatcher_user.name or "לא ידוע"
+                ) if dispatcher_user else "לא ידוע"
                 text += f"{i}. {escape(name)}\n"
         else:
             text += "אין סדרנים רשומים עדיין.\n"
@@ -463,7 +465,9 @@ class StationOwnerStateHandler:
                 select(User).where(User.id == d.user_id)
             )
             dispatcher_user = result.scalar_one_or_none()
-            name = dispatcher_user.name if dispatcher_user else "לא ידוע"
+            name = (
+                dispatcher_user.full_name or dispatcher_user.name or "לא ידוע"
+            ) if dispatcher_user else "לא ידוע"
             text += f"{i}. {escape(name)}\n"
             keyboard_items.append([f"הסר {i}"])
             dispatcher_map[str(i)] = d.user_id
@@ -493,7 +497,9 @@ class StationOwnerStateHandler:
                 select(User).where(User.id == dispatcher_user_id)
             )
             dispatcher_user = result.scalar_one_or_none()
-            name = dispatcher_user.name if dispatcher_user else "לא ידוע"
+            name = (
+                dispatcher_user.full_name or dispatcher_user.name or "לא ידוע"
+            ) if dispatcher_user else "לא ידוע"
 
             response = MessageResponse(
                 f"⚠️ <b>אישור הסרת סדרן</b>\n\n"
@@ -628,7 +634,9 @@ class StationOwnerStateHandler:
                     select(User).where(User.id == entry.courier_id)
                 )
                 blocked_user = result.scalar_one_or_none()
-                name = blocked_user.name if blocked_user else "לא ידוע"
+                name = (
+                    blocked_user.full_name or blocked_user.name or "לא ידוע"
+                ) if blocked_user else "לא ידוע"
                 reason = entry.reason or "אי תשלום"
                 text += f"{i}. {escape(name)} - {escape(reason)}\n"
         else:
@@ -729,7 +737,9 @@ class StationOwnerStateHandler:
                 select(User).where(User.id == entry.courier_id)
             )
             blocked_user = result.scalar_one_or_none()
-            name = blocked_user.name if blocked_user else "לא ידוע"
+            name = (
+                blocked_user.full_name or blocked_user.name or "לא ידוע"
+            ) if blocked_user else "לא ידוע"
             text += f"{i}. {escape(name)}\n"
             keyboard_items.append([f"הסר {i}"])
             blacklist_map[str(i)] = entry.courier_id
@@ -759,7 +769,9 @@ class StationOwnerStateHandler:
                 select(User).where(User.id == courier_id)
             )
             blocked_user = result.scalar_one_or_none()
-            name = blocked_user.name if blocked_user else "לא ידוע"
+            name = (
+                blocked_user.full_name or blocked_user.name or "לא ידוע"
+            ) if blocked_user else "לא ידוע"
 
             response = MessageResponse(
                 f"⚠️ <b>אישור הסרה מרשימה שחורה</b>\n\n"
