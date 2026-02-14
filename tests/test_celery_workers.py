@@ -13,6 +13,7 @@
 - שליחת WhatsApp ו-Telegram עם circuit breaker
 """
 import asyncio
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -26,6 +27,37 @@ from app.db.models.webhook_event import WebhookEvent
 from app.db.models.station import Station
 from app.db.models.station_dispatcher import StationDispatcher
 from app.domain.services.outbox_service import OutboxService
+
+
+@contextmanager
+def _patch_run_async_for_test():
+    """
+    מוק ל-run_async שמאפשר להריץ טאסקי Celery sync מתוך בדיקה async.
+
+    הטאסקים של Celery הם sync ומשתמשים ב-run_async() שיוצר event loop חדש.
+    בבדיקות async כבר רץ event loop — לכן מחליפים את run_async בגרסה
+    שמריצה את ה-coroutine ב-loop חדש בתוך thread נפרד.
+    """
+    import concurrent.futures
+
+    def _test_run_async(coro):
+        """מריץ coroutine ב-loop חדש בתוך thread — עוקף את ההגבלה של nested loops"""
+        from app.core.logging import set_correlation_id
+        set_correlation_id()
+
+        def _run_in_thread():
+            new_loop = asyncio.new_event_loop()
+            try:
+                return new_loop.run_until_complete(coro)
+            finally:
+                new_loop.close()
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(_run_in_thread)
+            return future.result(timeout=30)
+
+    with patch("app.workers.tasks.run_async", side_effect=_test_run_async):
+        yield
 
 
 # ============================================================================
@@ -918,47 +950,36 @@ class TestCleanupOldMessages:
             processed_at=datetime.utcnow() - timedelta(days=60),
         )
 
-        # הפעלת הניקוי ישירות (ללא Celery)
+        # הרצת הטאסק בפועל — מריץ cleanup_old_messages עם session מוק
         from app.workers.tasks import cleanup_old_messages
 
-        with patch("app.workers.tasks.get_task_session") as mock_session_ctx:
-            mock_session_ctx.return_value.__aenter__ = AsyncMock(
-                return_value=db_session
-            )
-            mock_session_ctx.return_value.__aexit__ = AsyncMock(return_value=None)
-
-            # הפעלה ישירה של הלוגיקה הפנימית
-            cutoff = datetime.utcnow() - timedelta(days=30)
-            result = await db_session.execute(
-                select(OutboxMessage).where(
-                    OutboxMessage.status == MessageStatus.SENT,
-                    OutboxMessage.processed_at < cutoff,
+        with _patch_run_async_for_test():
+            with patch("app.workers.tasks.get_task_session") as mock_session_ctx:
+                mock_session_ctx.return_value.__aenter__ = AsyncMock(
+                    return_value=db_session
                 )
-            )
-            old_messages = result.scalars().all()
-            assert len(old_messages) == 1
-            assert old_messages[0].id == old_msg.id
+                mock_session_ctx.return_value.__aexit__ = AsyncMock(return_value=None)
 
-            for m in old_messages:
-                await db_session.delete(m)
-            await db_session.commit()
+                result = cleanup_old_messages(days=30)
+
+        assert result["deleted"] == 1
 
         # ווידוא שהישנה נמחקה
-        result = await db_session.execute(
+        db_result = await db_session.execute(
             select(OutboxMessage).where(OutboxMessage.id == old_msg.id)
         )
-        assert result.scalar_one_or_none() is None
+        assert db_result.scalar_one_or_none() is None
 
         # ווידוא שהחדשה ו-PENDING נשארו
-        result = await db_session.execute(
+        db_result = await db_session.execute(
             select(OutboxMessage).where(OutboxMessage.id == new_msg.id)
         )
-        assert result.scalar_one_or_none() is not None
+        assert db_result.scalar_one_or_none() is not None
 
-        result = await db_session.execute(
+        db_result = await db_session.execute(
             select(OutboxMessage).where(OutboxMessage.id == pending_msg.id)
         )
-        assert result.scalar_one_or_none() is not None
+        assert db_result.scalar_one_or_none() is not None
 
 
 class TestCleanupOldWebhookEvents:
@@ -997,33 +1018,32 @@ class TestCleanupOldWebhookEvents:
         db_session.add(processing_event)
         await db_session.commit()
 
-        # ניקוי ב-7 ימים
-        from sqlalchemy import delete as sa_delete
+        # הרצת הטאסק בפועל
+        from app.workers.tasks import cleanup_old_webhook_events
 
-        cutoff = datetime.now(timezone.utc) - timedelta(days=7)
-        result = await db_session.execute(
-            sa_delete(WebhookEvent).where(
-                WebhookEvent.status == "completed",
-                WebhookEvent.created_at < cutoff,
-            )
-        )
-        deleted = result.rowcount
-        await db_session.commit()
+        with _patch_run_async_for_test():
+            with patch("app.workers.tasks.get_task_session") as mock_session_ctx:
+                mock_session_ctx.return_value.__aenter__ = AsyncMock(
+                    return_value=db_session
+                )
+                mock_session_ctx.return_value.__aexit__ = AsyncMock(return_value=None)
 
-        assert deleted == 1
+                result = cleanup_old_webhook_events(days=7)
+
+        assert result["deleted"] == 1
 
         # ווידוא שהחדש והישן ב-processing נשארו
-        result = await db_session.execute(
+        db_result = await db_session.execute(
             select(WebhookEvent).where(WebhookEvent.message_id == "new_event_1")
         )
-        assert result.scalar_one_or_none() is not None
+        assert db_result.scalar_one_or_none() is not None
 
-        result = await db_session.execute(
+        db_result = await db_session.execute(
             select(WebhookEvent).where(
                 WebhookEvent.message_id == "processing_event_1"
             )
         )
-        assert result.scalar_one_or_none() is not None
+        assert db_result.scalar_one_or_none() is not None
 
 
 # ============================================================================
@@ -1038,21 +1058,28 @@ class TestBroadcastToCouriers:
     async def test_broadcast_no_couriers_returns_error(
         self, db_session: AsyncSession
     ) -> None:
-        """כשאין שליחים, מחזיר error"""
-        from app.workers.tasks import _get_courier_recipients
+        """כשאין שליחים, הטאסק מחזיר error"""
+        from app.workers.tasks import broadcast_to_couriers
 
-        wa = await _get_courier_recipients(db_session, MessagePlatform.WHATSAPP)
-        tg = await _get_courier_recipients(db_session, MessagePlatform.TELEGRAM)
+        with _patch_run_async_for_test():
+            with patch("app.workers.tasks.get_task_session") as mock_session_ctx:
+                mock_session_ctx.return_value.__aenter__ = AsyncMock(
+                    return_value=db_session
+                )
+                mock_session_ctx.return_value.__aexit__ = AsyncMock(return_value=None)
 
-        assert len(wa) == 0
-        assert len(tg) == 0
+                result = broadcast_to_couriers("משלוח חדש!", delivery_id=1)
+
+        assert result["total_sent"] == 0
+        assert result["successful"] == 0
+        assert "error" in result
 
     @pytest.mark.asyncio
     async def test_broadcast_sends_to_both_platforms(
-        self, db_session: AsyncSession, user_factory
+        self, db_session: AsyncSession, user_factory, mock_whatsapp_gateway
     ) -> None:
-        """שליחה לשליחים בשתי הפלטפורמות"""
-        from app.workers.tasks import _get_courier_recipients
+        """הטאסק שולח לשליחים בשתי הפלטפורמות"""
+        from app.workers.tasks import broadcast_to_couriers
 
         await user_factory(
             phone_number="+972501111111",
@@ -1070,11 +1097,20 @@ class TestBroadcastToCouriers:
             approval_status=ApprovalStatus.APPROVED,
         )
 
-        wa = await _get_courier_recipients(db_session, MessagePlatform.WHATSAPP)
-        tg = await _get_courier_recipients(db_session, MessagePlatform.TELEGRAM)
+        with _patch_run_async_for_test():
+            with patch("app.workers.tasks.get_task_session") as mock_session_ctx:
+                mock_session_ctx.return_value.__aenter__ = AsyncMock(
+                    return_value=db_session
+                )
+                mock_session_ctx.return_value.__aexit__ = AsyncMock(return_value=None)
 
-        assert len(wa) == 1
-        assert len(tg) == 1
+                with patch("app.core.config.settings") as mock_settings:
+                    mock_settings.TELEGRAM_BOT_TOKEN = "test-token"
+
+                    result = broadcast_to_couriers("משלוח חדש!", delivery_id=1)
+
+        assert result["total_sent"] == 2
+        assert result["successful"] == 2
 
 
 # ============================================================================
@@ -1089,18 +1125,28 @@ class TestProcessBillingCycleBlocking:
     async def test_no_active_stations_returns_zero(
         self, db_session: AsyncSession
     ) -> None:
-        """כשאין תחנות פעילות — 0 נחסמו"""
-        result = await db_session.execute(
-            select(Station).where(Station.is_active == True)  # noqa: E712
-        )
-        stations = list(result.scalars().all())
-        assert len(stations) == 0
+        """כשאין תחנות פעילות — הטאסק מחזיר 0 נחסמו"""
+        from app.workers.tasks import process_billing_cycle_blocking
+
+        with _patch_run_async_for_test():
+            with patch("app.workers.tasks.get_task_session") as mock_session_ctx:
+                mock_session_ctx.return_value.__aenter__ = AsyncMock(
+                    return_value=db_session
+                )
+                mock_session_ctx.return_value.__aexit__ = AsyncMock(return_value=None)
+
+                result = process_billing_cycle_blocking()
+
+        assert result["stations_processed"] == 0
+        assert result["drivers_blocked"] == 0
 
     @pytest.mark.asyncio
     async def test_station_error_does_not_stop_processing(
         self, db_session: AsyncSession, user_factory
     ) -> None:
-        """שגיאה בתחנה אחת לא עוצרת עיבוד תחנות אחרות"""
+        """שגיאה בתחנה אחת לא עוצרת עיבוד תחנות אחרות — הטאסק ממשיך"""
+        from app.workers.tasks import process_billing_cycle_blocking
+
         owner = await user_factory(
             phone_number="+972501111111",
             role=UserRole.STATION_OWNER,
@@ -1112,13 +1158,40 @@ class TestProcessBillingCycleBlocking:
         station2 = Station(name="תחנה 2", owner_id=owner.id, is_active=True)
         db_session.add_all([station1, station2])
         await db_session.commit()
+        # eager load — מונע lazy load מ-thread אחר
+        await db_session.refresh(station1)
+        await db_session.refresh(station2)
 
-        # ווידוא ששתי התחנות נוצרו
-        result = await db_session.execute(
-            select(Station).where(Station.is_active == True)  # noqa: E712
-        )
-        stations = list(result.scalars().all())
-        assert len(stations) == 2
+        # מוק שזורק exception בתחנה הראשונה ומצליח בשנייה
+        call_count = 0
+
+        async def _mock_auto_block(self_svc, station_id: int) -> list:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("DB error")
+            return []  # תחנה שנייה — ללא חסימות
+
+        # מוק ברמת המחלקה — מוסיף self
+        # rollback מבוטל בסביבת test — מונע expire של station objects
+        # שגורם ל-MissingGreenlet בגישה ל-station.id מ-thread אחר
+        with _patch_run_async_for_test():
+            with patch("app.workers.tasks.get_task_session") as mock_session_ctx:
+                mock_session_ctx.return_value.__aenter__ = AsyncMock(
+                    return_value=db_session
+                )
+                mock_session_ctx.return_value.__aexit__ = AsyncMock(return_value=None)
+
+                with patch.object(db_session, "rollback", new_callable=AsyncMock):
+                    with patch(
+                        "app.domain.services.station_service.StationService.auto_block_unpaid_drivers",
+                        _mock_auto_block,
+                    ):
+                        result = process_billing_cycle_blocking()
+
+        # שתי התחנות עובדו — הראשונה נכשלה אבל לא עצרה את השנייה
+        assert result["stations_processed"] == 2
+        assert call_count == 2
 
 
 # ============================================================================

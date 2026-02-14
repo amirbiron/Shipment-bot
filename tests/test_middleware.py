@@ -459,5 +459,8 @@ class TestSetupMiddleware:
             "/api/telegram/webhook",
             json={"update_id": 1},
         )
-        # ייתכן 200 או שגיאה אחרת — העיקר שלא 429
-        assert response.status_code != 429
+        # הבקשה צריכה לעבור (200 — webhook מעובד בהצלחה)
+        assert response.status_code == 200
+        # headers מה-middleware stack חייבים להופיע
+        assert "x-correlation-id" in response.headers
+        assert response.headers.get("x-content-type-options") == "nosniff"

@@ -8,6 +8,8 @@
 - Eager loading בשליפות קשורות
 """
 import asyncio
+import concurrent.futures
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -20,6 +22,32 @@ from app.db.models.user import ApprovalStatus, User, UserRole
 from app.db.models.station import Station
 from app.db.models.station_dispatcher import StationDispatcher
 from app.domain.services.outbox_service import OutboxService
+
+
+@contextmanager
+def _patch_run_async_for_test():
+    """
+    מוק ל-run_async שמאפשר להריץ טאסקי Celery sync מתוך בדיקה async.
+
+    מריץ את ה-coroutine ב-loop חדש בתוך thread נפרד — עוקף nested loop.
+    """
+    def _test_run_async(coro):
+        from app.core.logging import set_correlation_id
+        set_correlation_id()
+
+        def _run_in_thread():
+            new_loop = asyncio.new_event_loop()
+            try:
+                return new_loop.run_until_complete(coro)
+            finally:
+                new_loop.close()
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(_run_in_thread)
+            return future.result(timeout=30)
+
+    with patch("app.workers.tasks.run_async", side_effect=_test_run_async):
+        yield
 
 
 # ============================================================================
@@ -199,11 +227,11 @@ class TestBatchOperations:
         assert len(messages) == 50
 
     @pytest.mark.asyncio
-    async def test_broadcast_parallel_send_performance(
-        self, db_session: AsyncSession, user_factory
+    async def test_broadcast_parallel_send_via_task(
+        self, db_session: AsyncSession, user_factory, mock_whatsapp_gateway
     ) -> None:
-        """שידור מקבילי — כל ההודעות נשלחות ב-asyncio.gather"""
-        from app.workers.tasks import _get_courier_recipients
+        """שידור מקבילי דרך broadcast_to_couriers — הטאסק האמיתי"""
+        from app.workers.tasks import broadcast_to_couriers
 
         # יצירת 30 שליחים
         for i in range(30):
@@ -215,32 +243,26 @@ class TestBatchOperations:
                 approval_status=ApprovalStatus.APPROVED,
             )
 
-        recipients = await _get_courier_recipients(
-            db_session, MessagePlatform.WHATSAPP
-        )
-        assert len(recipients) == 30
+        with _patch_run_async_for_test():
+            with patch("app.workers.tasks.get_task_session") as mock_session_ctx:
+                mock_session_ctx.return_value.__aenter__ = AsyncMock(
+                    return_value=db_session
+                )
+                mock_session_ctx.return_value.__aexit__ = AsyncMock(return_value=None)
 
-        # סימולציה של שליחה מקבילית
-        send_count = 0
+                result = broadcast_to_couriers("משלוח חדש!", delivery_id=99)
 
-        async def _mock_send(phone: str, content: dict) -> bool:
-            nonlocal send_count
-            send_count += 1
-            await asyncio.sleep(0.001)  # סימולציה של latency
-            return True
-
-        tasks = [_mock_send(r.phone_number, {}) for r in recipients]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        assert send_count == 30
-        assert all(r is True for r in results)
+        assert result["total_sent"] == 30
+        assert result["successful"] == 30
 
     @pytest.mark.asyncio
-    async def test_cleanup_deletes_in_batch(
+    async def test_cleanup_deletes_in_batch_via_task(
         self, db_session: AsyncSession, async_engine
     ) -> None:
-        """ניקוי הודעות ישנות — מחיקה ב-batch"""
+        """ניקוי הודעות ישנות — הרצה דרך cleanup_old_messages"""
         from datetime import datetime, timedelta
+
+        from app.workers.tasks import cleanup_old_messages
 
         # יצירת 20 הודעות ישנות
         for i in range(20):
@@ -255,11 +277,22 @@ class TestBatchOperations:
             db_session.add(msg)
         await db_session.commit()
 
-        # ווידוא שההודעות נוצרו
-        result = await db_session.execute(
+        with _patch_run_async_for_test():
+            with patch("app.workers.tasks.get_task_session") as mock_session_ctx:
+                mock_session_ctx.return_value.__aenter__ = AsyncMock(
+                    return_value=db_session
+                )
+                mock_session_ctx.return_value.__aexit__ = AsyncMock(return_value=None)
+
+                result = cleanup_old_messages(days=30)
+
+        assert result["deleted"] == 20
+
+        # ווידוא שנמחקו מה-DB
+        db_result = await db_session.execute(
             select(OutboxMessage).where(OutboxMessage.message_type == "old_test")
         )
-        assert len(list(result.scalars().all())) == 20
+        assert len(list(db_result.scalars().all())) == 0
 
 
 # ============================================================================
