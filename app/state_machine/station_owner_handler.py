@@ -338,11 +338,8 @@ class StationOwnerStateHandler:
                 "remove_owner_name": name,
             }
 
-        response = MessageResponse(
-            "בחירה לא תקינה. אנא בחר מספר מהרשימה.",
-            keyboard=[["🔙 חזרה"]]
-        )
-        return response, StationOwnerState.REMOVE_OWNER_SELECT.value, {}
+        # בחירה לא תקינה — מציגים מחדש את רשימת הבעלים עם הכפתורים
+        return await self._show_owner_list_for_removal(user, context)
 
     async def _handle_confirm_remove_owner(
         self, user: User, message: str, context: dict
