@@ -329,8 +329,8 @@ class TestOwnerManagementGetOwners:
         assert owners[0].user_id == owner1.id
 
     @pytest.mark.asyncio
-    async def test_get_owners_legacy_fallback(self, user_factory, db_session):
-        """get_owners מחזיר בעלים מ-owner_id גם בלי רשומה ב-junction (תאימות לאחור)"""
+    async def test_get_owners_legacy_auto_migration(self, user_factory, db_session):
+        """get_owners מבצע מיגרציה אוטומטית מ-owner_id ליצירת רשומת junction"""
         owner = await user_factory(
             phone_number="+972501234567",
             role=UserRole.STATION_OWNER,
@@ -345,6 +345,15 @@ class TestOwnerManagementGetOwners:
         service = StationService(db_session)
         owners = await service.get_owners(station.id)
 
-        # fallback ל-owner_id — מחזיר בעלים אחד
+        # מיגרציה אוטומטית — יוצר רשומת junction אמיתית
         assert len(owners) == 1
         assert owners[0].user_id == owner.id
+
+        # ולידציה שנוצרה רשומה אמיתית ב-DB
+        result = await db_session.execute(
+            select(StationOwner).where(
+                StationOwner.station_id == station.id,
+                StationOwner.user_id == owner.id,
+            )
+        )
+        assert result.scalar_one_or_none() is not None

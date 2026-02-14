@@ -329,7 +329,7 @@ class StationService:
         return True, "הבעלים הוסר בהצלחה מהתחנה."
 
     async def get_owners(self, station_id: int) -> List[StationOwner]:
-        """קבלת רשימת בעלים פעילים בתחנה — כולל fallback ל-owner_id ישן"""
+        """קבלת רשימת בעלים פעילים בתחנה — כולל מיגרציה אוטומטית מ-owner_id ישן"""
         result = await self.db.execute(
             select(StationOwner).where(
                 StationOwner.station_id == station_id,
@@ -339,16 +339,22 @@ class StationService:
         owners = list(result.scalars().all())
         junction_user_ids = {o.user_id for o in owners}
 
-        # fallback: בעלים מ-Station.owner_id שלא קיים ב-junction (תחנה לפני מיגרציה)
+        # מיגרציה אוטומטית: בעלים מ-Station.owner_id שלא קיים ב-junction (תחנה לפני מיגרציה)
+        # יוצרים רשומת StationOwner אמיתית כדי שפעולות כמו remove_owner יעבדו נכון
         station = await self.get_station(station_id)
         if station and station.owner_id and station.owner_id not in junction_user_ids:
-            # יצירת אובייקט StationOwner וירטואלי — לא נשמר ב-DB
             legacy_owner = StationOwner(
                 station_id=station_id,
                 user_id=station.owner_id,
                 is_active=True,
             )
+            self.db.add(legacy_owner)
+            await self.db.flush()
             owners.append(legacy_owner)
+            logger.info(
+                "מיגרציה אוטומטית של בעלים מ-owner_id לטבלת junction",
+                extra_data={"station_id": station_id, "user_id": station.owner_id},
+            )
 
         return owners
 
