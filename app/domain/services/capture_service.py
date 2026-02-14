@@ -8,12 +8,11 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Tuple, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 from app.db.models.delivery import Delivery, DeliveryStatus
 from app.db.models.courier_wallet import CourierWallet
 from app.db.models.wallet_ledger import WalletLedger, LedgerEntryType
-from app.db.queries import delivery_with_sender
 from app.domain.services.outbox_service import OutboxService
 
 
@@ -86,14 +85,15 @@ class CaptureService:
         """
         try:
             # Start atomic operation
-            # 1. Lock delivery record (עם eager load של sender לחיסכון query נוסף בהתראה)
+            # 1. Lock delivery record
+            # הערה: אסור joinedload עם FOR UPDATE — ב-PostgreSQL הנעילה חלה
+            # על כל הטבלאות ב-JOIN, מה שינעל גם את שורת ה-sender ויגרום ל-deadlocks.
             delivery_result = await self.db.execute(
                 select(Delivery)
-                .options(*delivery_with_sender())
                 .where(Delivery.id == delivery_id)
                 .with_for_update()
             )
-            delivery = delivery_result.scalars().unique().one_or_none()
+            delivery = delivery_result.scalar_one_or_none()
 
             if not delivery:
                 return False, "המשלוח לא נמצא", None
@@ -157,9 +157,9 @@ class CaptureService:
             )
             self.db.add(ledger_entry)
 
-            # Queue notification messages via outbox (sender כבר טעון — חוסך query נוסף)
+            # Queue notification messages via outbox
             await self.outbox_service.queue_capture_notification(
-                delivery, courier_id, sender=delivery.sender
+                delivery, courier_id
             )
 
             # 8. Commit או flush — כשנקרא מ-workflow, הקורא מנהל את הטרנזקציה

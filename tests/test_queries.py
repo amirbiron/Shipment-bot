@@ -5,14 +5,15 @@
 - delivery_with_relations() טוען sender, courier, requesting_courier בשאילתה אחת
 - delivery_with_sender() טוען sender בלבד
 - אינדקס חדש על approved_by_id קיים במודל
-- queue_capture_notification חוסך query כשמועבר sender
+- queue_capture_notification חוסך query כשמועבר preloaded_sender
+- שליפת רשימת משלוחים עם relationships ללא queries מיותרות
 """
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.delivery import Delivery, DeliveryStatus
-from app.db.models.user import User, UserRole, ApprovalStatus
+from app.db.models.user import UserRole
 from app.db.queries import delivery_with_relations, delivery_with_sender
 from app.domain.services.outbox_service import OutboxService
 
@@ -195,7 +196,7 @@ class TestCaptureNotificationSenderPassthrough:
 
         async with QueryCounter(async_engine) as counter:
             messages = await svc.queue_capture_notification(
-                delivery, courier_id=999, sender=sender
+                delivery, courier_id=999, preloaded_sender=sender
             )
 
         # שאילתה אחת בלבד — INSERT של הודעת outbox (ללא SELECT על users)
@@ -241,3 +242,54 @@ class TestCaptureNotificationSenderPassthrough:
             f"צפינו ל-1 SELECT fallback, קיבלנו {select_count}: {counter.queries}"
         )
         assert len(messages) == 1
+
+
+class TestDeliveryListEagerLoading:
+    """בדיקה שרשימת משלוחים עם relationships לא מייצרת queries מיותרות"""
+
+    @pytest.mark.asyncio
+    async def test_list_deliveries_with_relations_single_query(
+        self,
+        db_session: AsyncSession,
+        user_factory,
+        delivery_factory,
+        async_engine,
+    ) -> None:
+        """שליפת מספר משלוחים + גישה ל-sender/courier — שאילתה אחת בלבד"""
+        from tests.test_performance import QueryCounter
+
+        sender = await user_factory(
+            phone_number="+972501111111",
+            name="שולח",
+            role=UserRole.SENDER,
+        )
+        courier = await user_factory(
+            phone_number="+972502222222",
+            name="שליח",
+            role=UserRole.COURIER,
+        )
+        # יצירת 5 משלוחים
+        for _ in range(5):
+            await delivery_factory(
+                sender_id=sender.id,
+                courier_id=courier.id,
+                status=DeliveryStatus.CAPTURED,
+            )
+
+        async with QueryCounter(async_engine) as counter:
+            result = await db_session.execute(
+                select(Delivery)
+                .options(*delivery_with_relations())
+                .where(Delivery.status == DeliveryStatus.CAPTURED)
+            )
+            deliveries = list(result.scalars().unique().all())
+            # גישה ל-relationships על כל המשלוחים — אסור queries נוספות
+            for d in deliveries:
+                _ = d.sender.name
+                _ = d.courier.name
+
+        assert len(deliveries) == 5
+        # שאילתה אחת בלבד (SELECT עם JOINs) — לא N+1
+        assert counter.count == 1, (
+            f"צפינו ל-1 שאילתא, קיבלנו {counter.count}: {counter.queries}"
+        )

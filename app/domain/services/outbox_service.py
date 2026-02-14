@@ -151,17 +151,18 @@ class OutboxService:
         self,
         delivery: Delivery,
         courier_id: int,
-        sender: User | None = None,
+        preloaded_sender: User | None = None,
     ) -> List[OutboxMessage]:
         """Queue notifications when a delivery is captured.
 
         Args:
-            sender: אובייקט שולח טעון מראש (eager loaded).
-                    אם לא סופק — נשלף מה-DB כ-fallback.
+            preloaded_sender: אובייקט שולח טעון מראש (eager loaded).
+                              אם לא סופק — נשלף מה-DB כ-fallback.
         """
         messages = []
 
         # שימוש בשולח שהועבר, או שליפה מה-DB כ-fallback
+        sender = preloaded_sender
         if sender is None:
             sender_result = await self.db.execute(
                 select(User).where(User.id == delivery.sender_id)
