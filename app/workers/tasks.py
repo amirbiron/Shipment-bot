@@ -440,7 +440,7 @@ def broadcast_to_couriers(message_text: str, delivery_id: int = None):
                             "error": str(r),
                             "error_type": type(r).__name__,
                         },
-                        exc_info=r,
+                        exc_info=(type(r), r, r.__traceback__),
                     )
                     final_results.append({"success": False, "error": str(r)})
                 else:

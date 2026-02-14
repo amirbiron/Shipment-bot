@@ -3,11 +3,12 @@ FastAPI Middleware
 
 Provides request/response middleware for:
 - Correlation ID injection
-- Request logging
+- Request logging (with PII masking)
 - Global error handling
 - Security headers (HSTS, CSP upgrade-insecure-requests)
 - Rate limiting for webhook endpoints
 """
+import re
 import time
 from collections import defaultdict
 from typing import Callable
@@ -23,6 +24,9 @@ from app.core.logging import (
 from app.core.exceptions import AppException
 
 logger = get_logger(__name__)
+
+# ביטוי רגולרי לזיהוי מספרי טלפון ב-URL path (ישראלי/בינלאומי)
+_PHONE_IN_PATH_RE = re.compile(r"(\+?\d{3})\d{4}(\d{3})")
 
 
 class CorrelationIdMiddleware(BaseHTTPMiddleware):
@@ -49,8 +53,13 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
         return response
 
 
+def _mask_path_pii(path: str) -> str:
+    """מיסוך מספרי טלפון ב-URL path לפרטיות — מחליף 4 ספרות אמצעיות ב-****"""
+    return _PHONE_IN_PATH_RE.sub(r"\1****\2", path)
+
+
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
-    """Middleware to log requests and responses"""
+    """Middleware to log requests and responses (with PII masking)"""
 
     async def dispatch(
         self,
@@ -58,13 +67,14 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         call_next: Callable
     ) -> Response:
         start_time = time.time()
+        safe_path = _mask_path_pii(request.url.path)
 
         # Log request
         logger.info(
-            f"Request started: {request.method} {request.url.path}",
+            f"Request started: {request.method} {safe_path}",
             extra_data={
                 "method": request.method,
-                "path": request.url.path,
+                "path": safe_path,
                 "query_params": dict(request.query_params),
                 "client_host": request.client.host if request.client else None,
             }
@@ -77,10 +87,10 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             # Log response
             log_level = "info" if response.status_code < 400 else "warning"
             getattr(logger, log_level)(
-                f"Request completed: {request.method} {request.url.path}",
+                f"Request completed: {request.method} {safe_path}",
                 extra_data={
                     "method": request.method,
-                    "path": request.url.path,
+                    "path": safe_path,
                     "status_code": response.status_code,
                     "duration_seconds": round(duration, 4),
                 }
@@ -90,10 +100,10 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         except Exception as e:
             duration = time.time() - start_time
             logger.error(
-                f"Request failed: {request.method} {request.url.path}",
+                f"Request failed: {request.method} {safe_path}",
                 extra_data={
                     "method": request.method,
-                    "path": request.url.path,
+                    "path": safe_path,
                     "duration_seconds": round(duration, 4),
                     "error": str(e),
                 },
@@ -191,6 +201,9 @@ class WebhookRateLimitMiddleware(BaseHTTPMiddleware):
 
     מגביל מספר בקשות לחלון זמן נתון (ברירת מחדל: 100 בקשות / 60 שניות)
     על paths שמכילים /webhook. מחזיר 429 Too Many Requests אם חורג.
+
+    הערה: ממוקם בתוך CorrelationIdMiddleware ב-stack, כך שלכל בקשה
+    (כולל 429) יש correlation ID תקין בלוגים וב-response.
     """
 
     def __init__(
@@ -207,7 +220,7 @@ class WebhookRateLimitMiddleware(BaseHTTPMiddleware):
         self._requests: dict[str, list[float]] = defaultdict(list)
 
     def _cleanup_window(self, ip: str, now: float) -> None:
-        """ניקוי בקשות ישנות מחוץ לחלון הזמן"""
+        """ניקוי בקשות ישנות מחוץ לחלון הזמן + מחיקת IP ריקים"""
         cutoff = now - self._window_seconds
         timestamps = self._requests[ip]
         # מחפשים את האינדקס הראשון בתוך החלון
@@ -219,6 +232,9 @@ class WebhookRateLimitMiddleware(BaseHTTPMiddleware):
             idx = len(timestamps)
         if idx > 0:
             self._requests[ip] = timestamps[idx:]
+        # מחיקת מפתח ריק — מונע דליפת זיכרון מ-IP חד-פעמיים
+        if not self._requests[ip]:
+            del self._requests[ip]
 
     async def dispatch(
         self,
@@ -235,7 +251,7 @@ class WebhookRateLimitMiddleware(BaseHTTPMiddleware):
 
         self._cleanup_window(client_ip, now)
 
-        if len(self._requests[client_ip]) >= self._max_requests:
+        if len(self._requests.get(client_ip, [])) >= self._max_requests:
             logger.warning(
                 "Rate limit exceeded for webhook",
                 extra_data={
@@ -263,15 +279,20 @@ def setup_middleware(app: FastAPI) -> None:
     from app.core.config import settings
 
     # ב-Starlette, ה-middleware האחרון שנוסף הוא ה-outermost (עוטף את כולם).
-    # סדר עיבוד בקשה: SecurityHeaders → RateLimit → CorrelationId → RequestLogging → app
-    # כך SecurityHeaders תופס את *כל* התשובות, כולל short-circuit מ-CORS.
-    app.add_middleware(RequestLoggingMiddleware)
-    app.add_middleware(CorrelationIdMiddleware)
+    # סדר הוספה (מלמטה ל-outermost):
+    #   1. RateLimit (innermost — רץ אחרי CorrelationId כדי שיש correlation ID ב-429)
+    #   2. RequestLogging (מקבל את התשובה כולל 429 + correlation ID)
+    #   3. CorrelationId (מגדיר correlation ID לפני הכל)
+    #   4. SecurityHeaders (outermost — מוסיף headers לכל תשובה)
+    #
+    # סדר עיבוד בקשה: SecurityHeaders → CorrelationId → RequestLogging → RateLimit → app
     app.add_middleware(
         WebhookRateLimitMiddleware,
         max_requests=settings.WEBHOOK_RATE_LIMIT_MAX_REQUESTS,
         window_seconds=settings.WEBHOOK_RATE_LIMIT_WINDOW_SECONDS,
     )
+    app.add_middleware(RequestLoggingMiddleware)
+    app.add_middleware(CorrelationIdMiddleware)
     app.add_middleware(SecurityHeadersMiddleware, debug=settings.DEBUG)
 
     # Register exception handlers

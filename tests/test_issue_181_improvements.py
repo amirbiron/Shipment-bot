@@ -356,6 +356,23 @@ class TestWebhookRateLimitMiddleware:
         assert len(middleware._requests[ip]) == 1
 
     @pytest.mark.unit
+    def test_cleanup_removes_empty_ip_entries(self):
+        """ניקוי מוחק IP entries ריקים למניעת דליפת זיכרון"""
+        from app.core.middleware import WebhookRateLimitMiddleware
+
+        mock_app = MagicMock()
+        middleware = WebhookRateLimitMiddleware(mock_app, max_requests=5, window_seconds=60)
+
+        ip = "9.8.7.6"
+        now = time.time()
+        # כל הרשומות ישנות — אמורות להימחק כולל ה-key
+        middleware._requests[ip] = [now - 120, now - 90]
+
+        middleware._cleanup_window(ip, now)
+
+        assert ip not in middleware._requests
+
+    @pytest.mark.unit
     def test_non_webhook_paths_not_limited(self):
         """paths שלא מכילים /webhook לא מוגבלים"""
         from app.core.middleware import WebhookRateLimitMiddleware
@@ -366,6 +383,41 @@ class TestWebhookRateLimitMiddleware:
         # path שלא webhook — לא אמור לעבור rate limiting
         # (נבדק ברמת הלוגיקה הפנימית)
         assert "/webhook" not in "/users/phone/123"
+
+
+# ============================================================================
+# PII Masking in RequestLoggingMiddleware
+# ============================================================================
+
+class TestPathPiiMasking:
+    """בדיקות למיסוך PII ב-path של בקשות"""
+
+    @pytest.mark.unit
+    def test_mask_israeli_phone_in_path(self):
+        """מספר טלפון ישראלי ב-path ממוסך"""
+        from app.core.middleware import _mask_path_pii
+
+        result = _mask_path_pii("/api/users/phone/+972501234567")
+        assert "1234" not in result
+        assert "****" in result
+        # הקידומת וה-3 ספרות אחרונות גלויות
+        assert "+972" in result or "972" in result
+
+    @pytest.mark.unit
+    def test_non_phone_path_unchanged(self):
+        """path ללא טלפון לא משתנה"""
+        from app.core.middleware import _mask_path_pii
+
+        result = _mask_path_pii("/api/deliveries/42")
+        assert result == "/api/deliveries/42"
+
+    @pytest.mark.unit
+    def test_mask_phone_without_plus(self):
+        """מספר טלפון ללא + ממוסך"""
+        from app.core.middleware import _mask_path_pii
+
+        result = _mask_path_pii("/api/users/phone/972501234567")
+        assert "****" in result
 
 
 # ============================================================================
@@ -407,9 +459,11 @@ class TestTasksErrorLogging:
 
             # הרצה — run_async מפעיל event loop חדש, אי אפשר לעשות await ישירות
             # לכן בודקים את הלוגיקה הפנימית
-            # נבדוק שהמודול מייבא נכון ושהקוד של הלוגינג קיים
+            # נבדוק שהמודול מייבא נכון ושהקוד של הלוגינג קיים עם exc_info תקין
             import inspect
             from app.workers import tasks
             source = inspect.getsource(tasks.broadcast_to_couriers)
             assert "logger.error" in source
             assert "error_type" in source
+            # ולידציה של פורמט exc_info תקין (tuple ולא exception ישירות)
+            assert "exc_info=(type(r), r, r.__traceback__)" in source
