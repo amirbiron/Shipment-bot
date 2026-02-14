@@ -44,7 +44,7 @@ async def get_current_station_owner(
 
     # ולידציה שהטוקן שייך לבעל תחנה (מונע שימוש חוזר בטוקנים מסוג אחר)
     if token_data.role != "station_owner":
-        logger.warning(
+        logger.error(
             "Panel access denied — wrong role in token",
             extra_data={"user_id": token_data.user_id, "role": token_data.role},
         )
@@ -59,9 +59,13 @@ async def get_current_station_owner(
     )
     user = user_result.scalar_one_or_none()
     if not user or not user.is_active:
-        logger.warning(
+        logger.error(
             "Panel access denied — user inactive",
-            extra_data={"user_id": token_data.user_id},
+            extra_data={
+                "user_id": token_data.user_id,
+                "user_found": user is not None,
+                "is_active": user.is_active if user else None,
+            },
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -72,9 +76,12 @@ async def get_current_station_owner(
     station_service = StationService(db)
     station = await station_service.get_station(token_data.station_id)
     if not station:
-        logger.warning(
-            "Panel access denied — station inactive",
-            extra_data={"user_id": token_data.user_id, "station_id": token_data.station_id},
+        logger.error(
+            "Panel access denied — station inactive or not found",
+            extra_data={
+                "user_id": token_data.user_id,
+                "station_id": token_data.station_id,
+            },
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -86,11 +93,12 @@ async def get_current_station_owner(
         token_data.user_id, token_data.station_id
     )
     if not is_owner:
-        logger.warning(
+        logger.error(
             "Panel access denied — ownership mismatch",
             extra_data={
                 "user_id": token_data.user_id,
                 "station_id": token_data.station_id,
+                "station_name": station.name,
             },
         )
         raise HTTPException(
