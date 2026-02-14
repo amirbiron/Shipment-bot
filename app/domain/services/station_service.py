@@ -328,6 +328,16 @@ class StationService:
         )
         return True, "הבעלים הוסר בהצלחה מהתחנה."
 
+    async def get_owners(self, station_id: int) -> List[StationOwner]:
+        """קבלת רשימת בעלים פעילים בתחנה"""
+        result = await self.db.execute(
+            select(StationOwner).where(
+                StationOwner.station_id == station_id,
+                StationOwner.is_active == True  # noqa: E712
+            )
+        )
+        return list(result.scalars().all())
+
     # ==================== ניהול סדרנים [3.3] ====================
 
     async def add_dispatcher(
