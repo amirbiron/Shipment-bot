@@ -13,6 +13,8 @@ jobs:
   update-diagrams:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    env:
+      JWT_SECRET_KEY: ci-dummy-key-not-for-production
 
     permissions:
       contents: write
