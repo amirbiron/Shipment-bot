@@ -1351,6 +1351,8 @@ async def whatsapp_webhook(
     
                 if station:
                     # כפתור "חזרה לתפריט ראשי"/"חזרה לתפריט נהג" — חזרה לתפריט לפי תפקיד
+                    # חשוב: קוראים ישירות ל-fallback ולא ל-_route_to_role_menu_wa כדי למנוע
+                    # לולאה (כי _route_to_role_menu_wa יזהה שהמשתמש סדרן ויחזיר לתפריט סדרן)
                     if "חזרה לתפריט נהג" in text or "חזרה לתפריט ראשי" in text:
                         if user.role == UserRole.COURIER:
                             await state_manager.force_state(
@@ -1361,7 +1363,7 @@ async def whatsapp_webhook(
                                 user, "תפריט", None
                             )
                         else:
-                            response, new_state = await _route_to_role_menu_wa(
+                            response, new_state = await _sender_fallback_wa(
                                 user, db, state_manager
                             )
                     else:

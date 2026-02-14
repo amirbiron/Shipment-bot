@@ -1108,6 +1108,8 @@ async def telegram_webhook(
                 return {"ok": True, "new_state": new_state}
 
             # כפתור "חזרה לתפריט ראשי"/"חזרה לתפריט נהג" — חזרה לתפריט לפי תפקיד
+            # חשוב: קוראים ישירות ל-fallback ולא ל-_route_to_role_menu כדי למנוע
+            # לולאה (כי _route_to_role_menu יזהה שהמשתמש סדרן ויחזיר לתפריט סדרן)
             if "חזרה לתפריט נהג" in text or "חזרה לתפריט ראשי" in text:
                 if user.role == UserRole.COURIER:
                     await state_manager.force_state(
@@ -1116,7 +1118,7 @@ async def telegram_webhook(
                     handler = CourierStateHandler(db)
                     response, new_state = await handler.handle_message(user, "תפריט", None)
                 else:
-                    response, new_state = await _route_to_role_menu(user, db, state_manager)
+                    response, new_state = await _sender_fallback(user, db, state_manager)
                 _queue_response_send(background_tasks, send_chat_id, response)
                 return {"ok": True, "new_state": new_state}
 
