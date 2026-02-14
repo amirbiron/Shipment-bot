@@ -2,7 +2,7 @@
 Application Configuration
 """
 from pydantic_settings import BaseSettings
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from typing import Optional
 
 
@@ -109,17 +109,37 @@ class Settings(BaseSettings):
             raise ValueError("REFRESH_TOKEN_EXPIRE_DAYS must be at least 1")
         return v
 
-    @field_validator("JWT_SECRET_KEY", mode="after")
-    @classmethod
-    def validate_jwt_secret(cls, v: str) -> str:
-        """חובה להגדיר JWT_SECRET_KEY בפרודקשן — ערך ריק מאפשר זיוף טוקנים"""
-        if not v:
-            import warnings
+    @model_validator(mode="after")
+    def validate_production_settings(self) -> "Settings":
+        """ולידציות חוצות-שדות לסביבת פרודקשן.
+
+        1. JWT_SECRET_KEY ריק בפרודקשן — זורק ValueError שעוצר את ההפעלה.
+        2. DEBUG=True עם DB חיצוני — אזהרה שייתכן ששכחו לכבות DEBUG.
+        """
+        import warnings
+
+        # --- JWT_SECRET_KEY ---
+        if not self.JWT_SECRET_KEY:
+            if not self.DEBUG:
+                raise ValueError(
+                    "JWT_SECRET_KEY ריק בסביבת פרודקשן (DEBUG=False) — "
+                    "אי אפשר להפעיל את המערכת בלי מפתח הצפנה. "
+                    "הגדר: export JWT_SECRET_KEY=$(openssl rand -hex 32)"
+                )
             warnings.warn(
                 "JWT_SECRET_KEY ריק — הפאנל לא יעבוד. הגדר בסביבת הייצור: openssl rand -hex 32",
                 stacklevel=2,
             )
-        return v
+
+        # --- DEBUG + DB חיצוני = כנראה שכחו לכבות DEBUG ---
+        if self.DEBUG and self.DATABASE_URL and "localhost" not in self.DATABASE_URL:
+            warnings.warn(
+                "DEBUG=True עם DATABASE_URL חיצוני — ייתכן שמצב DEBUG פעיל בפרודקשן. "
+                "כותרות אבטחה (HSTS, CSP) לא יוחלו. הגדר DEBUG=False בסביבת ייצור.",
+                stacklevel=2,
+            )
+
+        return self
 
     # File Upload
     UPLOAD_DIR: str = "./uploads"

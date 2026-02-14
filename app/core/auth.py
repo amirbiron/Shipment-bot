@@ -8,6 +8,7 @@
 4. בעל התחנה מזין את הקוד בפאנל ומקבל access token + refresh token
 5. כש-access token פג — הלקוח שולח refresh token ומקבל access חדש
 """
+import hashlib
 import json
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -136,6 +137,11 @@ def generate_otp() -> str:
     return f"{secrets.randbelow(1000000):06d}"
 
 
+def _hash_otp(otp: str) -> str:
+    """האשינג OTP עם SHA-256 — מונע חשיפת קוד גם אם Redis נפרץ"""
+    return hashlib.sha256(otp.encode()).hexdigest()
+
+
 async def try_set_otp_cooldown_by_phone(phone: str) -> bool:
     """בדיקה + הגדרת cooldown אטומית — SET NX EX.
     מחזיר True אם מותר (cooldown הוגדר עכשיו), False אם כבר בזמן המתנה.
@@ -148,14 +154,17 @@ async def try_set_otp_cooldown_by_phone(phone: str) -> bool:
 
 
 async def store_otp(user_id: int, otp: str) -> None:
-    """שמירת OTP ב-Redis עם TTL + איפוס מונה ניסיונות"""
+    """שמירת OTP מוצפן (SHA-256) ב-Redis עם TTL + איפוס מונה ניסיונות.
+
+    ה-OTP נשמר כ-hash ולא כ-plaintext — גם אם Redis נפרץ, התוקף לא יוכל לחלץ את הקוד.
+    """
     redis = await get_redis()
     key = f"{_OTP_KEY_PREFIX}:{user_id}"
     attempts_key = f"{_OTP_ATTEMPTS_PREFIX}:{user_id}"
-    await redis.setex(key, settings.OTP_EXPIRE_SECONDS, otp)
+    await redis.setex(key, settings.OTP_EXPIRE_SECONDS, _hash_otp(otp))
     # איפוס מונה ניסיונות — בקשת OTP חדש פותחת חלון ניסיונות מחדש
     await redis.delete(attempts_key)
-    logger.info("OTP stored", extra_data={"user_id": user_id})
+    logger.info("OTP stored (hashed)", extra_data={"user_id": user_id})
 
 
 async def _increment_and_check_otp_attempts(user_id: int) -> bool:
@@ -188,7 +197,8 @@ async def verify_otp(user_id: int, otp: str, consume: bool = True) -> bool:
     redis = await get_redis()
     key = f"{_OTP_KEY_PREFIX}:{user_id}"
     stored = await redis.get(key)
-    if stored and stored == otp:
+    # השוואת hash — ה-OTP מאוחסן כ-SHA-256, משווים hash לקלט המשתמש
+    if stored and stored == _hash_otp(otp):
         attempts_key = f"{_OTP_ATTEMPTS_PREFIX}:{user_id}"
         if consume:
             await redis.delete(key)

@@ -6,6 +6,10 @@ Provides fixtures for:
 - Mock external services (Telegram, WhatsApp)
 - Test data factories
 """
+# הגדרת JWT_SECRET_KEY לפני ייבוא app — הולידטור דורש מפתח כש-DEBUG=False
+import os
+os.environ.setdefault("JWT_SECRET_KEY", "test-jwt-secret-key-for-testing-only-do-not-use-in-production")
+
 import pytest
 from typing import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock, patch
