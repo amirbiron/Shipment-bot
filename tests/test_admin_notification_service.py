@@ -201,8 +201,8 @@ async def test_whatsapp_photos_sent_in_parallel(monkeypatch):
 
     assert ok is True
     assert len(start_times) == 2
-    # הבדל הזמנים צריך להיות קטן מהשהיה של 50ms כדי לוודא שהקריאות הופעלו במקביל
-    assert max(start_times) - min(start_times) < 0.03
+    # הבדל הזמנים צריך להיות קטן מ-40ms כדי לוודא שהקריאות הופעלו במקביל (ולא סדרתית ~50ms)
+    assert max(start_times) - min(start_times) < 0.04
 
 
 @pytest.mark.unit

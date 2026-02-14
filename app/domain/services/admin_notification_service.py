@@ -105,7 +105,7 @@ class AdminNotificationService:
                 resolve_results = await asyncio.gather(
                     *resolve_tasks.values(), return_exceptions=True
                 )
-                for label, result in zip(resolve_tasks.keys(), resolve_results, strict=False):
+                for label, result in zip(resolve_tasks.keys(), resolve_results, strict=True):
                     resolved_media_by_label[label] = (
                         result if not isinstance(result, Exception) else None
                     )
@@ -201,7 +201,7 @@ class AdminNotificationService:
                     )
 
                     for (label, _), photo_sent in zip(
-                        wa_media_payloads, photo_results, strict=False
+                        wa_media_payloads, photo_results, strict=True
                     ):
                         if photo_sent is True:
                             target_success = True
@@ -217,7 +217,7 @@ class AdminNotificationService:
                 return target_success
 
             wa_results = await asyncio.gather(
-                *[asyncio.create_task(_send_wa_target(target)) for target in wa_targets],
+                *[_send_wa_target(target) for target in wa_targets],
                 return_exceptions=False,
             )
             success = success or any(wa_results)
@@ -300,7 +300,7 @@ class AdminNotificationService:
                 return tg_sent
 
             tg_results = await asyncio.gather(
-                *[asyncio.create_task(_send_tg_admin(admin_id)) for admin_id in tg_admin_ids],
+                *[_send_tg_admin(admin_id) for admin_id in tg_admin_ids],
                 return_exceptions=False,
             )
             success = success or any(tg_results)
