@@ -6,7 +6,6 @@ import asyncio
 import re
 from datetime import datetime, timedelta, timezone
 
-import httpx
 from fastapi import APIRouter, Depends, BackgroundTasks
 from pydantic import BaseModel
 from typing import Optional
@@ -25,10 +24,9 @@ from app.state_machine.manager import StateManager
 from app.domain.services import AdminNotificationService
 from app.domain.services.courier_approval_service import CourierApprovalService
 from app.core.logging import get_logger
-from app.core.circuit_breaker import get_whatsapp_circuit_breaker
-from app.core.validation import PhoneNumberValidator, convert_html_to_whatsapp
+from app.core.validation import PhoneNumberValidator
 from app.core.config import settings
-from app.core.exceptions import WhatsAppError
+from app.domain.services.whatsapp import get_whatsapp_provider
 
 logger = get_logger(__name__)
 
@@ -384,112 +382,21 @@ async def send_whatsapp_message(
     phone_number: str, text: str, keyboard: list = None
 ) -> None:
     """
-    Send message via WhatsApp Gateway (Node.js microservice) with circuit breaker protection.
-    ממיר אוטומטית תגי HTML לפורמט וואטסאפ.
-    כולל retry עם exponential backoff לשגיאות זמניות (ניתן להגדרה ב-settings).
+    שליחת הודעה דרך ספק WhatsApp הפעיל.
+    מאציל לספק (WPPConnectProvider / PyWaProvider) — כולל retry ו-circuit breaker.
+    ממיר תגי HTML לפורמט הספק לפני שליחה.
+    fire-and-forget: שגיאות נרשמות בלוג ולא נזרקות חזרה.
     """
-    # המרת תגי HTML לפורמט וואטסאפ (לדוגמה: <b> -> *)
-    formatted_text = convert_html_to_whatsapp(text)
-
-    circuit_breaker = get_whatsapp_circuit_breaker()
-
-    # הגדרות retry מה-config
-    max_retries = settings.WHATSAPP_MAX_RETRIES
-    transient_status_codes = {
-        int(code.strip())
-        for code in settings.WHATSAPP_TRANSIENT_STATUS_CODES.split(",")
-        if code.strip()
-    }
-
-    async def _send_with_retry():
-        # שימוש חוזר באותו client לכל הניסיונות - חוסך TCP+TLS handshake
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            for attempt in range(max_retries):
-                try:
-                    response = await client.post(
-                        f"{settings.WHATSAPP_GATEWAY_URL}/send",
-                        json={
-                            "phone": phone_number,
-                            "message": formatted_text,
-                            "keyboard": keyboard,
-                        },
-                    )
-                    if response.status_code == 200:
-                        return  # הצלחה
-
-                    # בדיקה אם זו שגיאה זמנית שכדאי לנסות שוב
-                    if (
-                        response.status_code in transient_status_codes
-                        and attempt < max_retries - 1
-                    ):
-                        backoff_seconds = 2**attempt  # 1, 2, 4 שניות
-                        logger.warning(
-                            "WhatsApp send got transient error, retrying",
-                            extra_data={
-                                "phone": PhoneNumberValidator.mask(phone_number),
-                                "status_code": response.status_code,
-                                "attempt": attempt + 1,
-                                "max_retries": max_retries,
-                                "backoff_seconds": backoff_seconds,
-                            },
-                        )
-                        await asyncio.sleep(backoff_seconds)
-                        continue
-
-                    # שגיאה לא זמנית או מיצינו את הניסיונות
-                    raise WhatsAppError.from_response(
-                        "send",
-                        response,
-                        message=f"gateway /send returned status {response.status_code}",
-                    )
-                except httpx.TimeoutException:
-                    # Timeout גם נחשב שגיאה זמנית
-                    if attempt < max_retries - 1:
-                        backoff_seconds = 2**attempt
-                        logger.warning(
-                            "WhatsApp send timeout, retrying",
-                            extra_data={
-                                "phone": PhoneNumberValidator.mask(phone_number),
-                                "attempt": attempt + 1,
-                                "max_retries": max_retries,
-                                "backoff_seconds": backoff_seconds,
-                            },
-                        )
-                        await asyncio.sleep(backoff_seconds)
-                        continue
-                    raise WhatsAppError(
-                        message="gateway /send timeout after retries",
-                        details={"timeout": True, "attempts": max_retries},
-                    )
-                except httpx.RequestError as e:
-                    # שגיאות רשת (connection error וכו')
-                    if attempt < max_retries - 1:
-                        backoff_seconds = 2**attempt
-                        logger.warning(
-                            "WhatsApp send network error, retrying",
-                            extra_data={
-                                "phone": PhoneNumberValidator.mask(phone_number),
-                                "error": str(e),
-                                "attempt": attempt + 1,
-                                "max_retries": max_retries,
-                                "backoff_seconds": backoff_seconds,
-                            },
-                        )
-                        await asyncio.sleep(backoff_seconds)
-                        continue
-                    raise WhatsAppError(
-                        message=f"gateway /send network error: {str(e)}",
-                        details={"network_error": True, "attempts": max_retries},
-                    )
-
+    provider = get_whatsapp_provider()
+    formatted_text = provider.format_text(text)
     try:
-        await circuit_breaker.execute(_send_with_retry)
-    except Exception as e:
+        await provider.send_text(to=phone_number, text=formatted_text, keyboard=keyboard)
+    except Exception as exc:
         logger.error(
-            "WhatsApp send failed",
+            "כשלון בשליחת הודעת WhatsApp",
             extra_data={
                 "phone": PhoneNumberValidator.mask(phone_number),
-                "error": str(e),
+                "error": str(exc),
             },
             exc_info=True,
         )
