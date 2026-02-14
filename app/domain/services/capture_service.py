@@ -8,7 +8,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Tuple, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 from app.db.models.delivery import Delivery, DeliveryStatus
 from app.db.models.courier_wallet import CourierWallet
@@ -86,6 +86,8 @@ class CaptureService:
         try:
             # Start atomic operation
             # 1. Lock delivery record
+            # הערה: אסור joinedload עם FOR UPDATE — ב-PostgreSQL הנעילה חלה
+            # על כל הטבלאות ב-JOIN, מה שינעל גם את שורת ה-sender ויגרום ל-deadlocks.
             delivery_result = await self.db.execute(
                 select(Delivery)
                 .where(Delivery.id == delivery_id)
@@ -156,7 +158,9 @@ class CaptureService:
             self.db.add(ledger_entry)
 
             # Queue notification messages via outbox
-            await self.outbox_service.queue_capture_notification(delivery, courier_id)
+            await self.outbox_service.queue_capture_notification(
+                delivery, courier_id
+            )
 
             # 8. Commit או flush — כשנקרא מ-workflow, הקורא מנהל את הטרנזקציה
             if auto_commit:

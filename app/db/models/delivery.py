@@ -60,7 +60,7 @@ class Delivery(Base):
     # שלב 4: שדות זרימת אישור משלוח
     requesting_courier_id = Column(BigInteger, ForeignKey("users.id"), nullable=True, index=True)  # שליח שביקש את המשלוח
     requested_at = Column(DateTime, nullable=True)  # מתי הוגשה הבקשה
-    approved_by_id = Column(BigInteger, ForeignKey("users.id"), nullable=True)  # סדרן שאישר/דחה
+    approved_by_id = Column(BigInteger, ForeignKey("users.id"), nullable=True, index=True)  # סדרן שאישר/דחה
     approved_at = Column(DateTime, nullable=True)  # מתי התקבלה ההחלטה
     approval_decision = Column(String(20), nullable=True)  # "approved" / "rejected"
 

@@ -7,13 +7,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import joinedload
-
 from app.core.auth import TokenPayload
 from app.core.validation import PhoneNumberValidator
 from app.api.dependencies.auth import get_current_station_owner
 from app.db.database import get_db
 from app.db.models.delivery import Delivery, DeliveryStatus
+from app.db.queries import delivery_with_relations
 from app.api.routes.panel.schemas import parse_date_param
 
 router = APIRouter()
@@ -105,7 +104,7 @@ async def list_active_deliveries(
     offset = (page - 1) * page_size
     result = await db.execute(
         select(Delivery)
-        .options(joinedload(Delivery.sender), joinedload(Delivery.courier))
+        .options(*delivery_with_relations())
         .where(
             Delivery.station_id == station_id,
             Delivery.status.in_(active_statuses),
@@ -181,7 +180,7 @@ async def list_delivery_history(
     offset = (page - 1) * page_size
     result = await db.execute(
         select(Delivery)
-        .options(joinedload(Delivery.sender), joinedload(Delivery.courier))
+        .options(*delivery_with_relations())
         .where(*base_where)
         .order_by(Delivery.created_at.desc())
         .offset(offset)
@@ -214,7 +213,7 @@ async def get_delivery_detail(
     """פרטי משלוח בודד — כולל ולידציה שהמשלוח שייך לתחנה"""
     result = await db.execute(
         select(Delivery)
-        .options(joinedload(Delivery.sender), joinedload(Delivery.courier))
+        .options(*delivery_with_relations())
         .where(
             Delivery.id == delivery_id,
             Delivery.station_id == auth.station_id,
