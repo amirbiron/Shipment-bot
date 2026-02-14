@@ -132,7 +132,9 @@ class Settings(BaseSettings):
             )
 
         # --- DEBUG + DB חיצוני = כנראה שכחו לכבות DEBUG ---
-        if self.DEBUG and self.DATABASE_URL and "localhost" not in self.DATABASE_URL:
+        _local_hosts = ("localhost", "127.0.0.1", "::1")
+        _is_local_db = any(h in self.DATABASE_URL for h in _local_hosts) if self.DATABASE_URL else True
+        if self.DEBUG and not _is_local_db:
             warnings.warn(
                 "DEBUG=True עם DATABASE_URL חיצוני — ייתכן שמצב DEBUG פעיל בפרודקשן. "
                 "כותרות אבטחה (HSTS, CSP) לא יוחלו. הגדר DEBUG=False בסביבת ייצור.",

@@ -8,7 +8,7 @@
 4. בעל התחנה מזין את הקוד בפאנל ומקבל access token + refresh token
 5. כש-access token פג — הלקוח שולח refresh token ומקבל access חדש
 """
-import hashlib
+import hmac
 import json
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -138,8 +138,14 @@ def generate_otp() -> str:
 
 
 def _hash_otp(otp: str) -> str:
-    """האשינג OTP עם SHA-256 — מונע חשיפת קוד גם אם Redis נפרץ"""
-    return hashlib.sha256(otp.encode()).hexdigest()
+    """HMAC-SHA256 עם מפתח סודי — מונע חשיפת קוד גם אם Redis נפרץ.
+
+    SHA-256 ללא מלח על 6 ספרות ניתן ל-brute force (מיליון אפשרויות בלבד).
+    HMAC עם JWT_SECRET_KEY הופך את ה-hash לבלתי הפיך בלי המפתח.
+    """
+    return hmac.new(
+        settings.JWT_SECRET_KEY.encode(), otp.encode(), "sha256"
+    ).hexdigest()
 
 
 async def try_set_otp_cooldown_by_phone(phone: str) -> bool:
