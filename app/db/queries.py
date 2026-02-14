@@ -8,6 +8,9 @@ Delivery Query Helpers — פונקציות עזר לשאילתות נפוצות
         .where(Delivery.id == delivery_id)
         .options(*delivery_with_relations())
     )
+
+הערה חשובה: אסור לשלב joinedload עם .with_for_update() —
+ב-PostgreSQL הנעילה חלה על כל הטבלאות ב-JOIN ולא רק על הטבלה הראשית.
 """
 from typing import List
 
@@ -26,14 +29,4 @@ def delivery_with_relations() -> List[Load]:
         joinedload(Delivery.sender),
         joinedload(Delivery.courier),
         joinedload(Delivery.requesting_courier),
-    ]
-
-
-def delivery_with_sender() -> List[Load]:
-    """options לשליפת משלוח עם שולח בלבד.
-
-    מתאים למקרים שצריכים רק את פרטי השולח (למשל התראת תפיסה).
-    """
-    return [
-        joinedload(Delivery.sender),
     ]
