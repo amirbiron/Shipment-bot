@@ -27,6 +27,7 @@ from app.api.webhooks.whatsapp import (
     send_whatsapp_message,
     send_welcome_message,
     _route_to_role_menu_wa,
+    _sender_fallback_wa,
     handle_admin_private_command,
     _is_whatsapp_admin_any,
     _match_delivery_approval_command,
@@ -40,7 +41,7 @@ from app.state_machine.handlers import SenderStateHandler, CourierStateHandler
 from app.state_machine.dispatcher_handler import DispatcherStateHandler
 from app.state_machine.station_owner_handler import StationOwnerStateHandler
 from app.state_machine.manager import StateManager
-from app.state_machine.states import DispatcherState
+from app.state_machine.states import CourierState, DispatcherState
 from app.db.models.user import User, UserRole, ApprovalStatus
 
 logger = get_logger(__name__)
@@ -485,9 +486,30 @@ async def _route_message_to_handler(
         station_service = StationService(db)
         station = await station_service.get_dispatcher_station(user.id)
         if station:
-            handler = DispatcherStateHandler(db, station.id, platform="whatsapp")
-            response, new_state = await handler.handle_message(user, text, photo_file_id)
+            # כפתור "חזרה לתפריט ראשי"/"חזרה לתפריט נהג" — חזרה לתפריט לפי תפקיד.
+            # חשוב: קוראים ישירות ל-fallback ולא ל-_route_to_role_menu_wa כדי למנוע
+            # לולאה (כי _route_to_role_menu_wa יזהה שהמשתמש סדרן ויחזיר לתפריט סדרן).
+            if text and ("חזרה לתפריט נהג" in text or "חזרה לתפריט ראשי" in text):
+                if user.role == UserRole.COURIER:
+                    await state_manager.force_state(
+                        user.id, "whatsapp", CourierState.MENU.value, context={}
+                    )
+                    handler = CourierStateHandler(db, platform="whatsapp")
+                    response, new_state = await handler.handle_message(
+                        user, "תפריט", None
+                    )
+                else:
+                    response, new_state = await _sender_fallback_wa(
+                        user, db, state_manager
+                    )
+            else:
+                handler = DispatcherStateHandler(db, station.id, platform="whatsapp")
+                response, new_state = await handler.handle_message(user, text, photo_file_id)
         else:
+            logger.warning(
+                "Dispatcher station not found, resetting to menu",
+                extra_data={"user_id": user.id, "state": current_state},
+            )
             response, new_state = await _route_to_role_menu_wa(user, db, state_manager)
         background_tasks.add_task(
             send_whatsapp_message, reply_to, response.text, response.keyboard

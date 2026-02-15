@@ -849,7 +849,7 @@ class AdminNotificationService:
         קבוצות (@g.us) → WPPConnect (Cloud API לא תומך בקבוצות לא רשמיות).
         מספרים פרטיים → admin provider (pywa במצב hybrid/pywa, WPPConnect אחרת).
         """
-        if phone_or_group and "@g.us" in phone_or_group:
+        if phone_or_group and phone_or_group.endswith("@g.us"):
             return get_whatsapp_group_provider()
         return get_whatsapp_admin_provider()
 

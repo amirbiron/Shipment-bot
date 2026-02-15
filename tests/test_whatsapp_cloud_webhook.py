@@ -1715,3 +1715,146 @@ class TestDispatcherMenuKeyword:
             )
 
         mock_menu.assert_called_once()
+
+
+# ============================================================================
+# TestDispatcherBackButton — כפתור "חזרה" ב-Cloud webhook
+# ============================================================================
+
+
+class TestDispatcherBackButton:
+    """בדיקות שכפתור חזרה מזרימת סדרן מוציא מהזרימה כמו ב-WPPConnect."""
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_back_to_courier_menu(self) -> None:
+        """שליח-סדרן לוחץ 'חזרה לתפריט נהג' — חוזר לתפריט שליח."""
+        from app.api.webhooks.whatsapp_cloud import _route_message_to_handler
+
+        mock_db = AsyncMock()
+        mock_bg = MagicMock()
+        mock_user = MagicMock()
+        mock_user.id = 1
+        mock_user.role = UserRole.COURIER
+
+        mock_station = MagicMock()
+        mock_station.id = 10
+
+        mock_response = MagicMock()
+        mock_response.text = "תפריט שליח"
+        mock_response.keyboard = [["כפתור"]]
+
+        with patch(
+            "app.api.webhooks.whatsapp_cloud.StateManager"
+        ) as MockSM, patch(
+            "app.api.webhooks.whatsapp_cloud.StationService"
+        ) as MockSS, patch(
+            "app.api.webhooks.whatsapp_cloud.CourierStateHandler"
+        ) as MockCH:
+            sm_instance = AsyncMock()
+            sm_instance.get_current_state.return_value = "DISPATCHER.MENU"
+            MockSM.return_value = sm_instance
+
+            ss_instance = AsyncMock()
+            ss_instance.get_dispatcher_station.return_value = mock_station
+            MockSS.return_value = ss_instance
+
+            handler_instance = AsyncMock()
+            handler_instance.handle_message.return_value = (mock_response, "COURIER.MENU")
+            MockCH.return_value = handler_instance
+
+            response_text, new_state = await _route_message_to_handler(
+                mock_db, mock_user, "🔙 חזרה לתפריט נהג", None, mock_bg, "+972501234567"
+            )
+
+        assert new_state == "COURIER.MENU"
+        # force_state נקרא עם CourierState.MENU
+        sm_instance.force_state.assert_called_once()
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_back_to_main_menu_sender(self) -> None:
+        """שולח-סדרן לוחץ 'חזרה לתפריט ראשי' — חוזר לתפריט שולח."""
+        from app.api.webhooks.whatsapp_cloud import _route_message_to_handler
+
+        mock_db = AsyncMock()
+        mock_bg = MagicMock()
+        mock_user = MagicMock()
+        mock_user.id = 1
+        mock_user.role = UserRole.SENDER
+
+        mock_station = MagicMock()
+        mock_station.id = 10
+
+        mock_response = MagicMock()
+        mock_response.text = "תפריט ראשי"
+        mock_response.keyboard = None
+
+        with patch(
+            "app.api.webhooks.whatsapp_cloud.StateManager"
+        ) as MockSM, patch(
+            "app.api.webhooks.whatsapp_cloud.StationService"
+        ) as MockSS, patch(
+            "app.api.webhooks.whatsapp_cloud._sender_fallback_wa",
+            new_callable=AsyncMock,
+            return_value=(mock_response, "SENDER.MENU"),
+        ) as mock_fallback:
+            sm_instance = AsyncMock()
+            sm_instance.get_current_state.return_value = "DISPATCHER.ADD_SHIPMENT.PICKUP_CITY"
+            MockSM.return_value = sm_instance
+
+            ss_instance = AsyncMock()
+            ss_instance.get_dispatcher_station.return_value = mock_station
+            MockSS.return_value = ss_instance
+
+            response_text, new_state = await _route_message_to_handler(
+                mock_db, mock_user, "🔙 חזרה לתפריט ראשי", None, mock_bg, "+972501234567"
+            )
+
+        assert new_state == "SENDER.MENU"
+        mock_fallback.assert_called_once()
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_regular_text_still_routed_to_handler(self) -> None:
+        """טקסט רגיל בזרימת סדרן — מנותב ל-DispatcherStateHandler כרגיל."""
+        from app.api.webhooks.whatsapp_cloud import _route_message_to_handler
+
+        mock_db = AsyncMock()
+        mock_bg = MagicMock()
+        mock_user = MagicMock()
+        mock_user.id = 1
+        mock_user.role = UserRole.COURIER
+
+        mock_station = MagicMock()
+        mock_station.id = 10
+
+        mock_response = MagicMock()
+        mock_response.text = "הוספת משלוח"
+        mock_response.keyboard = None
+
+        with patch(
+            "app.api.webhooks.whatsapp_cloud.StateManager"
+        ) as MockSM, patch(
+            "app.api.webhooks.whatsapp_cloud.StationService"
+        ) as MockSS, patch(
+            "app.api.webhooks.whatsapp_cloud.DispatcherStateHandler"
+        ) as MockDH:
+            sm_instance = AsyncMock()
+            sm_instance.get_current_state.return_value = "DISPATCHER.MENU"
+            MockSM.return_value = sm_instance
+
+            ss_instance = AsyncMock()
+            ss_instance.get_dispatcher_station.return_value = mock_station
+            MockSS.return_value = ss_instance
+
+            handler_instance = AsyncMock()
+            handler_instance.handle_message.return_value = (mock_response, "DISPATCHER.ADD_SHIPMENT.PICKUP_CITY")
+            MockDH.return_value = handler_instance
+
+            response_text, new_state = await _route_message_to_handler(
+                mock_db, mock_user, "הוספת משלוח", None, mock_bg, "+972501234567"
+            )
+
+        assert new_state == "DISPATCHER.ADD_SHIPMENT.PICKUP_CITY"
+        handler_instance.handle_message.assert_called_once()
