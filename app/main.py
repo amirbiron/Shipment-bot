@@ -1,6 +1,7 @@
 """
 Shipment Bot - Main FastAPI Application
 """
+import os
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -88,10 +89,31 @@ if allowed_origins:
 
 app.include_router(api_router, prefix="/api")
 
+
+_STATIC_ASSET_EXTENSIONS = {
+    ".js", ".css", ".html", ".json", ".map",
+    ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp",
+    ".woff", ".woff2", ".ttf", ".eot",
+}
+
+
+class _SPAStaticFiles(StaticFiles):
+    """StaticFiles עם SPA fallback — מחזיר index.html לנתיבי ניווט שלא תואמים קובץ סטטי."""
+
+    def lookup_path(self, path: str) -> tuple[str, os.stat_result | None]:
+        full_path, stat_result = super().lookup_path(path)
+        if stat_result is None:
+            ext = os.path.splitext(path)[1].lower()
+            if ext not in _STATIC_ASSET_EXTENSIONS:
+                # נתיב ניווט (לא נכס סטטי) — fallback ל-index.html
+                return super().lookup_path("index.html")
+        return full_path, stat_result
+
+
 # הגשת Frontend של פאנל ניהול התחנה — SPA עם client-side routing
 _PANEL_DIR = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 if _PANEL_DIR.exists():
-    app.mount("/panel", StaticFiles(directory=_PANEL_DIR, html=True), name="panel")
+    app.mount("/panel", _SPAStaticFiles(directory=_PANEL_DIR, html=True), name="panel")
 else:
     logger.warning("frontend/dist לא נמצא — הפאנל לא יוגש", extra_data={"path": str(_PANEL_DIR)})
 
