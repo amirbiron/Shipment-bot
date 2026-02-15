@@ -437,3 +437,104 @@ def test_get_admin_wa_provider_routes_group_to_wppconnect():
         mock_group.assert_called_once()
         mock_admin.assert_not_called()
 
+
+# ============================================================================
+# בדיקות notify_deposit_request — תווית פלטפורמה + העברת תמונות
+# ============================================================================
+
+
+@pytest.mark.unit
+async def test_deposit_notification_telegram_label(monkeypatch):
+    """פלטפורמת טלגרם — הודעה מכילה 'Telegram ID:' ותמונה מועברת ב-_forward_photo."""
+    monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_ID", "admin_chat")
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "fake_token")
+
+    with patch.object(
+        AdminNotificationService, "_send_telegram_message",
+        new_callable=AsyncMock, return_value=True,
+    ) as mock_send, patch.object(
+        AdminNotificationService, "_forward_photo",
+        new_callable=AsyncMock, return_value=True,
+    ) as mock_fwd, patch.object(
+        AdminNotificationService, "_forward_whatsapp_photo_to_telegram",
+        new_callable=AsyncMock, return_value=True,
+    ) as mock_wa_fwd:
+        result = await AdminNotificationService.notify_deposit_request(
+            user_id=42,
+            full_name="ישראל ישראלי",
+            contact_identifier="123456789",
+            screenshot_file_id="AgACAgIAAxk",
+            platform="telegram",
+        )
+
+    assert result is True
+    # הודעה נשלחה עם תווית Telegram ID
+    sent_msg = mock_send.call_args[0][1]
+    assert "Telegram ID: 123456789" in sent_msg
+    assert "WhatsApp:" not in sent_msg
+    # תמונה הועברה ב-_forward_photo (לא _forward_whatsapp_photo_to_telegram)
+    mock_fwd.assert_called_once_with("admin_chat", "AgACAgIAAxk")
+    mock_wa_fwd.assert_not_called()
+
+
+@pytest.mark.unit
+async def test_deposit_notification_whatsapp_label(monkeypatch):
+    """פלטפורמת WhatsApp — הודעה מכילה 'WhatsApp:' ותמונה מועברת ב-_forward_whatsapp_photo_to_telegram."""
+    monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_ID", "admin_chat")
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "fake_token")
+
+    with patch.object(
+        AdminNotificationService, "_send_telegram_message",
+        new_callable=AsyncMock, return_value=True,
+    ) as mock_send, patch.object(
+        AdminNotificationService, "_forward_photo",
+        new_callable=AsyncMock, return_value=True,
+    ) as mock_fwd, patch.object(
+        AdminNotificationService, "_forward_whatsapp_photo_to_telegram",
+        new_callable=AsyncMock, return_value=True,
+    ) as mock_wa_fwd:
+        result = await AdminNotificationService.notify_deposit_request(
+            user_id=42,
+            full_name="ישראל ישראלי",
+            contact_identifier="+972501234567",
+            screenshot_file_id="http://gateway:3000/media/abc123",
+            platform="whatsapp",
+        )
+
+    assert result is True
+    # הודעה נשלחה עם תווית WhatsApp
+    sent_msg = mock_send.call_args[0][1]
+    assert "WhatsApp: +972501234567" in sent_msg
+    assert "Telegram ID:" not in sent_msg
+    assert "פלטפורמה: whatsapp" in sent_msg
+    # תמונה הועברה ב-_forward_whatsapp_photo_to_telegram (לא _forward_photo)
+    mock_wa_fwd.assert_called_once_with("admin_chat", "http://gateway:3000/media/abc123")
+    mock_fwd.assert_not_called()
+
+
+@pytest.mark.unit
+async def test_deposit_notification_default_platform_is_telegram(monkeypatch):
+    """ברירת מחדל לפלטפורמה — telegram (תאימות לאחור)."""
+    monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_ID", "admin_chat")
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "fake_token")
+
+    with patch.object(
+        AdminNotificationService, "_send_telegram_message",
+        new_callable=AsyncMock, return_value=True,
+    ) as mock_send, patch.object(
+        AdminNotificationService, "_forward_photo",
+        new_callable=AsyncMock, return_value=True,
+    ) as mock_fwd:
+        # קריאה בלי platform — אמור להיות telegram
+        result = await AdminNotificationService.notify_deposit_request(
+            user_id=1,
+            full_name="טסט",
+            contact_identifier="999",
+            screenshot_file_id="file123",
+        )
+
+    assert result is True
+    sent_msg = mock_send.call_args[0][1]
+    assert "Telegram ID: 999" in sent_msg
+    mock_fwd.assert_called_once()
+

@@ -337,20 +337,31 @@ class AdminNotificationService:
     async def notify_deposit_request(
         user_id: int,
         full_name: str,
-        telegram_chat_id: str,
-        screenshot_file_id: str
+        contact_identifier: str,
+        screenshot_file_id: str,
+        platform: str = "telegram",
     ) -> bool:
-        """Notify admin about deposit request"""
+        """Notify admin about deposit request.
+
+        contact_identifier — Telegram chat ID או מספר WhatsApp, בהתאם לפלטפורמה.
+        """
         if not settings.TELEGRAM_ADMIN_CHAT_ID or not settings.TELEGRAM_BOT_TOKEN:
             return False
+
+        # תווית ליצירת קשר לפי פלטפורמה
+        if platform == "telegram":
+            contact_line = f"Telegram ID: {contact_identifier}"
+        else:
+            contact_line = f"WhatsApp: {contact_identifier}"
 
         message = f"""
 💳 <b>בקשת הפקדה חדשה!</b>
 
 📋 <b>פרטי השליח:</b>
 • שם: {full_name}
-• Telegram ID: {telegram_chat_id}
+• {contact_line}
 • User ID: {user_id}
+• פלטפורמה: {platform}
 
 📸 צילום מסך העברה: נשלח
 
@@ -364,10 +375,16 @@ class AdminNotificationService:
         )
 
         if success and screenshot_file_id:
-            await AdminNotificationService._forward_photo(
-                settings.TELEGRAM_ADMIN_CHAT_ID,
-                screenshot_file_id
-            )
+            if platform == "telegram":
+                await AdminNotificationService._forward_photo(
+                    settings.TELEGRAM_ADMIN_CHAT_ID,
+                    screenshot_file_id
+                )
+            else:
+                await AdminNotificationService._forward_whatsapp_photo_to_telegram(
+                    settings.TELEGRAM_ADMIN_CHAT_ID,
+                    screenshot_file_id,
+                )
 
         return success
 
@@ -726,6 +743,91 @@ class AdminNotificationService:
             await circuit_breaker.record_failure(e)
             logger.error(
                 "Error sending photo/document",
+                extra_data={"chat_id": chat_id, "error": str(e)},
+                exc_info=True,
+            )
+            return False
+
+    @staticmethod
+    async def _forward_whatsapp_photo_to_telegram(
+        chat_id: str,
+        file_id: str,
+    ) -> bool:
+        """הורדת מדיה ממקור WhatsApp והעלאתה לטלגרם כ-multipart upload.
+
+        file_id יכול להיות:
+        - URL של WPPConnect (http://...) — מוריד ישירות
+        - Cloud API media ID — מוריד דרך Meta Graph API
+        - data URI — מפענח את ה-base64
+        """
+        if not settings.TELEGRAM_BOT_TOKEN:
+            return False
+
+        # --- המרה ל-bytes ---
+        image_bytes: bytes | None = None
+        mime_type = "image/jpeg"
+
+        if file_id.startswith("data:"):
+            try:
+                header, b64_data = file_id.split(",", 1)
+                mime_type = header.split(":")[1].split(";")[0] if ":" in header else "image/jpeg"
+                image_bytes = base64.b64decode(b64_data)
+            except Exception:
+                logger.warning("כשלון בפענוח data URI של צילום הפקדה")
+                return False
+        elif file_id.startswith(("http://", "https://")):
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(file_id, timeout=30.0)
+                    if resp.status_code == 200:
+                        mime_type = resp.headers.get("content-type", "image/jpeg").split(";")[0]
+                        image_bytes = resp.content
+            except Exception as e:
+                logger.warning(
+                    "כשלון בהורדת תמונת הפקדה מ-URL",
+                    extra_data={"error": str(e)},
+                )
+                return False
+        else:
+            # Cloud API media ID — מוריד דרך Meta Graph API
+            data_uri = await AdminNotificationService._download_cloud_api_media_as_data_url(file_id)
+            if data_uri:
+                try:
+                    header, b64_data = data_uri.split(",", 1)
+                    mime_type = header.split(":")[1].split(";")[0] if ":" in header else "image/jpeg"
+                    image_bytes = base64.b64decode(b64_data)
+                except Exception:
+                    logger.warning("כשלון בפענוח data URI לאחר הורדה מ-Cloud API")
+                    return False
+
+        if not image_bytes:
+            return False
+
+        # --- העלאה לטלגרם ---
+        ext = mimetypes.guess_extension(mime_type) or ".jpg"
+        circuit_breaker = get_telegram_circuit_breaker()
+
+        async def _upload() -> bool:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendPhoto",
+                    data={"chat_id": chat_id},
+                    files={"photo": (f"deposit{ext}", image_bytes, mime_type)},
+                    timeout=30.0,
+                )
+                if response.status_code != 200:
+                    raise TelegramError.from_response(
+                        "sendPhoto (upload)",
+                        response,
+                        message=f"sendPhoto upload returned status {response.status_code}",
+                    )
+                return True
+
+        try:
+            return await circuit_breaker.execute(_upload)
+        except Exception as e:
+            logger.error(
+                "כשלון בהעלאת צילום הפקדה לטלגרם",
                 extra_data={"chat_id": chat_id, "error": str(e)},
                 exc_info=True,
             )

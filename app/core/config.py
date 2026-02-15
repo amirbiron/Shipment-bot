@@ -186,6 +186,18 @@ class Settings(BaseSettings):
                     f"{', '.join(_missing)}"
                 )
 
+        # --- WPPConnect gateway URL: נדרש ב-HYBRID_MODE (לקבוצות) ---
+        _needs_wppconnect = self.WHATSAPP_HYBRID_MODE or self.WHATSAPP_PROVIDER == "wppconnect"
+        if _needs_wppconnect and not self.WHATSAPP_GATEWAY_URL:
+            _wpp_mode = (
+                "WHATSAPP_HYBRID_MODE=True" if self.WHATSAPP_HYBRID_MODE
+                else "WHATSAPP_PROVIDER=wppconnect"
+            )
+            raise ValueError(
+                f"{_wpp_mode} אבל WHATSAPP_GATEWAY_URL ריק — "
+                "WPPConnect נדרש לשליחת הודעות לקבוצות."
+            )
+
         # --- DEBUG + DB חיצוני = כנראה שכחו לכבות DEBUG ---
         _local_hosts = ("localhost", "127.0.0.1", "::1")
         _is_local_db = any(h in self.DATABASE_URL for h in _local_hosts) if self.DATABASE_URL else True

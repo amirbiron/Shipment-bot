@@ -866,6 +866,7 @@ async def _handle_courier_post_processing(
                 user.full_name or user.name or "לא ידוע",
                 contact_phone,
                 photo_file_id,
+                platform,
             )
 
 

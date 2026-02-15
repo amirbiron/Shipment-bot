@@ -1284,6 +1284,37 @@ class TestConfigValidation:
         s = Settings()
         assert s.WHATSAPP_PROVIDER == "pywa"
 
+    @pytest.mark.unit
+    def test_hybrid_mode_without_gateway_url_raises(self, monkeypatch) -> None:
+        """WHATSAPP_HYBRID_MODE=True עם WHATSAPP_GATEWAY_URL ריק — זורק ValueError."""
+        from app.core.config import Settings
+
+        monkeypatch.setenv("WHATSAPP_HYBRID_MODE", "true")
+        monkeypatch.setenv("WHATSAPP_GATEWAY_URL", "")
+        monkeypatch.setenv("WHATSAPP_CLOUD_API_TOKEN", "test_token")
+        monkeypatch.setenv("WHATSAPP_CLOUD_API_PHONE_ID", "123456")
+        monkeypatch.setenv("WHATSAPP_CLOUD_API_APP_SECRET", "secret123")
+        monkeypatch.setenv("DEBUG", "true")
+
+        with pytest.raises(ValueError, match="WHATSAPP_GATEWAY_URL ריק"):
+            Settings()
+
+    @pytest.mark.unit
+    def test_hybrid_mode_with_gateway_url_ok(self, monkeypatch) -> None:
+        """WHATSAPP_HYBRID_MODE=True עם gateway URL תקין — לא זורק."""
+        from app.core.config import Settings
+
+        monkeypatch.setenv("WHATSAPP_HYBRID_MODE", "true")
+        monkeypatch.setenv("WHATSAPP_GATEWAY_URL", "http://wppconnect:3000")
+        monkeypatch.setenv("WHATSAPP_CLOUD_API_TOKEN", "test_token")
+        monkeypatch.setenv("WHATSAPP_CLOUD_API_PHONE_ID", "123456")
+        monkeypatch.setenv("WHATSAPP_CLOUD_API_APP_SECRET", "secret123")
+        monkeypatch.setenv("DEBUG", "true")
+
+        s = Settings()
+        assert s.WHATSAPP_HYBRID_MODE is True
+        assert s.WHATSAPP_GATEWAY_URL == "http://wppconnect:3000"
+
 
 # ============================================================================
 # TestAdminProviderRouting — ניתוב admin provider לפי הגדרות
