@@ -800,6 +800,75 @@ async def _route_to_role_menu_wa(
     return await _sender_fallback_wa(user, db, state_manager)
 
 
+# ──────────────────────────────────────────────
+#  לוגיקה משותפת אחרי handler.handle_message() עבור שליחים
+#  נקרא מ-WPPConnect, Cloud API ו-Telegram webhooks
+# ──────────────────────────────────────────────
+
+
+async def _handle_courier_post_processing(
+    db: AsyncSession,
+    user: User,
+    previous_state: str | None,
+    new_state: str | None,
+    contact_phone: str,
+    photo_file_id: str | None,
+    platform: str,
+    background_tasks: BackgroundTasks,
+) -> None:
+    """
+    לוגיקה משותפת אחרי טיפול בהודעת שליח — כרטיס נהג + הפקדה.
+
+    כולל idempotency check למניעת שליחה כפולה.
+    """
+    # שליחת "כרטיס נהג" למנהלים רק במעבר הראשון למצב PENDING_APPROVAL
+    # בדיקת idempotency מונעת שליחה כפולה גם במקרה של race condition
+    # (למשל אם הגטוויי שולח את אותה לחיצת כפתור כשני webhook calls נפרדים)
+    if (
+        new_state == CourierState.PENDING_APPROVAL.value
+        and previous_state != CourierState.PENDING_APPROVAL.value
+        and user.approval_status == ApprovalStatus.PENDING
+    ):
+        # מפתח idempotency כולל את מועד אישור התקנון (לדקה הקרובה).
+        # - שני webhook calls מקבילים לאותו רישום → אותה דקה → אותו מפתח → חסימה
+        # - רי-רגיסטרציה אחרי דחייה → terms_accepted_at חדש → מפתח שונה → מאפשר
+        reg_ts = int(user.terms_accepted_at.timestamp()) // 60 if user.terms_accepted_at else 0
+        notify_key = f"courier_reg_notify_{user.id}_{reg_ts}"
+        should_notify = await _try_acquire_message(db, notify_key, "notification")
+        if should_notify:
+            background_tasks.add_task(
+                AdminNotificationService.notify_new_courier_registration,
+                user.id,
+                user.full_name or user.name or "לא צוין",
+                user.service_area or "לא צוין",
+                contact_phone,
+                user.id_document_url,
+                platform,
+                user.vehicle_category,
+                user.selfie_file_id,
+                user.vehicle_photo_file_id,
+            )
+            await _mark_message_completed(db, notify_key)
+        else:
+            logger.info(
+                "כרטיס נהג כבר נשלח, מדלג על שליחה כפולה",
+                extra_data={"user_id": user.id},
+            )
+
+    # צילום מסך להפקדה — הודעה למנהלים
+    if photo_file_id:
+        state_manager = StateManager(db)
+        context = await state_manager.get_context(user.id, platform)
+        if context.get("deposit_screenshot"):
+            background_tasks.add_task(
+                AdminNotificationService.notify_deposit_request,
+                user.id,
+                user.full_name or user.name or "לא ידוע",
+                contact_phone,
+                photo_file_id,
+            )
+
+
 async def send_welcome_message(phone_number: str):
     """הודעת ברוכים הבאים ותפריט ראשי [שלב 1]"""
     welcome_text = (
@@ -1431,66 +1500,31 @@ async def whatsapp_webhook(
             if user.role == UserRole.COURIER:
                 # שמירת המצב הקודם לפני הטיפול בהודעה
                 previous_state = current_state
-    
+
                 handler = CourierStateHandler(db, platform="whatsapp")
                 response, new_state = await handler.handle_message(
                     user, text, photo_file_id
                 )
-    
-                # שליחת "כרטיס נהג" למנהלים רק במעבר הראשון למצב PENDING_APPROVAL
-                # בדיקת idempotency מונעת שליחה כפולה גם במקרה של race condition
-                # (למשל אם הגטוויי שולח את אותה לחיצת כפתור כשני webhook calls נפרדים)
-                if (
-                    new_state == CourierState.PENDING_APPROVAL.value
-                    and previous_state != CourierState.PENDING_APPROVAL.value
-                    and user.approval_status == ApprovalStatus.PENDING
-                ):
-                    # מפתח idempotency כולל את מועד אישור התקנון (לדקה הקרובה).
-                    # - שני webhook calls מקבילים לאותו רישום → אותה דקה → אותו מפתח → חסימה
-                    # - רי-רגיסטרציה אחרי דחייה → terms_accepted_at חדש → מפתח שונה → מאפשר
-                    reg_ts = int(user.terms_accepted_at.timestamp()) // 60 if user.terms_accepted_at else 0
-                    notify_key = f"courier_reg_notify_{user.id}_{reg_ts}"
-                    should_notify = await _try_acquire_message(db, notify_key, "notification")
-                    if should_notify:
-                        # שליפת מסמכים ישירות מה-DB - כל השדות כבר נשמרו בשלבי ה-KYC
-                        contact_phone = _resolve_contact_phone(
-                            resolved_phone=resolved_phone,
-                            from_number=from_number,
-                            reply_to=reply_to,
-                            sender_id=sender_id,
-                            stored_phone=user.phone_number,
-                        )
-                        background_tasks.add_task(
-                            AdminNotificationService.notify_new_courier_registration,
-                            user.id,
-                            user.full_name or user.name or "לא צוין",
-                            user.service_area or "לא צוין",
-                            contact_phone,
-                            user.id_document_url,
-                            "whatsapp",
-                            user.vehicle_category,
-                            user.selfie_file_id,
-                            user.vehicle_photo_file_id,
-                        )
-                        await _mark_message_completed(db, notify_key)
-                    else:
-                        logger.info(
-                            "כרטיס נהג כבר נשלח, מדלג על שליחה כפולה",
-                            extra_data={"user_id": user.id},
-                        )
-    
-                # Check if courier submitted deposit screenshot
-                if photo_file_id:
-                    context = await state_manager.get_context(user.id, "whatsapp")
-                    if context.get("deposit_screenshot"):
-                        background_tasks.add_task(
-                            AdminNotificationService.notify_deposit_request,
-                            user.id,
-                            user.full_name or user.name or "לא ידוע",
-                            user.phone_number,
-                            photo_file_id,
-                        )
-    
+
+                # לוגיקה משותפת: כרטיס נהג + הפקדה
+                contact_phone = _resolve_contact_phone(
+                    resolved_phone=resolved_phone,
+                    from_number=from_number,
+                    reply_to=reply_to,
+                    sender_id=sender_id,
+                    stored_phone=user.phone_number,
+                )
+                await _handle_courier_post_processing(
+                    db=db,
+                    user=user,
+                    previous_state=previous_state,
+                    new_state=new_state,
+                    contact_phone=contact_phone,
+                    photo_file_id=photo_file_id,
+                    platform="whatsapp",
+                    background_tasks=background_tasks,
+                )
+
                 background_tasks.add_task(
                     send_whatsapp_message, reply_to, response.text, response.keyboard
                 )

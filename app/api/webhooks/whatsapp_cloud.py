@@ -31,6 +31,8 @@ from app.api.webhooks.whatsapp import (
     _is_whatsapp_admin_any,
     _match_delivery_approval_command,
     _handle_whatsapp_delivery_approval,
+    _resolve_contact_phone,
+    _handle_courier_post_processing,
 )
 from app.domain.services.capture_service import CaptureService
 from app.domain.services.station_service import StationService
@@ -491,8 +493,32 @@ async def _route_message_to_handler(
 
     # שליח
     if user.role == UserRole.COURIER:
+        # שמירת המצב הקודם לפני הטיפול בהודעה
+        previous_state = current_state
+
         handler = CourierStateHandler(db, platform="whatsapp")
         response, new_state = await handler.handle_message(user, text, photo_file_id)
+
+        # לוגיקה משותפת: כרטיס נהג + הפקדה
+        # ב-Cloud API מספר הטלפון נקי — reply_to הוא המספר עצמו
+        contact_phone = _resolve_contact_phone(
+            resolved_phone=None,
+            from_number=reply_to,
+            reply_to=reply_to,
+            sender_id=reply_to,
+            stored_phone=user.phone_number,
+        )
+        await _handle_courier_post_processing(
+            db=db,
+            user=user,
+            previous_state=previous_state,
+            new_state=new_state,
+            contact_phone=contact_phone,
+            photo_file_id=photo_file_id,
+            platform="whatsapp",
+            background_tasks=background_tasks,
+        )
+
         background_tasks.add_task(
             send_whatsapp_message, reply_to, response.text, response.keyboard
         )

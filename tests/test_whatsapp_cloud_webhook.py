@@ -12,6 +12,7 @@
 - פקודות אדמין (אישור/דחיית שליחים) ב-Cloud webhook
 - תפיסת משלוח מקישור wa.me דרך CaptureService
 - אישור/דחיית משלוחים (סדרנים) ב-Cloud webhook
+- כרטיס נהג למנהלים בסיום רישום שליח (PENDING_APPROVAL)
 """
 import hashlib
 import hmac
@@ -884,3 +885,208 @@ class TestDeliveryApproval:
         assert result is not None
         assert result.get("delivery_approval") is True
         assert result["response"] == "not_authorized"
+
+
+# ============================================================================
+# TestCourierRegistrationNotification — כרטיס נהג ב-Cloud webhook
+# ============================================================================
+
+
+class TestCourierRegistrationNotification:
+    """בדיקות שכרטיס נהג נשלח למנהלים כששליח משלים רישום דרך Cloud API."""
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_pending_approval_triggers_post_processing(self) -> None:
+        """שליח עובר ל-PENDING_APPROVAL — _handle_courier_post_processing נקרא."""
+        from app.api.webhooks.whatsapp_cloud import _route_message_to_handler
+        from app.db.models.user import UserRole, ApprovalStatus
+        from app.state_machine.states import CourierState
+
+        mock_db = AsyncMock()
+        mock_bg = MagicMock()
+        mock_user = MagicMock()
+        mock_user.id = 42
+        mock_user.role = UserRole.COURIER
+        mock_user.approval_status = ApprovalStatus.PENDING
+        mock_user.phone_number = "+972501234567"
+
+        mock_response = MagicMock()
+        mock_response.text = "ממתין לאישור"
+        mock_response.keyboard = None
+
+        with patch(
+            "app.api.webhooks.whatsapp_cloud.StateManager",
+        ) as MockSM, patch(
+            "app.api.webhooks.whatsapp_cloud.CourierStateHandler",
+        ) as MockHandler, patch(
+            "app.api.webhooks.whatsapp_cloud._handle_courier_post_processing",
+            new_callable=AsyncMock,
+        ) as mock_post_process, patch(
+            "app.api.webhooks.whatsapp_cloud._resolve_contact_phone",
+            return_value="+972501234567",
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud.send_whatsapp_message",
+            new_callable=AsyncMock,
+        ):
+            mock_sm = AsyncMock()
+            mock_sm.get_current_state = AsyncMock(
+                return_value=CourierState.REGISTER_TERMS.value
+            )
+            MockSM.return_value = mock_sm
+
+            mock_handler = AsyncMock()
+            mock_handler.handle_message = AsyncMock(
+                return_value=(mock_response, CourierState.PENDING_APPROVAL.value)
+            )
+            MockHandler.return_value = mock_handler
+
+            await _route_message_to_handler(
+                mock_db, mock_user, "מאשר", None, mock_bg, "+972501234567"
+            )
+
+        # וידוא שהפונקציה המשותפת נקראה עם הפרמטרים הנכונים
+        mock_post_process.assert_called_once()
+        call_kwargs = mock_post_process.call_args
+        assert call_kwargs.kwargs["previous_state"] == CourierState.REGISTER_TERMS.value
+        assert call_kwargs.kwargs["new_state"] == CourierState.PENDING_APPROVAL.value
+        assert call_kwargs.kwargs["platform"] == "whatsapp"
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_non_pending_state_still_calls_post_processing(self) -> None:
+        """שליח בתפריט — הפונקציה נקראת אבל לא שולחת כרטיס."""
+        from app.api.webhooks.whatsapp_cloud import _route_message_to_handler
+        from app.db.models.user import UserRole, ApprovalStatus
+        from app.state_machine.states import CourierState
+
+        mock_db = AsyncMock()
+        mock_bg = MagicMock()
+        mock_user = MagicMock()
+        mock_user.id = 42
+        mock_user.role = UserRole.COURIER
+        mock_user.approval_status = ApprovalStatus.APPROVED
+        mock_user.phone_number = "+972501234567"
+
+        mock_response = MagicMock()
+        mock_response.text = "תפריט שליח"
+        mock_response.keyboard = [["משלוחים"]]
+
+        with patch(
+            "app.api.webhooks.whatsapp_cloud.StateManager",
+        ) as MockSM, patch(
+            "app.api.webhooks.whatsapp_cloud.CourierStateHandler",
+        ) as MockHandler, patch(
+            "app.api.webhooks.whatsapp_cloud._handle_courier_post_processing",
+            new_callable=AsyncMock,
+        ) as mock_post_process, patch(
+            "app.api.webhooks.whatsapp_cloud._resolve_contact_phone",
+            return_value="+972501234567",
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud.send_whatsapp_message",
+            new_callable=AsyncMock,
+        ):
+            mock_sm = AsyncMock()
+            mock_sm.get_current_state = AsyncMock(
+                return_value=CourierState.MENU.value
+            )
+            MockSM.return_value = mock_sm
+
+            mock_handler = AsyncMock()
+            mock_handler.handle_message = AsyncMock(
+                return_value=(mock_response, CourierState.VIEW_AVAILABLE.value)
+            )
+            MockHandler.return_value = mock_handler
+
+            await _route_message_to_handler(
+                mock_db, mock_user, "משלוחים", None, mock_bg, "+972501234567"
+            )
+
+        # וידוא שהפונקציה המשותפת נקראה (תמיד נקראת)
+        mock_post_process.assert_called_once()
+        call_kwargs = mock_post_process.call_args
+        assert call_kwargs.kwargs["new_state"] == CourierState.VIEW_AVAILABLE.value
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_post_processing_fires_notification(self) -> None:
+        """בדיקת הפונקציה המשותפת — מעבר ל-PENDING_APPROVAL שולח כרטיס נהג."""
+        from app.api.webhooks.whatsapp import _handle_courier_post_processing
+        from app.db.models.user import ApprovalStatus
+        from app.state_machine.states import CourierState
+        from datetime import datetime, timezone
+
+        mock_db = AsyncMock()
+        mock_bg = MagicMock()
+        mock_user = MagicMock()
+        mock_user.id = 10
+        mock_user.approval_status = ApprovalStatus.PENDING
+        mock_user.terms_accepted_at = datetime(2026, 2, 15, tzinfo=timezone.utc)
+        mock_user.full_name = "שליח חדש"
+        mock_user.name = "שליח"
+        mock_user.service_area = "ירושלים"
+        mock_user.id_document_url = "doc.jpg"
+        mock_user.vehicle_category = "motorcycle"
+        mock_user.selfie_file_id = "selfie.jpg"
+        mock_user.vehicle_photo_file_id = "vehicle.jpg"
+        mock_user.phone_number = "+972501234567"
+
+        with patch(
+            "app.api.webhooks.whatsapp._try_acquire_message",
+            new_callable=AsyncMock,
+            return_value=True,
+        ), patch(
+            "app.api.webhooks.whatsapp._mark_message_completed",
+            new_callable=AsyncMock,
+        ) as mock_mark, patch(
+            "app.api.webhooks.whatsapp.AdminNotificationService",
+        ):
+            await _handle_courier_post_processing(
+                db=mock_db,
+                user=mock_user,
+                previous_state=CourierState.REGISTER_TERMS.value,
+                new_state=CourierState.PENDING_APPROVAL.value,
+                contact_phone="+972501234567",
+                photo_file_id=None,
+                platform="whatsapp",
+                background_tasks=mock_bg,
+            )
+
+        # וידוא ש-add_task נקרא עם notify_new_courier_registration
+        assert mock_bg.add_task.called
+        mock_mark.assert_called_once()
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_post_processing_idempotency_blocks_duplicate(self) -> None:
+        """שליחה כפולה — _try_acquire_message מחזיר False, לא שולח כרטיס."""
+        from app.api.webhooks.whatsapp import _handle_courier_post_processing
+        from app.db.models.user import ApprovalStatus
+        from app.state_machine.states import CourierState
+        from datetime import datetime, timezone
+
+        mock_db = AsyncMock()
+        mock_bg = MagicMock()
+        mock_user = MagicMock()
+        mock_user.id = 10
+        mock_user.approval_status = ApprovalStatus.PENDING
+        mock_user.terms_accepted_at = datetime(2026, 2, 15, tzinfo=timezone.utc)
+
+        with patch(
+            "app.api.webhooks.whatsapp._try_acquire_message",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            await _handle_courier_post_processing(
+                db=mock_db,
+                user=mock_user,
+                previous_state=CourierState.REGISTER_TERMS.value,
+                new_state=CourierState.PENDING_APPROVAL.value,
+                contact_phone="+972501234567",
+                photo_file_id=None,
+                platform="whatsapp",
+                background_tasks=mock_bg,
+            )
+
+        # לא נקרא add_task — השליחה נחסמה
+        mock_bg.add_task.assert_not_called()
