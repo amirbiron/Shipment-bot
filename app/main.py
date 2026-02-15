@@ -1,14 +1,14 @@
 """
 Shipment Bot - Main FastAPI Application
 """
+import os
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_redoc_html
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from starlette.responses import Response
 
 from app.core.config import settings
 from app.core.logging import setup_logging, get_logger
@@ -93,14 +93,11 @@ app.include_router(api_router, prefix="/api")
 class _SPAStaticFiles(StaticFiles):
     """StaticFiles עם SPA fallback — מחזיר index.html לכל route שלא תואם קובץ סטטי."""
 
-    async def get_response(self, path: str, scope) -> Response:
-        try:
-            response = await super().get_response(path, scope)
-            if response.status_code == 404:
-                return await super().get_response("index.html", scope)
-            return response
-        except HTTPException:
-            return await super().get_response("index.html", scope)
+    async def lookup_path(self, path: str) -> tuple[str, os.stat_result | None]:
+        full_path, stat_result = await super().lookup_path(path)
+        if stat_result is None:
+            return await super().lookup_path("index.html")
+        return full_path, stat_result
 
 
 # הגשת Frontend של פאנל ניהול התחנה — SPA עם client-side routing
