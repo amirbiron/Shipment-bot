@@ -5,8 +5,8 @@ from pydantic_settings import BaseSettings
 from pydantic import field_validator, model_validator
 from typing import Optional
 
-# ספקי WhatsApp נתמכים — בעתיד: "pywa"
-VALID_WHATSAPP_PROVIDERS = {"wppconnect"}
+# ספקי WhatsApp נתמכים
+VALID_WHATSAPP_PROVIDERS = {"wppconnect", "pywa"}
 
 
 class Settings(BaseSettings):
@@ -43,10 +43,20 @@ class Settings(BaseSettings):
     CELERY_BROKER_URL: str = "redis://localhost:6379/1"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/2"
 
-    # WhatsApp Gateway
+    # WhatsApp Gateway (WPPConnect — Arm B)
     WHATSAPP_GATEWAY_URL: str = "http://localhost:3000"
-    # סוג ספק WhatsApp: "wppconnect" (ברירת מחדל) או "pywa" (Cloud API — בעתיד)
+    # סוג ספק WhatsApp: "wppconnect" (ברירת מחדל) או "pywa" (Cloud API)
     WHATSAPP_PROVIDER: str = "wppconnect"
+
+    # WhatsApp Cloud API (pywa — Arm A)
+    WHATSAPP_CLOUD_API_TOKEN: str = ""            # Meta access token
+    WHATSAPP_CLOUD_API_PHONE_ID: str = ""         # Phone number ID מ-Meta dashboard
+    WHATSAPP_CLOUD_API_PHONE_NUMBER: str = ""     # מספר הטלפון הרשמי ליצירת wa.me/ links (ללא +)
+    WHATSAPP_CLOUD_API_APP_SECRET: str = ""       # App secret לאימות webhook signatures
+    WHATSAPP_CLOUD_API_VERIFY_TOKEN: str = ""     # Verify token לאימות webhook registration
+
+    # מצב היברידי: Cloud API לפרטי, WPPConnect לקבוצות
+    WHATSAPP_HYBRID_MODE: bool = False
 
     @field_validator("WHATSAPP_PROVIDER", mode="before")
     @classmethod
@@ -157,6 +167,35 @@ class Settings(BaseSettings):
                 "הגדר: export TELEGRAM_WEBHOOK_SECRET_TOKEN=$(openssl rand -hex 32) "
                 "ועדכן את ה-secret_token בקריאת setWebhook.",
                 stacklevel=2,
+            )
+
+        # --- Cloud API credentials: נדרש גם ב-HYBRID_MODE וגם ב-PROVIDER=pywa ---
+        _needs_cloud_api = self.WHATSAPP_HYBRID_MODE or self.WHATSAPP_PROVIDER == "pywa"
+        if _needs_cloud_api:
+            _missing = []
+            if not self.WHATSAPP_CLOUD_API_TOKEN:
+                _missing.append("WHATSAPP_CLOUD_API_TOKEN")
+            if not self.WHATSAPP_CLOUD_API_PHONE_ID:
+                _missing.append("WHATSAPP_CLOUD_API_PHONE_ID")
+            if not self.WHATSAPP_CLOUD_API_APP_SECRET:
+                _missing.append("WHATSAPP_CLOUD_API_APP_SECRET")
+            if _missing:
+                _mode = "WHATSAPP_HYBRID_MODE=True" if self.WHATSAPP_HYBRID_MODE else "WHATSAPP_PROVIDER=pywa"
+                raise ValueError(
+                    f"{_mode} אבל חסרות הגדרות Cloud API: "
+                    f"{', '.join(_missing)}"
+                )
+
+        # --- WPPConnect gateway URL: נדרש ב-HYBRID_MODE (לקבוצות) ---
+        _needs_wppconnect = self.WHATSAPP_HYBRID_MODE or self.WHATSAPP_PROVIDER == "wppconnect"
+        if _needs_wppconnect and not self.WHATSAPP_GATEWAY_URL:
+            _wpp_mode = (
+                "WHATSAPP_HYBRID_MODE=True" if self.WHATSAPP_HYBRID_MODE
+                else "WHATSAPP_PROVIDER=wppconnect"
+            )
+            raise ValueError(
+                f"{_wpp_mode} אבל WHATSAPP_GATEWAY_URL ריק — "
+                "WPPConnect נדרש לשליחת הודעות לקבוצות."
             )
 
         # --- DEBUG + DB חיצוני = כנראה שכחו לכבות DEBUG ---

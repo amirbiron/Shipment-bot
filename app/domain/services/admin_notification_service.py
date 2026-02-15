@@ -8,10 +8,10 @@ from typing import Optional
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.core.circuit_breaker import get_telegram_circuit_breaker
+from app.core.circuit_breaker import get_telegram_circuit_breaker, get_whatsapp_cloud_circuit_breaker
 from app.core.exceptions import TelegramError
 from app.core.validation import PhoneNumberValidator, TextSanitizer
-from app.domain.services.whatsapp import get_whatsapp_admin_provider
+from app.domain.services.whatsapp import get_whatsapp_admin_provider, get_whatsapp_group_provider
 
 logger = get_logger(__name__)
 
@@ -337,20 +337,31 @@ class AdminNotificationService:
     async def notify_deposit_request(
         user_id: int,
         full_name: str,
-        telegram_chat_id: str,
-        screenshot_file_id: str
+        contact_identifier: str,
+        screenshot_file_id: str,
+        platform: str = "telegram",
     ) -> bool:
-        """Notify admin about deposit request"""
+        """Notify admin about deposit request.
+
+        contact_identifier — Telegram chat ID או מספר WhatsApp, בהתאם לפלטפורמה.
+        """
         if not settings.TELEGRAM_ADMIN_CHAT_ID or not settings.TELEGRAM_BOT_TOKEN:
             return False
+
+        # תווית ליצירת קשר לפי פלטפורמה
+        if platform == "telegram":
+            contact_line = f"Telegram ID: {contact_identifier}"
+        else:
+            contact_line = f"WhatsApp: {contact_identifier}"
 
         message = f"""
 💳 <b>בקשת הפקדה חדשה!</b>
 
 📋 <b>פרטי השליח:</b>
 • שם: {full_name}
-• Telegram ID: {telegram_chat_id}
+• {contact_line}
 • User ID: {user_id}
+• פלטפורמה: {platform}
 
 📸 צילום מסך העברה: נשלח
 
@@ -364,10 +375,16 @@ class AdminNotificationService:
         )
 
         if success and screenshot_file_id:
-            await AdminNotificationService._forward_photo(
-                settings.TELEGRAM_ADMIN_CHAT_ID,
-                screenshot_file_id
-            )
+            if platform == "telegram":
+                await AdminNotificationService._forward_photo(
+                    settings.TELEGRAM_ADMIN_CHAT_ID,
+                    screenshot_file_id
+                )
+            else:
+                await AdminNotificationService._forward_whatsapp_photo_to_telegram(
+                    settings.TELEGRAM_ADMIN_CHAT_ID,
+                    screenshot_file_id,
+                )
 
         return success
 
@@ -476,19 +493,109 @@ class AdminNotificationService:
         return f"data:{mime_type};base64,{encoded}"
 
     @staticmethod
+    async def _download_cloud_api_media_as_data_url(media_id: str) -> Optional[str]:
+        """
+        הורדת מדיה מ-WhatsApp Cloud API והמרה ל-data URL.
+
+        Cloud API media IDs הם טוקנים זמניים של Meta — לא ניתן לשלוח אותם
+        ישירות דרך send_image. צריך לפנות ל-API, לקבל URL להורדה,
+        להוריד את התוכן ולהמיר ל-data URI.
+        """
+        token = settings.WHATSAPP_CLOUD_API_TOKEN
+        if not token:
+            logger.warning(
+                "Cloud API token לא מוגדר — לא ניתן להוריד מדיה",
+                extra_data={"media_id": media_id[:8] + "..." if len(media_id) > 8 else media_id},
+            )
+            return None
+
+        circuit_breaker = get_whatsapp_cloud_circuit_breaker()
+
+        async def _fetch() -> tuple[bytes, str | None]:
+            async with httpx.AsyncClient() as client:
+                # שלב 1: קבלת URL להורדה מ-Meta
+                meta_resp = await client.get(
+                    f"https://graph.facebook.com/v21.0/{media_id}",
+                    headers={"Authorization": f"Bearer {token}"},
+                    timeout=15.0,
+                )
+                if meta_resp.status_code != 200:
+                    logger.error(
+                        "Cloud API getMedia נכשל",
+                        extra_data={
+                            "media_id": media_id[:8] + "...",
+                            "status": meta_resp.status_code,
+                        },
+                    )
+                    return b"", None
+
+                download_url = meta_resp.json().get("url")
+                if not download_url:
+                    logger.error(
+                        "Cloud API getMedia — חסר URL להורדה",
+                        extra_data={"media_id": media_id[:8] + "..."},
+                    )
+                    return b"", None
+
+                # שלב 2: הורדת התוכן (דורש אותו Bearer token)
+                content_resp = await client.get(
+                    download_url,
+                    headers={"Authorization": f"Bearer {token}"},
+                    timeout=30.0,
+                )
+                if content_resp.status_code != 200:
+                    logger.error(
+                        "Cloud API media download נכשל",
+                        extra_data={
+                            "media_id": media_id[:8] + "...",
+                            "status": content_resp.status_code,
+                        },
+                    )
+                    return b"", None
+
+                return content_resp.content, content_resp.headers.get("content-type")
+
+        try:
+            content, content_type = await circuit_breaker.execute(_fetch)
+        except Exception as e:
+            logger.error(
+                "כשלון בהורדת מדיה מ-Cloud API",
+                extra_data={"media_id": media_id[:8] + "...", "error": str(e)},
+                exc_info=True,
+            )
+            return None
+
+        if not content:
+            return None
+
+        mime_type = (content_type or "image/jpeg").split(";")[0].strip()
+        encoded = base64.b64encode(content).decode("ascii")
+        return f"data:{mime_type};base64,{encoded}"
+
+    @staticmethod
     async def _resolve_whatsapp_media_url(
         file_id: str,
         platform: str,
     ) -> Optional[str]:
         """
         הכנת media_url מתאים לשליחה בוואטסאפ עבור WhatsApp/Telegram.
+
+        עבור WhatsApp: אם file_id הוא URL/data URI — מחזיר כמו שהוא.
+        אם הוא media_id של Cloud API — מוריד ומחזיר כ-data URI.
+        עבור Telegram: מוריד מ-Telegram API ומחזיר כ-data URI.
         """
         if not file_id:
             return None
         if AdminNotificationService._is_media_url(file_id):
             return file_id
         if platform == "whatsapp":
-            return file_id
+            # file_id שהוא לא URL בפלטפורמת WhatsApp — מניחים שזה media_id של Cloud API.
+            # WPPConnect תמיד מספק URLs (http://...) שנתפסים מעלה ב-_is_media_url.
+            logger.debug(
+                "WhatsApp non-URL file_id — מנסה להוריד כ-Cloud API media ID",
+                extra_data={"file_id_prefix": file_id[:8] + "..." if len(file_id) > 8 else file_id},
+            )
+            return await AdminNotificationService._download_cloud_api_media_as_data_url(file_id)
         return await AdminNotificationService._download_telegram_file_as_data_url(file_id)
 
     @staticmethod
@@ -646,9 +753,105 @@ class AdminNotificationService:
             )
             return False
 
+    @staticmethod
+    async def _forward_whatsapp_photo_to_telegram(
+        chat_id: str,
+        file_id: str,
+    ) -> bool:
+        """הורדת מדיה ממקור WhatsApp והעלאתה לטלגרם כ-multipart upload.
+
+        file_id יכול להיות:
+        - URL של WPPConnect (http://...) — מוריד ישירות
+        - Cloud API media ID — מוריד דרך Meta Graph API
+        - data URI — מפענח את ה-base64
+        """
+        if not settings.TELEGRAM_BOT_TOKEN:
+            return False
+
+        # --- המרה ל-bytes ---
+        image_bytes: bytes | None = None
+        mime_type = "image/jpeg"
+
+        if file_id.startswith("data:"):
+            try:
+                header, b64_data = file_id.split(",", 1)
+                mime_type = header.split(":")[1].split(";")[0] if ":" in header else "image/jpeg"
+                image_bytes = base64.b64decode(b64_data)
+            except Exception:
+                logger.warning("כשלון בפענוח data URI של צילום הפקדה")
+                return False
+        elif file_id.startswith(("http://", "https://")):
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(file_id, timeout=30.0)
+                    if resp.status_code == 200:
+                        mime_type = resp.headers.get("content-type", "image/jpeg").split(";")[0]
+                        image_bytes = resp.content
+            except Exception as e:
+                logger.warning(
+                    "כשלון בהורדת תמונת הפקדה מ-URL",
+                    extra_data={"error": str(e)},
+                )
+                return False
+        else:
+            # Cloud API media ID — מוריד דרך Meta Graph API
+            data_uri = await AdminNotificationService._download_cloud_api_media_as_data_url(file_id)
+            if data_uri:
+                try:
+                    header, b64_data = data_uri.split(",", 1)
+                    mime_type = header.split(":")[1].split(";")[0] if ":" in header else "image/jpeg"
+                    image_bytes = base64.b64decode(b64_data)
+                except Exception:
+                    logger.warning("כשלון בפענוח data URI לאחר הורדה מ-Cloud API")
+                    return False
+
+        if not image_bytes:
+            return False
+
+        # --- העלאה לטלגרם ---
+        ext = mimetypes.guess_extension(mime_type) or ".jpg"
+        circuit_breaker = get_telegram_circuit_breaker()
+
+        async def _upload() -> bool:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendPhoto",
+                    data={"chat_id": chat_id},
+                    files={"photo": (f"deposit{ext}", image_bytes, mime_type)},
+                    timeout=30.0,
+                )
+                if response.status_code != 200:
+                    raise TelegramError.from_response(
+                        "sendPhoto (upload)",
+                        response,
+                        message=f"sendPhoto upload returned status {response.status_code}",
+                    )
+                return True
+
+        try:
+            return await circuit_breaker.execute(_upload)
+        except Exception as e:
+            logger.error(
+                "כשלון בהעלאת צילום הפקדה לטלגרם",
+                extra_data={"chat_id": chat_id, "error": str(e)},
+                exc_info=True,
+            )
+            return False
+
     # ──────────────────────────────────────────────
     #  שיטות עזר - וואטסאפ
     # ──────────────────────────────────────────────
+
+    @staticmethod
+    def _get_admin_wa_provider(phone_or_group: str):
+        """בחירת ספק WhatsApp להודעות מנהלים — ניתוב לפי סוג יעד.
+
+        קבוצות (@g.us) → WPPConnect (Cloud API לא תומך בקבוצות לא רשמיות).
+        מספרים פרטיים → admin provider (pywa במצב hybrid/pywa, WPPConnect אחרת).
+        """
+        if phone_or_group and phone_or_group.endswith("@g.us"):
+            return get_whatsapp_group_provider()
+        return get_whatsapp_admin_provider()
 
     @staticmethod
     async def _send_whatsapp_admin_message(
@@ -656,12 +859,12 @@ class AdminNotificationService:
         text: str,
         keyboard: list = None
     ) -> bool:
-        """שליחת הודעה למנהל/קבוצה בוואטסאפ — דרך ספק WhatsApp admin."""
-        if not settings.WHATSAPP_GATEWAY_URL:
-            logger.warning("WhatsApp gateway URL not configured")
+        """שליחת הודעה למנהל/קבוצה בוואטסאפ — ניתוב לפי סוג יעד."""
+        provider = AdminNotificationService._get_admin_wa_provider(phone_or_group)
+        # WPPConnect דורש gateway URL; pywa לא (Cloud API ישיר)
+        if provider.provider_name == "wppconnect" and not settings.WHATSAPP_GATEWAY_URL:
+            logger.warning("WhatsApp gateway URL not configured for WPPConnect admin message")
             return False
-
-        provider = get_whatsapp_admin_provider()
         try:
             await provider.send_text(to=phone_or_group, text=text, keyboard=keyboard)
             return True
@@ -678,16 +881,16 @@ class AdminNotificationService:
 
     @staticmethod
     async def _send_whatsapp_admin_photo(phone_or_group: str, media_url: str) -> bool:
-        """שליחת תמונה למנהל/קבוצה בוואטסאפ — דרך ספק WhatsApp admin."""
-        if not settings.WHATSAPP_GATEWAY_URL:
-            logger.warning("WhatsApp gateway URL not configured for photo sending")
-            return False
-
+        """שליחת תמונה למנהל/קבוצה בוואטסאפ — ניתוב לפי סוג יעד."""
         if not media_url:
             logger.warning("No media_url provided for WhatsApp admin photo")
             return False
 
-        provider = get_whatsapp_admin_provider()
+        provider = AdminNotificationService._get_admin_wa_provider(phone_or_group)
+        # WPPConnect דורש gateway URL; pywa לא (Cloud API ישיר)
+        if provider.provider_name == "wppconnect" and not settings.WHATSAPP_GATEWAY_URL:
+            logger.warning("WhatsApp gateway URL not configured for WPPConnect admin photo")
+            return False
         try:
             await provider.send_media(
                 to=phone_or_group, media_url=media_url, media_type="image"

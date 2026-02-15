@@ -324,3 +324,15 @@ def get_whatsapp_admin_circuit_breaker() -> CircuitBreaker:
             timeout_seconds=30.0
         )
     )
+
+
+def get_whatsapp_cloud_circuit_breaker() -> CircuitBreaker:
+    """Circuit breaker עבור Cloud API (pywa) — נפרד מ-WPPConnect."""
+    return CircuitBreaker.get_instance(
+        "whatsapp_cloud",
+        CircuitBreakerConfig(
+            failure_threshold=5,
+            success_threshold=2,
+            timeout_seconds=30.0,
+        )
+    )

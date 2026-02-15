@@ -893,7 +893,7 @@ class StationOwnerStateHandler:
             return response, StationOwnerState.SET_PUBLIC_GROUP.value, {}
 
         # זיהוי פלטפורמה — מזהי טלגרם מתחילים ב-"-" או ספרות, WhatsApp מכיל "@g.us"
-        platform = "whatsapp" if "@g.us" in chat_id else "telegram"
+        platform = "whatsapp" if chat_id.endswith("@g.us") else "telegram"
 
         success, msg = await self.station_service.update_station_groups(
             self.station_id,
@@ -922,7 +922,7 @@ class StationOwnerStateHandler:
             response = MessageResponse("מזהה קבוצה ריק. אנא הזן מזהה תקין:")
             return response, StationOwnerState.SET_PRIVATE_GROUP.value, {}
 
-        platform = "whatsapp" if "@g.us" in chat_id else "telegram"
+        platform = "whatsapp" if chat_id.endswith("@g.us") else "telegram"
 
         success, msg = await self.station_service.update_station_groups(
             self.station_id,

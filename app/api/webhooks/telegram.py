@@ -1145,36 +1145,18 @@ async def telegram_webhook(
         handler = CourierStateHandler(db)
         response, new_state = await handler.handle_message(user, text, photo_file_id)
 
-        # שליחת "כרטיס נהג" למנהלים רק במעבר הראשון למצב PENDING_APPROVAL
-        if (
-            new_state == CourierState.PENDING_APPROVAL.value
-            and previous_state != CourierState.PENDING_APPROVAL.value
-            and user.approval_status == ApprovalStatus.PENDING
-        ):
-            background_tasks.add_task(
-                AdminNotificationService.notify_new_courier_registration,
-                user.id,
-                user.full_name or user.name or "לא צוין",
-                user.service_area or "לא צוין",
-                user.telegram_chat_id,
-                user.id_document_url,
-                "telegram",
-                user.vehicle_category,
-                user.selfie_file_id,
-                user.vehicle_photo_file_id,
-            )
-
-        # צילום מסך להפקדה - הודעה למנהלים
-        if photo_file_id:
-            context = await state_manager.get_context(user.id, "telegram")
-            if context.get("deposit_screenshot"):
-                background_tasks.add_task(
-                    AdminNotificationService.notify_deposit_request,
-                    user.id,
-                    user.full_name or user.name or "לא ידוע",
-                    user.telegram_chat_id,
-                    photo_file_id,
-                )
+        # לוגיקה משותפת: כרטיס נהג + הפקדה (ייבוא inline למניעת circular import)
+        from app.api.webhooks.whatsapp import _handle_courier_post_processing
+        await _handle_courier_post_processing(
+            db=db,
+            user=user,
+            previous_state=previous_state,
+            new_state=new_state,
+            contact_phone=user.telegram_chat_id,
+            photo_file_id=photo_file_id,
+            platform="telegram",
+            background_tasks=background_tasks,
+        )
 
         _queue_response_send(background_tasks, send_chat_id, response)
         return {"ok": True, "new_state": new_state}
