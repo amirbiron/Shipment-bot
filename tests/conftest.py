@@ -81,17 +81,19 @@ async def db_session(async_engine) -> AsyncGenerator[AsyncSession, None]:
         await session.rollback()
 
 
-def _reset_rate_limiter(app_or_middleware) -> None:
-    """מחפש ומאפס את ה-WebhookRateLimitMiddleware ב-middleware stack."""
+def _reset_rate_limiter(middleware_stack) -> None:
+    """מחפש ומאפס את ה-WebhookRateLimitMiddleware ב-middleware stack.
+
+    Starlette בונה את ה-stack בצורה שרשרת: כל middleware עוטף את הבא דרך .app.
+    """
     from app.core.middleware import WebhookRateLimitMiddleware
 
-    if isinstance(app_or_middleware, WebhookRateLimitMiddleware):
-        app_or_middleware._requests.clear()
-        return
-    # Starlette עוטף כל middleware ב-app attribute
-    inner = getattr(app_or_middleware, "app", None)
-    if inner is not None and inner is not app_or_middleware:
-        _reset_rate_limiter(inner)
+    current = middleware_stack
+    while current is not None:
+        if isinstance(current, WebhookRateLimitMiddleware):
+            current._requests.clear()
+            return
+        current = getattr(current, "app", None)
 
 
 @pytest.fixture(scope="function")
@@ -104,8 +106,10 @@ async def test_client(db_session: AsyncSession):
 
     app.dependency_overrides[get_db] = override_get_db
 
-    # איפוס rate limiter בין טסטים — מונע הצטברות בקשות מטסטים קודמים
-    _reset_rate_limiter(app)
+    # איפוס rate limiter בין טסטים — מונע הצטברות בקשות מטסטים קודמים.
+    # middleware_stack נבנה lazily (None עד הבקשה הראשונה), אז נאפס רק אם קיים.
+    if app.middleware_stack is not None:
+        _reset_rate_limiter(app.middleware_stack)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
