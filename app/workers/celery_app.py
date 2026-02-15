@@ -45,4 +45,9 @@ celery_app.conf.beat_schedule = {
         "task": "app.workers.tasks.process_billing_cycle_blocking",
         "schedule": 86400.0,  # 24 שעות
     },
+    # בדיקת התראות — סף ארנק ומשלוחים שלא נאספו (כל 5 דקות)
+    "check-station-alerts-every-5-minutes": {
+        "task": "app.workers.tasks.check_station_alerts",
+        "schedule": 300.0,  # 5 דקות
+    },
 }

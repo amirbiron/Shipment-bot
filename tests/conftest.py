@@ -327,12 +327,39 @@ def reset_whatsapp_providers():
     reset_providers()
 
 
+class FakePubSub:
+    """תחליף ל-Redis PubSub לבדיקות."""
+
+    def __init__(self) -> None:
+        self._channels: set[str] = set()
+        self._messages: list[dict] = []
+
+    async def subscribe(self, *channels: str) -> None:
+        self._channels.update(channels)
+
+    async def unsubscribe(self, *channels: str) -> None:
+        self._channels -= set(channels)
+
+    async def get_message(
+        self, ignore_subscribe_messages: bool = True, timeout: float = 0,
+    ) -> dict | None:
+        if self._messages:
+            return self._messages.pop(0)
+        return None
+
+    async def aclose(self) -> None:
+        self._channels.clear()
+        self._messages.clear()
+
+
 class FakeRedis:
     """תחליף ל-Redis לבדיקות — in-memory dict עם ממשק תואם ומעקב TTL."""
 
     def __init__(self) -> None:
         self._store: dict[str, str] = {}
         self._ttls: dict[str, int] = {}
+        self._lists: dict[str, list[str]] = {}
+        self._published: list[tuple[str, str]] = []
 
     async def ping(self) -> bool:
         return True
@@ -381,9 +408,43 @@ class FakeRedis:
             self._store.pop(key, None)
             self._ttls.pop(key, None)
 
+    # --- Pub/Sub ---
+
+    async def publish(self, channel: str, message: str) -> int:
+        """פרסום הודעה לערוץ — שומר בזיכרון לבדיקות"""
+        self._published.append((channel, message))
+        return 1
+
+    def pubsub(self) -> FakePubSub:
+        """יצירת PubSub מדומה"""
+        return FakePubSub()
+
+    # --- Lists ---
+
+    async def lpush(self, key: str, *values: str) -> int:
+        """הוספה לראש הרשימה"""
+        if key not in self._lists:
+            self._lists[key] = []
+        for v in values:
+            self._lists[key].insert(0, v)
+        return len(self._lists[key])
+
+    async def ltrim(self, key: str, start: int, stop: int) -> None:
+        """חיתוך רשימה"""
+        if key in self._lists:
+            self._lists[key] = self._lists[key][start:stop + 1]
+
+    async def lrange(self, key: str, start: int, stop: int) -> list[str]:
+        """שליפת טווח מרשימה"""
+        if key not in self._lists:
+            return []
+        return self._lists[key][start:stop + 1]
+
     async def aclose(self) -> None:
         self._store.clear()
         self._ttls.clear()
+        self._lists.clear()
+        self._published.clear()
 
 
 @pytest.fixture(autouse=True)
@@ -395,7 +456,8 @@ def fake_redis():
         return _fake
 
     with patch("app.core.redis_client.get_redis", _get_fake_redis), \
-         patch("app.core.auth.get_redis", _get_fake_redis):
+         patch("app.core.auth.get_redis", _get_fake_redis), \
+         patch("app.domain.services.alert_service.get_redis", _get_fake_redis):
         yield _fake
 
 

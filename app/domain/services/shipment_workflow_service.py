@@ -19,6 +19,7 @@ from app.db.models.station import Station
 from app.domain.services.station_service import StationService
 from app.domain.services.capture_service import CaptureService
 from app.domain.services.outbox_service import OutboxService
+from app.domain.services.alert_service import publish_delivery_captured
 from app.core.logging import get_logger
 from app.core.validation import PhoneNumberValidator
 
@@ -222,6 +223,15 @@ class ShipmentWorkflowService:
         # commit אחד אטומי: תפיסה + חיוב + אישור + הודעות outbox
         await self.db.commit()
         await self.db.refresh(delivery)
+
+        # התראה בזמן אמת לפאנל — אחרי commit מוצלח
+        if delivery.station_id and courier:
+            courier_name = courier.full_name or courier.name or "לא צוין"
+            await publish_delivery_captured(
+                station_id=delivery.station_id,
+                delivery_id=delivery.id,
+                courier_name=courier_name,
+            )
 
         logger.info(
             "Delivery approved by dispatcher",

@@ -9,6 +9,11 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.db.models.delivery import Delivery, DeliveryStatus
 from app.domain.services.outbox_service import OutboxService
+from app.domain.services.alert_service import (
+    publish_delivery_created,
+    publish_delivery_delivered,
+    publish_delivery_cancelled,
+)
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -69,6 +74,16 @@ class DeliveryService:
 
         await self.db.commit()
         await self.db.refresh(delivery)
+
+        # התראה בזמן אמת לפאנל — רק למשלוחי תחנה
+        if station_id:
+            await publish_delivery_created(
+                station_id=station_id,
+                delivery_id=delivery.id,
+                pickup_address=pickup_address,
+                dropoff_address=dropoff_address,
+                fee=fee,
+            )
 
         return delivery
 
@@ -159,6 +174,24 @@ class DeliveryService:
 
             await self.db.commit()
             await self.db.refresh(delivery)
+
+            # התראה בזמן אמת לפאנל — רק למשלוחי תחנה
+            if delivery.station_id:
+                courier_name = ""
+                if delivery.courier_id:
+                    from app.db.models.user import User
+                    courier_result = await self.db.execute(
+                        select(User).where(User.id == delivery.courier_id)
+                    )
+                    courier = courier_result.scalar_one_or_none()
+                    if courier:
+                        courier_name = courier.full_name or courier.name or "לא צוין"
+                await publish_delivery_delivered(
+                    station_id=delivery.station_id,
+                    delivery_id=delivery.id,
+                    courier_name=courier_name,
+                )
+
             return delivery
 
         except SQLAlchemyError as e:
@@ -177,4 +210,12 @@ class DeliveryService:
             delivery.status = DeliveryStatus.CANCELLED
             await self.db.commit()
             await self.db.refresh(delivery)
+
+            # התראה בזמן אמת לפאנל — רק למשלוחי תחנה
+            if delivery.station_id:
+                await publish_delivery_cancelled(
+                    station_id=delivery.station_id,
+                    delivery_id=delivery.id,
+                )
+
         return delivery

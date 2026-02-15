@@ -13,7 +13,12 @@ from sqlalchemy import select
 from app.db.models.delivery import Delivery, DeliveryStatus
 from app.db.models.courier_wallet import CourierWallet
 from app.db.models.wallet_ledger import WalletLedger, LedgerEntryType
+from app.db.models.user import User
 from app.domain.services.outbox_service import OutboxService
+from app.domain.services.alert_service import publish_delivery_captured
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class CaptureError(Exception):
@@ -170,6 +175,21 @@ class CaptureService:
                 # flush כותב ל-DB בתוך הטרנזקציה (ללא commit)
                 # כך ש-refresh מהקורא יראה את השינויים
                 await self.db.flush()
+
+            # התראה בזמן אמת לפאנל — רק למשלוחי תחנה, ורק אחרי commit
+            if auto_commit and delivery.station_id:
+                courier_name = ""
+                courier_result = await self.db.execute(
+                    select(User).where(User.id == courier_id)
+                )
+                courier = courier_result.scalar_one_or_none()
+                if courier:
+                    courier_name = courier.full_name or courier.name or "לא צוין"
+                await publish_delivery_captured(
+                    station_id=delivery.station_id,
+                    delivery_id=delivery.id,
+                    courier_name=courier_name,
+                )
 
             return True, f"המשלוח נתפס בהצלחה! עמלה: {fee}₪, יתרה חדשה: {future_balance}₪", delivery
 

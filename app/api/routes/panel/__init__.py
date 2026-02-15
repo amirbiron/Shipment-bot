@@ -14,6 +14,7 @@ from app.api.routes.panel.blacklist import router as blacklist_router
 from app.api.routes.panel.reports import router as reports_router
 from app.api.routes.panel.groups import router as groups_router
 from app.api.routes.panel.owners import router as owners_router
+from app.api.routes.panel.alerts import router as alerts_router
 
 router = APIRouter()
 
@@ -26,3 +27,4 @@ router.include_router(wallet_router, prefix="/wallet", tags=["Panel - ארנק"]
 router.include_router(blacklist_router, prefix="/blacklist", tags=["Panel - רשימה שחורה"])
 router.include_router(reports_router, prefix="/reports", tags=["Panel - דוחות"])
 router.include_router(groups_router, prefix="/groups", tags=["Panel - קבוצות"])
+router.include_router(alerts_router, prefix="/alerts", tags=["Panel - התראות"])

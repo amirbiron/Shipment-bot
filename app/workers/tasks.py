@@ -491,6 +491,105 @@ def cleanup_old_webhook_events(days: int = 7):
     return run_async(_cleanup())
 
 
+@celery_app.task(name="app.workers.tasks.check_station_alerts")
+def check_station_alerts():
+    """
+    בדיקה תקופתית — סף ארנק ומשלוחים שלא נאספו.
+
+    רצה כל 5 דקות. לכל תחנה פעילה:
+    1. בודקת אם יתרת הארנק מתחת לסף שהוגדר (Redis)
+    2. בודקת אם יש משלוחים פתוחים שלא נאספו מעל 2 שעות
+    משלחת התראות בזמן אמת לפאנל דרך Redis Pub/Sub.
+    """
+    from app.db.models.station import Station
+    from app.db.models.station_wallet import StationWallet
+    from app.db.models.delivery import Delivery, DeliveryStatus
+    from app.domain.services.alert_service import (
+        get_wallet_threshold,
+        publish_wallet_threshold_alert,
+        publish_uncollected_shipment_alert,
+        DEFAULT_UNCOLLECTED_HOURS,
+    )
+
+    async def _check():
+        async with get_task_session() as db:
+            # שליפת כל התחנות הפעילות
+            result = await db.execute(
+                select(Station).where(Station.is_active == True)  # noqa: E712
+            )
+            stations = list(result.scalars().all())
+
+            alerts_sent = 0
+            for station in stations:
+                try:
+                    # --- בדיקת סף ארנק ---
+                    threshold = await get_wallet_threshold(station.id)
+                    if threshold > 0:
+                        wallet_result = await db.execute(
+                            select(StationWallet).where(
+                                StationWallet.station_id == station.id
+                            )
+                        )
+                        wallet = wallet_result.scalar_one_or_none()
+                        if wallet and float(wallet.balance) < threshold:
+                            await publish_wallet_threshold_alert(
+                                station_id=station.id,
+                                current_balance=float(wallet.balance),
+                                threshold=threshold,
+                            )
+                            alerts_sent += 1
+
+                    # --- בדיקת משלוחים שלא נאספו ---
+                    cutoff = datetime.now(timezone.utc) - timedelta(
+                        hours=DEFAULT_UNCOLLECTED_HOURS
+                    )
+                    uncollected_result = await db.execute(
+                        select(Delivery).where(
+                            Delivery.station_id == station.id,
+                            Delivery.status == DeliveryStatus.OPEN,
+                            Delivery.created_at < cutoff,
+                        )
+                    )
+                    uncollected = list(uncollected_result.scalars().all())
+                    for d in uncollected:
+                        hours_open = (
+                            datetime.now(timezone.utc) - d.created_at.replace(
+                                tzinfo=timezone.utc
+                            )
+                        ).total_seconds() / 3600
+                        await publish_uncollected_shipment_alert(
+                            station_id=station.id,
+                            delivery_id=d.id,
+                            hours_open=hours_open,
+                            pickup_address=d.pickup_address,
+                        )
+                        alerts_sent += 1
+
+                except Exception as e:
+                    logger.error(
+                        "כשלון בבדיקת התראות לתחנה",
+                        extra_data={
+                            "station_id": station.id,
+                            "error": str(e),
+                        },
+                        exc_info=True,
+                    )
+
+            logger.info(
+                "סיום בדיקת התראות תקופתית",
+                extra_data={
+                    "stations_checked": len(stations),
+                    "alerts_sent": alerts_sent,
+                },
+            )
+            return {
+                "stations_checked": len(stations),
+                "alerts_sent": alerts_sent,
+            }
+
+    return run_async(_check())
+
+
 @celery_app.task(name="app.workers.tasks.process_billing_cycle_blocking")
 def process_billing_cycle_blocking():
     """
