@@ -30,33 +30,38 @@ jobs:
       - name: יצירת ריפו מסונן ודחיפה ל-GitHub
         env:
           GH_TOKEN: ${{ secrets.REVIEW_REPO_PAT }}
+          REPO_NAME: ${{ inputs.repo_name }}
         run: |
-          bash scripts/create_review_repo.sh --github "${{ inputs.repo_name }}"
+          bash scripts/create_review_repo.sh --github "$REPO_NAME"
 
       - name: הוספת סוקר כ-collaborator
         if: inputs.reviewer != ''
         env:
           GH_TOKEN: ${{ secrets.REVIEW_REPO_PAT }}
+          REPO_NAME: ${{ inputs.repo_name }}
+          REVIEWER: ${{ inputs.reviewer }}
         run: |
           GITHUB_USER=$(gh api user --jq '.login')
-          gh api "repos/${GITHUB_USER}/${{ inputs.repo_name }}/collaborators/${{ inputs.reviewer }}" \
+          gh api "repos/${GITHUB_USER}/${REPO_NAME}/collaborators/${REVIEWER}" \
             -X PUT -f permission=pull
-          echo "הסוקר ${{ inputs.reviewer }} הוזמן בהצלחה"
+          echo "הסוקר ${REVIEWER} הוזמן בהצלחה"
 
       - name: סיכום
         env:
           GH_TOKEN: ${{ secrets.REVIEW_REPO_PAT }}
+          REPO_NAME: ${{ inputs.repo_name }}
+          REVIEWER: ${{ inputs.reviewer }}
         run: |
           GITHUB_USER=$(gh api user --jq '.login')
-          REPO_URL="https://github.com/${GITHUB_USER}/${{ inputs.repo_name }}"
+          REPO_URL="https://github.com/${GITHUB_USER}/${REPO_NAME}"
 
           echo "## ריפו לסקירת קוד נוצר בהצלחה" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**קישור:** [${REPO_URL}](${REPO_URL})" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          if [[ -n "${{ inputs.reviewer }}" ]]; then
-            echo "**סוקר:** \`${{ inputs.reviewer }}\` הוזמן עם הרשאת Read" >> $GITHUB_STEP_SUMMARY
+          if [[ -n "$REVIEWER" ]]; then
+            echo "**סוקר:** \`${REVIEWER}\` הוזמן עם הרשאת Read" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
           fi
 
@@ -69,5 +74,5 @@ jobs:
 
           echo "### לאחר סיום הסקירה - מחיקת הריפו" >> $GITHUB_STEP_SUMMARY
           echo '```bash' >> $GITHUB_STEP_SUMMARY
-          echo "gh repo delete ${GITHUB_USER}/${{ inputs.repo_name }} --yes" >> $GITHUB_STEP_SUMMARY
+          echo "gh repo delete ${GITHUB_USER}/${REPO_NAME} --yes" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
