@@ -131,6 +131,7 @@ class StationOwnerStateHandler:
 
             # ארנק תחנה
             StationOwnerState.VIEW_WALLET.value: self._handle_view_wallet,
+            StationOwnerState.SET_COMMISSION_RATE.value: self._handle_set_commission_rate,
 
             # דוח גבייה
             StationOwnerState.COLLECTION_REPORT.value: self._handle_collection_report,
@@ -572,16 +573,96 @@ class StationOwnerStateHandler:
 
         response = MessageResponse(
             text,
-            keyboard=[["🔙 חזרה לתפריט"]]
+            keyboard=[
+                ["📊 שינוי אחוז עמלה"],
+                ["🔙 חזרה לתפריט"],
+            ]
         )
         return response, StationOwnerState.VIEW_WALLET.value, {}
 
     async def _handle_view_wallet(self, user: User, message: str, context: dict):
-        """צפייה בארנק התחנה - 10% עמלה מכל משלוח"""
+        """צפייה בארנק התחנה — עם אפשרות לשנות אחוז עמלה"""
         if "חזרה" in message:
             return await self._show_menu(user, context)
 
+        if "עמלה" in message or "אחוז" in message:
+            return await self._show_set_commission_rate(user, context)
+
         return await self._show_wallet(user, context)
+
+    def _commission_rate_keyboard(self) -> list[list[str]]:
+        """כפתורי בחירת אחוז עמלה — נגזרים מקבועי השירות"""
+        lo = StationService.COMMISSION_MIN_PCT
+        hi = StationService.COMMISSION_MAX_PCT + 1
+        mid = lo + (hi - lo) // 2
+        return [
+            [f"{pct}%" for pct in range(lo, mid)],
+            [f"{pct}%" for pct in range(mid, hi)],
+            ["🔙 חזרה"],
+        ]
+
+    async def _show_set_commission_rate(self, user: User, context: dict):
+        """הצגת מסך בחירת אחוז עמלה"""
+        wallet = await self.station_service.get_station_wallet(self.station_id)
+        current_pct = int(wallet.commission_rate * 100)
+        lo = StationService.COMMISSION_MIN_PCT
+        hi = StationService.COMMISSION_MAX_PCT
+
+        text = (
+            "📊 <b>שינוי אחוז עמלה</b>\n\n"
+            f"אחוז עמלה נוכחי: <b>{current_pct}%</b>\n\n"
+            f"בחר אחוז עמלה חדש ({lo}%–{hi}%):"
+        )
+
+        keyboard = self._commission_rate_keyboard()
+        response = MessageResponse(text, keyboard=keyboard)
+        return response, StationOwnerState.SET_COMMISSION_RATE.value, {}
+
+    async def _handle_set_commission_rate(
+        self, user: User, message: str, context: dict
+    ):
+        """עדכון אחוז עמלה — מקבל מספר מ-6 עד 12"""
+        if "חזרה" in message:
+            return await self._show_wallet(user, context)
+
+        lo = StationService.COMMISSION_MIN_PCT
+        hi = StationService.COMMISSION_MAX_PCT
+
+        import re
+        numbers = re.findall(r'\d+', message)
+        if not numbers:
+            response = MessageResponse(
+                f"אנא בחר אחוז עמלה מהכפתורים או הזן מספר בין {lo} ל-{hi}.",
+                keyboard=self._commission_rate_keyboard(),
+            )
+            return response, StationOwnerState.SET_COMMISSION_RATE.value, {}
+
+        pct = int(numbers[0])
+        # המרה ל-Decimal דרך מחרוזת — מונע הפתעות עיגול
+        new_rate = Decimal(pct) / Decimal("100")
+
+        success, msg = await self.station_service.update_commission_rate(
+            self.station_id, float(new_rate), actor_user_id=user.id,
+        )
+
+        if success:
+            logger.info(
+                "אחוז עמלה עודכן דרך הבוט",
+                extra_data={
+                    "station_id": self.station_id,
+                    "user_id": user.id,
+                    "new_rate_percent": pct,
+                },
+            )
+            # מציג את הארנק המעודכן
+            return await self._show_wallet(user, context)
+
+        # שגיאת ולידציה — מציגים שוב את מסך הבחירה
+        response = MessageResponse(
+            f"{msg}\n\nבחר אחוז עמלה בין {lo}% ל-{hi}%:",
+            keyboard=self._commission_rate_keyboard(),
+        )
+        return response, StationOwnerState.SET_COMMISSION_RATE.value, {}
 
     # ==================== דוח גבייה ====================
 

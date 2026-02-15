@@ -104,6 +104,7 @@ STATION_OWNER_LABELS: dict[str, str] = {
     StationOwnerState.REMOVE_DISPATCHER_SELECT.value: "בחירת סדרן להסרה",
     StationOwnerState.CONFIRM_REMOVE_DISPATCHER.value: "אישור הסרת סדרן",
     StationOwnerState.VIEW_WALLET.value: "ארנק תחנה",
+    StationOwnerState.SET_COMMISSION_RATE.value: "שינוי אחוז עמלה",
     StationOwnerState.COLLECTION_REPORT.value: "דוח גבייה",
     StationOwnerState.VIEW_BLACKLIST.value: "רשימה שחורה",
     StationOwnerState.ADD_BLACKLIST_PHONE.value: "טלפון לחסימה",

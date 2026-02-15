@@ -662,6 +662,53 @@ class StationService:
         """קבלת ארנק תחנה"""
         return await self._get_or_create_station_wallet(station_id)
 
+    # גבולות אחוז עמלה — מקור אמת יחיד לכל השכבות
+    COMMISSION_MIN_PCT = 6
+    COMMISSION_MAX_PCT = 12
+    MIN_COMMISSION_RATE = Decimal(str(COMMISSION_MIN_PCT)) / Decimal("100")
+    MAX_COMMISSION_RATE = Decimal(str(COMMISSION_MAX_PCT)) / Decimal("100")
+
+    async def update_commission_rate(
+        self,
+        station_id: int,
+        new_rate: float,
+        actor_user_id: int | None = None,
+    ) -> tuple[bool, str]:
+        """עדכון אחוז עמלה של תחנה.
+
+        Args:
+            station_id: מזהה התחנה
+            new_rate: אחוז העמלה כערך עשרוני (0.06–0.12)
+            actor_user_id: מזהה המשתמש שביצע את העדכון (לצורכי audit)
+
+        Returns:
+            (success, message)
+        """
+        rate = Decimal(str(new_rate))
+
+        if rate < self.MIN_COMMISSION_RATE or rate > self.MAX_COMMISSION_RATE:
+            pct_min = int(self.MIN_COMMISSION_RATE * 100)
+            pct_max = int(self.MAX_COMMISSION_RATE * 100)
+            return False, f"אחוז עמלה חייב להיות בין {pct_min}% ל-{pct_max}%."
+
+        wallet = await self._get_or_create_station_wallet(station_id, for_update=True)
+        old_rate = wallet.commission_rate
+        wallet.commission_rate = rate
+        wallet.updated_at = datetime.utcnow()
+
+        await self.db.commit()
+
+        logger.info(
+            "Commission rate updated",
+            extra_data={
+                "station_id": station_id,
+                "actor_user_id": actor_user_id,
+                "old_rate": float(old_rate) if old_rate is not None else None,
+                "new_rate": float(rate),
+            }
+        )
+        return True, f"אחוז העמלה עודכן בהצלחה ל-{int(rate * 100)}%."
+
     async def credit_station_commission(
         self,
         station_id: int,
