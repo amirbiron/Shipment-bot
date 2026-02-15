@@ -186,15 +186,20 @@ if [[ -n "$GITHUB_REPO" ]]; then
     fi
 
     # יצירת ריפו פרטי
-    GITHUB_USER=$(gh api user --jq '.login') || {
-        echo "שגיאה: לא ניתן לזהות את המשתמש ב-GitHub (בעיית רשת או אימות)"
-        exit 1
-    }
-    if [[ -z "$GITHUB_USER" ]]; then
-        echo "שגיאה: לא ניתן לזהות את המשתמש ב-GitHub (תשובה ריקה)"
-        exit 1
+    # אם GITHUB_REPO כבר מכיל owner/repo (למשל org/name) - להשתמש כמות שהוא
+    if [[ "$GITHUB_REPO" == */* ]]; then
+        FULL_REPO="$GITHUB_REPO"
+    else
+        GITHUB_USER=$(gh api user --jq '.login') || {
+            echo "שגיאה: לא ניתן לזהות את המשתמש ב-GitHub (בעיית רשת או אימות)"
+            exit 1
+        }
+        if [[ -z "$GITHUB_USER" ]]; then
+            echo "שגיאה: לא ניתן לזהות את המשתמש ב-GitHub (תשובה ריקה)"
+            exit 1
+        fi
+        FULL_REPO="${GITHUB_USER}/${GITHUB_REPO}"
     fi
-    FULL_REPO="${GITHUB_USER}/${GITHUB_REPO}"
 
     # בדיקה שהריפו לא קיים
     if gh repo view "$FULL_REPO" >/dev/null 2>&1; then

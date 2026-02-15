@@ -55,16 +55,14 @@ jobs:
           REVIEWER: ${{ inputs.reviewer }}
           ORG_NAME: ${{ inputs.org_name }}
         run: |
-          # ריפו אישי - collaborator מקבל תמיד write (מגבלת GitHub)
-          # ריפו תחת org - אפשר לתת read בלבד
-          if [[ -n "$ORG_NAME" ]]; then
-            gh api "repos/${FULL_REPO}/collaborators/${REVIEWER}" \
-              -X PUT -f permission=read
-            echo "הסוקר ${REVIEWER} הוזמן עם הרשאת Read"
-          else
-            gh api "repos/${FULL_REPO}/collaborators/${REVIEWER}" \
-              -X PUT -f permission=pull
+          # permission=pull = read-only (הערך התקין ב-GitHub API)
+          # ב-org repos זה באמת read-only, בריפו אישי GitHub מעלה ל-write (מגבלת הפלטפורמה)
+          gh api "repos/${FULL_REPO}/collaborators/${REVIEWER}" \
+            -X PUT -f permission=pull
+          if [[ -z "$ORG_NAME" ]]; then
             echo "::warning::ריפו אישי - הסוקר ${REVIEWER} מקבל הרשאת Write (מגבלת GitHub). להרשאת Read בלבד, צור את הריפו תחת ארגון."
+          else
+            echo "הסוקר ${REVIEWER} הוזמן עם הרשאת Read"
           fi
 
       - name: סיכום
