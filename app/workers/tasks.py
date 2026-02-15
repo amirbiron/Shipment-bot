@@ -20,7 +20,7 @@ from app.db.database import get_task_session
 from app.db.models.outbox_message import OutboxMessage, MessagePlatform, MessageStatus
 from app.db.models.user import User, UserRole, ApprovalStatus
 from app.domain.services.outbox_service import OutboxService
-from app.domain.services.whatsapp import get_whatsapp_provider
+from app.domain.services.whatsapp import get_whatsapp_provider, get_whatsapp_group_provider
 from app.core.logging import get_logger, set_correlation_id
 from app.core.circuit_breaker import get_telegram_circuit_breaker
 from app.core.exceptions import TelegramError
@@ -65,11 +65,15 @@ def run_async(coro):
 
 async def _send_whatsapp_message(phone: str, content: dict) -> bool:
     """
-    שליחת הודעה דרך ספק WhatsApp הפעיל — מאציל ל-provider.
+    שליחת הודעה דרך ספק WhatsApp הפעיל — ניתוב אוטומטי לפי סוג היעד.
+    קבוצה (@g.us) → WPPConnect, פרטי → Cloud API (במצב hybrid) / WPPConnect.
     ממיר תגי HTML לפורמט הספק לפני שליחה.
     """
     message_text = content.get("message_text", "")
-    provider = get_whatsapp_provider()
+    if phone.endswith("@g.us"):
+        provider = get_whatsapp_group_provider()
+    else:
+        provider = get_whatsapp_provider()
     formatted_text = provider.format_text(message_text)
     try:
         await provider.send_text(to=phone, text=formatted_text)

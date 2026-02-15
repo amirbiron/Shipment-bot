@@ -98,7 +98,15 @@ class OutboxService:
         """
         messages = []
 
-        # תוכן השידור עם קישור חכם
+        # תוכן השידור — כולל קישור wa.me במצב היברידי
+        from app.domain.services.whatsapp.wa_me_links import generate_capture_link
+
+        capture_link = generate_capture_link(delivery.token)
+        if capture_link:
+            capture_instruction = f"🔗 לתפיסת המשלוח:\n{capture_link}"
+        else:
+            capture_instruction = f"לתפיסת המשלוח הקלידו: /capture {delivery.token}"
+
         content = {
             "delivery_id": delivery.id,
             "token": delivery.token,
@@ -110,7 +118,7 @@ class OutboxService:
                 f"📍 איסוף: {escape(delivery.pickup_address)}\n"
                 f"🎯 יעד: {escape(delivery.dropoff_address)}\n"
                 f"💰 עמלה: {delivery.fee}₪\n\n"
-                f"לתפיסת המשלוח הקלידו: /capture {delivery.token}"
+                f"{capture_instruction}"
             )
         }
 

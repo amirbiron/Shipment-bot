@@ -26,7 +26,7 @@ from app.domain.services.courier_approval_service import CourierApprovalService
 from app.core.logging import get_logger
 from app.core.validation import PhoneNumberValidator
 from app.core.config import settings
-from app.domain.services.whatsapp import get_whatsapp_provider
+from app.domain.services.whatsapp import get_whatsapp_provider, get_whatsapp_group_provider
 
 logger = get_logger(__name__)
 
@@ -378,16 +378,24 @@ async def get_or_create_user(
         )
 
 
+def _is_group_target(identifier: str) -> bool:
+    """בדיקה אם היעד הוא קבוצה (WPPConnect) או צ'אט פרטי (Cloud API)."""
+    return identifier.endswith("@g.us")
+
+
 async def send_whatsapp_message(
     phone_number: str, text: str, keyboard: list = None
 ) -> None:
     """
-    שליחת הודעה דרך ספק WhatsApp הפעיל.
-    מאציל לספק (WPPConnectProvider / PyWaProvider) — כולל retry ו-circuit breaker.
+    שליחת הודעה דרך ספק WhatsApp הפעיל — ניתוב אוטומטי לפי סוג היעד.
+    קבוצה (@g.us) → WPPConnect, פרטי → Cloud API (במצב hybrid) / WPPConnect (רגיל).
     ממיר תגי HTML לפורמט הספק לפני שליחה.
     fire-and-forget: שגיאות נרשמות בלוג ולא נזרקות חזרה.
     """
-    provider = get_whatsapp_provider()
+    if _is_group_target(phone_number):
+        provider = get_whatsapp_group_provider()
+    else:
+        provider = get_whatsapp_provider()
     formatted_text = provider.format_text(text)
     try:
         await provider.send_text(to=phone_number, text=formatted_text, keyboard=keyboard)
