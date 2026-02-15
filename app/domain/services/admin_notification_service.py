@@ -8,7 +8,7 @@ from typing import Optional
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.core.circuit_breaker import get_telegram_circuit_breaker
+from app.core.circuit_breaker import get_telegram_circuit_breaker, get_whatsapp_cloud_circuit_breaker
 from app.core.exceptions import TelegramError
 from app.core.validation import PhoneNumberValidator, TextSanitizer
 from app.domain.services.whatsapp import get_whatsapp_admin_provider
@@ -476,19 +476,104 @@ class AdminNotificationService:
         return f"data:{mime_type};base64,{encoded}"
 
     @staticmethod
+    async def _download_cloud_api_media_as_data_url(media_id: str) -> Optional[str]:
+        """
+        הורדת מדיה מ-WhatsApp Cloud API והמרה ל-data URL.
+
+        Cloud API media IDs הם טוקנים זמניים של Meta — לא ניתן לשלוח אותם
+        ישירות דרך send_image. צריך לפנות ל-API, לקבל URL להורדה,
+        להוריד את התוכן ולהמיר ל-data URI.
+        """
+        token = settings.WHATSAPP_CLOUD_API_TOKEN
+        if not token:
+            logger.warning(
+                "Cloud API token לא מוגדר — לא ניתן להוריד מדיה",
+                extra_data={"media_id": media_id[:8] + "..." if len(media_id) > 8 else media_id},
+            )
+            return None
+
+        circuit_breaker = get_whatsapp_cloud_circuit_breaker()
+
+        async def _fetch() -> tuple[bytes, str | None]:
+            async with httpx.AsyncClient() as client:
+                # שלב 1: קבלת URL להורדה מ-Meta
+                meta_resp = await client.get(
+                    f"https://graph.facebook.com/v21.0/{media_id}",
+                    headers={"Authorization": f"Bearer {token}"},
+                    timeout=15.0,
+                )
+                if meta_resp.status_code != 200:
+                    logger.error(
+                        "Cloud API getMedia נכשל",
+                        extra_data={
+                            "media_id": media_id[:8] + "...",
+                            "status": meta_resp.status_code,
+                        },
+                    )
+                    return b"", None
+
+                download_url = meta_resp.json().get("url")
+                if not download_url:
+                    logger.error(
+                        "Cloud API getMedia — חסר URL להורדה",
+                        extra_data={"media_id": media_id[:8] + "..."},
+                    )
+                    return b"", None
+
+                # שלב 2: הורדת התוכן (דורש אותו Bearer token)
+                content_resp = await client.get(
+                    download_url,
+                    headers={"Authorization": f"Bearer {token}"},
+                    timeout=30.0,
+                )
+                if content_resp.status_code != 200:
+                    logger.error(
+                        "Cloud API media download נכשל",
+                        extra_data={
+                            "media_id": media_id[:8] + "...",
+                            "status": content_resp.status_code,
+                        },
+                    )
+                    return b"", None
+
+                return content_resp.content, content_resp.headers.get("content-type")
+
+        try:
+            content, content_type = await circuit_breaker.execute(_fetch)
+        except Exception as e:
+            logger.error(
+                "כשלון בהורדת מדיה מ-Cloud API",
+                extra_data={"media_id": media_id[:8] + "...", "error": str(e)},
+                exc_info=True,
+            )
+            return None
+
+        if not content:
+            return None
+
+        mime_type = (content_type or "image/jpeg").split(";")[0].strip()
+        encoded = base64.b64encode(content).decode("ascii")
+        return f"data:{mime_type};base64,{encoded}"
+
+    @staticmethod
     async def _resolve_whatsapp_media_url(
         file_id: str,
         platform: str,
     ) -> Optional[str]:
         """
         הכנת media_url מתאים לשליחה בוואטסאפ עבור WhatsApp/Telegram.
+
+        עבור WhatsApp: אם file_id הוא URL/data URI — מחזיר כמו שהוא.
+        אם הוא media_id של Cloud API — מוריד ומחזיר כ-data URI.
+        עבור Telegram: מוריד מ-Telegram API ומחזיר כ-data URI.
         """
         if not file_id:
             return None
         if AdminNotificationService._is_media_url(file_id):
             return file_id
         if platform == "whatsapp":
-            return file_id
+            # media_id של Cloud API — צריך להוריד ולהמיר ל-data URI
+            return await AdminNotificationService._download_cloud_api_media_as_data_url(file_id)
         return await AdminNotificationService._download_telegram_file_as_data_url(file_id)
 
     @staticmethod

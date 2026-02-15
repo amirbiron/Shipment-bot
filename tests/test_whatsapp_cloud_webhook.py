@@ -1090,3 +1090,196 @@ class TestCourierRegistrationNotification:
 
         # לא נקרא add_task — השליחה נחסמה
         mock_bg.add_task.assert_not_called()
+
+
+# ============================================================================
+# TestMediaOnlyMessage — הודעת מדיה ללא טקסט
+# ============================================================================
+
+
+class TestMediaOnlyMessage:
+    """בדיקות שהודעת מדיה ללא טקסט לא גורמת לקריסה."""
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_media_only_message_no_crash(self) -> None:
+        """הודעת תמונה ללא כיתוב — לא קורסת על text.strip()."""
+        from app.api.webhooks.whatsapp_cloud import _process_cloud_message
+        from app.db.models.user import UserRole
+
+        mock_db = AsyncMock()
+        mock_bg = MagicMock()
+        mock_user = MagicMock()
+        mock_user.id = 7
+        mock_user.role = UserRole.COURIER
+        mock_user.phone_number = "+972501234567"
+        mock_user.name = "שליח"
+
+        # הודעת תמונה ללא טקסט — text="" ו-media_id="img_123"
+        msg = {
+            "id": "wamid.media_only",
+            "from": "972501234567",
+            "type": "image",
+            "image": {"id": "img_123", "mime_type": "image/jpeg"},
+        }
+        value = {"messaging_product": "whatsapp"}
+
+        mock_response = MagicMock()
+        mock_response.text = "תמונה התקבלה"
+        mock_response.keyboard = None
+
+        with patch(
+            "app.api.webhooks.whatsapp_cloud._try_acquire_message",
+            new_callable=AsyncMock,
+            return_value=True,
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud.get_or_create_user",
+            new_callable=AsyncMock,
+            return_value=(mock_user, False, "+972501234567"),
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud._is_whatsapp_admin_any",
+            return_value=False,
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud._route_message_to_handler",
+            new_callable=AsyncMock,
+            return_value=("תמונה התקבלה", "COURIER.MENU"),
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud.send_whatsapp_message",
+            new_callable=AsyncMock,
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud._mark_message_completed",
+            new_callable=AsyncMock,
+        ):
+            result = await _process_cloud_message(mock_db, msg, value, mock_bg)
+
+        # לא קרס — הגיע לניתוב רגיל
+        assert result is not None
+        assert result["response"] == "תמונה התקבלה"
+
+
+# ============================================================================
+# TestCloudApiMediaDownload — הורדת מדיה מ-Cloud API
+# ============================================================================
+
+
+class TestCloudApiMediaDownload:
+    """בדיקות הורדת מדיה מ-Cloud API והמרה ל-data URI."""
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_download_success(self) -> None:
+        """media_id תקין — מוריד ומחזיר data URI."""
+        from app.domain.services.admin_notification_service import AdminNotificationService
+
+        fake_content = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+        mock_meta_response = MagicMock()
+        mock_meta_response.status_code = 200
+        mock_meta_response.json.return_value = {"url": "https://lookaside.fbsbx.com/media_download"}
+
+        mock_download_response = MagicMock()
+        mock_download_response.status_code = 200
+        mock_download_response.content = fake_content
+        mock_download_response.headers = {"content-type": "image/png"}
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=[mock_meta_response, mock_download_response])
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+
+        async def _run_fn(fn):
+            return await fn()
+
+        with patch("app.domain.services.admin_notification_service.httpx.AsyncClient", return_value=mock_client), \
+             patch("app.domain.services.admin_notification_service.settings") as mock_settings, \
+             patch("app.domain.services.admin_notification_service.get_whatsapp_cloud_circuit_breaker") as mock_cb:
+            mock_settings.WHATSAPP_CLOUD_API_TOKEN = "test_token"
+            # circuit breaker פשוט מריץ את הפונקציה
+            mock_cb.return_value.execute = _run_fn
+
+            result = await AdminNotificationService._download_cloud_api_media_as_data_url("media_123456")
+
+        assert result is not None
+        assert result.startswith("data:image/png;base64,")
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_download_no_token(self) -> None:
+        """אין Cloud API token — מחזיר None."""
+        from app.domain.services.admin_notification_service import AdminNotificationService
+
+        with patch("app.domain.services.admin_notification_service.settings") as mock_settings:
+            mock_settings.WHATSAPP_CLOUD_API_TOKEN = ""
+
+            result = await AdminNotificationService._download_cloud_api_media_as_data_url("media_123456")
+
+        assert result is None
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_resolve_whatsapp_media_calls_download(self) -> None:
+        """_resolve_whatsapp_media_url עבור WhatsApp media_id — קורא להורדה."""
+        from app.domain.services.admin_notification_service import AdminNotificationService
+
+        with patch.object(
+            AdminNotificationService,
+            "_download_cloud_api_media_as_data_url",
+            new_callable=AsyncMock,
+            return_value="data:image/jpeg;base64,/9j/...",
+        ) as mock_download:
+            result = await AdminNotificationService._resolve_whatsapp_media_url(
+                file_id="cloud_media_id_123", platform="whatsapp"
+            )
+
+        mock_download.assert_called_once_with("cloud_media_id_123")
+        assert result == "data:image/jpeg;base64,/9j/..."
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_resolve_whatsapp_media_url_returns_as_is(self) -> None:
+        """file_id שהוא URL — מחזיר כמו שהוא ללא הורדה."""
+        from app.domain.services.admin_notification_service import AdminNotificationService
+
+        result = await AdminNotificationService._resolve_whatsapp_media_url(
+            file_id="https://example.com/photo.jpg", platform="whatsapp"
+        )
+        assert result == "https://example.com/photo.jpg"
+
+
+# ============================================================================
+# TestConfigValidation — ולידציית credentials
+# ============================================================================
+
+
+class TestConfigValidation:
+    """בדיקות שולידציית הגדרות Cloud API מכסה גם WHATSAPP_PROVIDER=pywa."""
+
+    @pytest.mark.unit
+    def test_pywa_provider_without_credentials_raises(self, monkeypatch) -> None:
+        """WHATSAPP_PROVIDER=pywa ללא credentials — זורק ValueError."""
+        from app.core.config import Settings
+
+        monkeypatch.setenv("WHATSAPP_PROVIDER", "pywa")
+        monkeypatch.setenv("WHATSAPP_CLOUD_API_TOKEN", "")
+        monkeypatch.setenv("WHATSAPP_CLOUD_API_PHONE_ID", "")
+        monkeypatch.setenv("WHATSAPP_CLOUD_API_APP_SECRET", "")
+        monkeypatch.setenv("WHATSAPP_HYBRID_MODE", "false")
+        monkeypatch.setenv("DEBUG", "true")
+
+        with pytest.raises(ValueError, match="WHATSAPP_PROVIDER=pywa"):
+            Settings()
+
+    @pytest.mark.unit
+    def test_pywa_provider_with_credentials_ok(self, monkeypatch) -> None:
+        """WHATSAPP_PROVIDER=pywa עם credentials — לא זורק."""
+        from app.core.config import Settings
+
+        monkeypatch.setenv("WHATSAPP_PROVIDER", "pywa")
+        monkeypatch.setenv("WHATSAPP_CLOUD_API_TOKEN", "test_token")
+        monkeypatch.setenv("WHATSAPP_CLOUD_API_PHONE_ID", "123456")
+        monkeypatch.setenv("WHATSAPP_CLOUD_API_APP_SECRET", "secret123")
+        monkeypatch.setenv("WHATSAPP_HYBRID_MODE", "false")
+        monkeypatch.setenv("DEBUG", "true")
+
+        # לא זורק — הגדרות תקינות
+        s = Settings()
+        assert s.WHATSAPP_PROVIDER == "pywa"

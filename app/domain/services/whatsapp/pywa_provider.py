@@ -7,6 +7,7 @@ PyWa Provider — מימוש ממשק BaseWhatsAppProvider מעל Cloud API (Met
 from __future__ import annotations
 
 import asyncio
+import base64
 from typing import Optional
 
 from app.core.circuit_breaker import CircuitBreaker
@@ -229,30 +230,43 @@ class PyWaProvider(BaseWhatsAppProvider):
         formatted_caption = self.format_text(caption) if caption else None
         client = self._get_client()
 
+        # pywa לא תומך ב-data URIs ישירות — ממירים ל-bytes
+        media_content: str | bytes = media_url
+        if media_url.startswith("data:"):
+            try:
+                # פורמט: data:image/jpeg;base64,/9j/4AAQ...
+                header, b64_data = media_url.split(",", 1)
+                media_content = base64.b64decode(b64_data)
+            except Exception:
+                logger.warning(
+                    "כשלון בפענוח data URI — שולח כמחרוזת",
+                    extra_data={"phone": phone_masked},
+                )
+
         async def _send_single() -> None:
             if media_type == "image":
                 await client.send_image(
                     to=to,
-                    image=media_url,
+                    image=media_content,
                     caption=formatted_caption,
                 )
             elif media_type == "document":
                 await client.send_document(
                     to=to,
-                    document=media_url,
+                    document=media_content,
                     caption=formatted_caption,
                 )
             elif media_type == "video":
                 await client.send_video(
                     to=to,
-                    video=media_url,
+                    video=media_content,
                     caption=formatted_caption,
                 )
             else:
                 # fallback — שולח כתמונה
                 await client.send_image(
                     to=to,
-                    image=media_url,
+                    image=media_content,
                     caption=formatted_caption,
                 )
 

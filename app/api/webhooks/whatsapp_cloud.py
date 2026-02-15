@@ -332,7 +332,7 @@ async def _process_cloud_message(
             return {"from": phone_masked, "response": "welcome", "new_user": True}
 
         # "#" — חזרה לתפריט ראשי
-        if text.strip() in {"#", "תפריט ראשי", "menu"}:
+        if text and text.strip() in {"#", "תפריט ראשי", "menu"}:
             state_manager = StateManager(db)
             response, new_state = await _route_to_role_menu_wa(user, db, state_manager)
             background_tasks.add_task(

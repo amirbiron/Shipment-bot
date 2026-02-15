@@ -169,8 +169,9 @@ class Settings(BaseSettings):
                 stacklevel=2,
             )
 
-        # --- WHATSAPP_HYBRID_MODE בלי הגדרות Cloud API ---
-        if self.WHATSAPP_HYBRID_MODE:
+        # --- Cloud API credentials: נדרש גם ב-HYBRID_MODE וגם ב-PROVIDER=pywa ---
+        _needs_cloud_api = self.WHATSAPP_HYBRID_MODE or self.WHATSAPP_PROVIDER == "pywa"
+        if _needs_cloud_api:
             _missing = []
             if not self.WHATSAPP_CLOUD_API_TOKEN:
                 _missing.append("WHATSAPP_CLOUD_API_TOKEN")
@@ -179,8 +180,9 @@ class Settings(BaseSettings):
             if not self.WHATSAPP_CLOUD_API_APP_SECRET:
                 _missing.append("WHATSAPP_CLOUD_API_APP_SECRET")
             if _missing:
+                _mode = "WHATSAPP_HYBRID_MODE=True" if self.WHATSAPP_HYBRID_MODE else "WHATSAPP_PROVIDER=pywa"
                 raise ValueError(
-                    f"WHATSAPP_HYBRID_MODE=True אבל חסרות הגדרות Cloud API: "
+                    f"{_mode} אבל חסרות הגדרות Cloud API: "
                     f"{', '.join(_missing)}"
                 )
 
