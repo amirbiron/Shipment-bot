@@ -1,0 +1,102 @@
+name: יצירת ריפו לסקירת קוד
+
+# הפעלה ידנית מ-GitHub UI
+on:
+  workflow_dispatch:
+    inputs:
+      repo_name:
+        description: 'שם הריפו לסקירה (ייווצר כריפו פרטי)'
+        required: true
+        default: 'shipment-review'
+      org_name:
+        description: 'שם ארגון GitHub (אופציונלי - ליצירה תחת org עם הרשאת Read בלבד)'
+        required: false
+        default: ''
+      reviewer:
+        description: 'שם משתמש GitHub של הסוקר (אופציונלי - יתווסף כ-collaborator)'
+        required: false
+        default: ''
+
+jobs:
+  create-review-repo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: הגדרת Git
+        run: |
+          git config --global user.name "Review Bot"
+          git config --global user.email "noreply@review.local"
+
+      - name: יצירת ריפו מסונן ודחיפה ל-GitHub
+        id: create-repo
+        env:
+          GH_TOKEN: ${{ secrets.REVIEW_REPO_PAT }}
+          REPO_NAME: ${{ inputs.repo_name }}
+          ORG_NAME: ${{ inputs.org_name }}
+        run: |
+          if [[ -n "$ORG_NAME" ]]; then
+            bash scripts/create_review_repo.sh --github "${ORG_NAME}/${REPO_NAME}"
+            echo "full_repo=${ORG_NAME}/${REPO_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            bash scripts/create_review_repo.sh --github "$REPO_NAME"
+            GITHUB_USER=$(gh api user --jq '.login')
+            echo "full_repo=${GITHUB_USER}/${REPO_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: הוספת סוקר כ-collaborator
+        if: inputs.reviewer != ''
+        env:
+          GH_TOKEN: ${{ secrets.REVIEW_REPO_PAT }}
+          FULL_REPO: ${{ steps.create-repo.outputs.full_repo }}
+          REVIEWER: ${{ inputs.reviewer }}
+          ORG_NAME: ${{ inputs.org_name }}
+        run: |
+          # permission=pull = read-only (הערך התקין ב-GitHub API)
+          # ב-org repos זה באמת read-only, בריפו אישי GitHub מעלה ל-write (מגבלת הפלטפורמה)
+          gh api "repos/${FULL_REPO}/collaborators/${REVIEWER}" \
+            -X PUT -f permission=pull
+          if [[ -z "$ORG_NAME" ]]; then
+            echo "::warning::ריפו אישי - הסוקר ${REVIEWER} מקבל הרשאת Write (מגבלת GitHub). להרשאת Read בלבד, צור את הריפו תחת ארגון."
+          else
+            echo "הסוקר ${REVIEWER} הוזמן עם הרשאת Read"
+          fi
+
+      - name: סיכום
+        if: always() && steps.create-repo.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.REVIEW_REPO_PAT }}
+          FULL_REPO: ${{ steps.create-repo.outputs.full_repo }}
+          REVIEWER: ${{ inputs.reviewer }}
+          ORG_NAME: ${{ inputs.org_name }}
+        run: |
+          REPO_URL="https://github.com/${FULL_REPO}"
+
+          echo "## ריפו לסקירת קוד נוצר בהצלחה" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**קישור:** [${REPO_URL}](${REPO_URL})" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [[ -n "$REVIEWER" ]]; then
+            if [[ -z "$ORG_NAME" ]]; then
+              echo "> **שים לב:** ריפו אישי - הסוקר מקבל הרשאת **Write** (מגבלת GitHub). להרשאת Read בלבד, צור תחת ארגון." >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+            fi
+            echo "**סוקר:** \`${REVIEWER}\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "### קבצים שנכללו" >> $GITHUB_STEP_SUMMARY
+          echo "- \`app/\` - קוד בקאנד" >> $GITHUB_STEP_SUMMARY
+          echo "- \`tests/\` - בדיקות" >> $GITHUB_STEP_SUMMARY
+          echo "- \`frontend/src/\` - קוד פרונטאנד" >> $GITHUB_STEP_SUMMARY
+          echo "- \`pytest.ini\`, \`mypy.ini\` - הגדרות בדיקות" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### לאחר סיום הסקירה - מחיקת הריפו" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "gh repo delete ${FULL_REPO} --yes" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
