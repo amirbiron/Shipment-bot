@@ -93,10 +93,10 @@ app.include_router(api_router, prefix="/api")
 class _SPAStaticFiles(StaticFiles):
     """StaticFiles עם SPA fallback — מחזיר index.html לכל route שלא תואם קובץ סטטי."""
 
-    async def lookup_path(self, path: str) -> tuple[str, os.stat_result | None]:
-        full_path, stat_result = await super().lookup_path(path)
+    def lookup_path(self, path: str) -> tuple[str, os.stat_result | None]:
+        full_path, stat_result = super().lookup_path(path)
         if stat_result is None:
-            return await super().lookup_path("index.html")
+            return super().lookup_path("index.html")
         return full_path, stat_result
 
 
