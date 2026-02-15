@@ -406,3 +406,30 @@ async def test_send_telegram_message_non_200_returns_false(monkeypatch):
 
     assert ok is False
 
+
+# ============================================================================
+# Admin Circuit Breaker — תיקון 7
+# ============================================================================
+
+
+@pytest.mark.unit
+def test_get_admin_wa_provider_uses_admin_cb_for_private():
+    """הודעה פרטית למנהל — משתמש ב-admin circuit breaker ולא ב-regular."""
+    with patch(
+        "app.domain.services.admin_notification_service.get_whatsapp_admin_provider"
+    ) as mock_admin:
+        mock_admin.return_value = MagicMock()
+        AdminNotificationService._get_admin_wa_provider("+972501234567")
+        mock_admin.assert_called_once()
+
+
+@pytest.mark.unit
+def test_get_admin_wa_provider_uses_admin_cb_for_group():
+    """הודעה לקבוצה — משתמש ב-admin circuit breaker."""
+    with patch(
+        "app.domain.services.admin_notification_service.get_whatsapp_admin_provider"
+    ) as mock_admin:
+        mock_admin.return_value = MagicMock()
+        AdminNotificationService._get_admin_wa_provider("120363123@g.us")
+        mock_admin.assert_called_once()
+

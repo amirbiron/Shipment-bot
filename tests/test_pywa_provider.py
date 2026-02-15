@@ -152,6 +152,48 @@ class TestPyWaSendText:
 
     @pytest.mark.unit
     @pytest.mark.asyncio
+    async def test_send_text_button_long_label_callback_preserved(self) -> None:
+        """כפתור עם תווית ארוכה — callback_data שומר על הערך המלא, title נחתך ל-20."""
+        provider, _ = self._make_provider()
+
+        mock_client = AsyncMock()
+        mock_client.send_message = AsyncMock(return_value=None)
+        provider._client = mock_client
+
+        mock_button_class = MagicMock()
+        mock_button_instances = []
+
+        def create_button(**kwargs):
+            btn = MagicMock()
+            btn.title = kwargs.get("title")
+            btn.callback_data = kwargs.get("callback_data")
+            mock_button_instances.append(btn)
+            return btn
+
+        mock_button_class.side_effect = create_button
+
+        mock_pywa_types = MagicMock()
+        mock_pywa_types.Button = mock_button_class
+
+        # תווית ארוכה — יותר מ-20 תווים
+        long_label = "🚚 הצטרפות למנוי וקבלת משלוחים"
+        assert len(long_label) > 20  # וידוא שהתווית באמת ארוכה
+
+        with patch.dict("sys.modules", {"pywa": MagicMock(types=mock_pywa_types), "pywa.types": mock_pywa_types}):
+            # כפתור אחד בלבד (פחות מ-3) כדי שלא יעבור ל-text fallback
+            keyboard = [[long_label]]
+            await provider.send_text(
+                to="+972501234567", text="בחר:", keyboard=keyboard
+            )
+
+        # title נחתך ל-20 תווים
+        first_call = mock_button_class.call_args_list[0]
+        assert len(first_call[1]["title"]) <= 20
+        # callback_data שומר על הערך המלא
+        assert first_call[1]["callback_data"] == long_label
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
     async def test_send_text_retry_on_failure(self) -> None:
         """retry עם exponential backoff על שגיאות זמניות."""
         provider, _ = self._make_provider()

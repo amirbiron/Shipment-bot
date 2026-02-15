@@ -11,7 +11,7 @@ from app.core.logging import get_logger
 from app.core.circuit_breaker import get_telegram_circuit_breaker
 from app.core.exceptions import TelegramError
 from app.core.validation import PhoneNumberValidator, TextSanitizer
-from app.domain.services.whatsapp import get_whatsapp_admin_provider, get_whatsapp_provider
+from app.domain.services.whatsapp import get_whatsapp_admin_provider
 
 logger = get_logger(__name__)
 
@@ -652,10 +652,8 @@ class AdminNotificationService:
 
     @staticmethod
     def _get_admin_wa_provider(phone_or_group: str):
-        """בחירת ספק WhatsApp לפי סוג יעד — קבוצה → admin (WPPConnect), פרטי → Cloud API."""
-        if phone_or_group.endswith("@g.us"):
-            return get_whatsapp_admin_provider()
-        return get_whatsapp_provider()
+        """בחירת ספק WhatsApp להודעות מנהלים — תמיד admin circuit breaker לבידוד."""
+        return get_whatsapp_admin_provider()
 
     @staticmethod
     async def _send_whatsapp_admin_message(

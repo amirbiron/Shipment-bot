@@ -59,6 +59,7 @@ async def cloud_api_verify(
     """אימות webhook מול Meta — מחזיר hub.challenge אם verify_token מתאים."""
     if (
         hub_mode == "subscribe"
+        and hub_challenge
         and hub_verify_token
         and hub_verify_token == settings.WHATSAPP_CLOUD_API_VERIFY_TOKEN
     ):
@@ -159,7 +160,14 @@ async def cloud_api_webhook(
     body = await request.body()
     signature = request.headers.get("X-Hub-Signature-256", "")
 
-    if settings.WHATSAPP_CLOUD_API_APP_SECRET and not _verify_signature(body, signature):
+    # אם סוד האפליקציה לא מוגדר — אי אפשר לאמת חתימות, דוחים את הבקשה
+    if not settings.WHATSAPP_CLOUD_API_APP_SECRET:
+        logger.error(
+            "Cloud API webhook: WHATSAPP_CLOUD_API_APP_SECRET לא מוגדר — דוחה בקשה"
+        )
+        raise HTTPException(status_code=403, detail="חתימה לא ניתנת לאימות")
+
+    if not _verify_signature(body, signature):
         logger.warning("Cloud API webhook: חתימה לא תקינה")
         raise HTTPException(status_code=403, detail="חתימה לא תקינה")
 
@@ -223,6 +231,7 @@ async def _process_cloud_message(
     if not await _try_acquire_message(db, message_id, "whatsapp_cloud"):
         return None
 
+    _msg_failed = False
     try:
         # Cloud API מספק מספר טלפון נקי — לא צריך את כל הלוגיקה של @lid/@c.us/wa:
         # נרמול: "972501234567" → "+972501234567"
@@ -252,13 +261,11 @@ async def _process_cloud_message(
                 db, user, text, background_tasks, normalized_phone
             )
             if result:
-                await _mark_message_completed(db, message_id)
                 return result
 
-        # משתמש חדש — הודעת ברוכים הבאים
+        # משתמש חדש — הודעת ברוכים הבאים עם כפתורים
         if is_new_user:
-            background_tasks.add_task(send_whatsapp_message, normalized_phone, _welcome_text())
-            await _mark_message_completed(db, message_id)
+            background_tasks.add_task(send_welcome_message, normalized_phone)
             return {"from": phone_masked, "response": "welcome", "new_user": True}
 
         # "#" — חזרה לתפריט ראשי
@@ -268,17 +275,16 @@ async def _process_cloud_message(
             background_tasks.add_task(
                 send_whatsapp_message, normalized_phone, response.text, response.keyboard
             )
-            await _mark_message_completed(db, message_id)
             return {"from": phone_masked, "response": response.text, "new_state": new_state}
 
         # ניתוב ל-state machine — אותה לוגיקה כמו WPPConnect webhook
         response, new_state = await _route_message_to_handler(
             db, user, text, media_id, background_tasks, normalized_phone
         )
-        await _mark_message_completed(db, message_id)
         return {"from": phone_masked, "response": response, "new_state": new_state}
 
     except Exception as exc:
+        _msg_failed = True
         logger.error(
             "Cloud API message processing failed",
             extra_data={
@@ -288,8 +294,20 @@ async def _process_cloud_message(
             },
             exc_info=True,
         )
-        await _mark_message_completed(db, message_id)
         return None
+
+    finally:
+        # סימון הודעה כ-completed רק אם העיבוד הצליח —
+        # הודעה שנכשלה נשארת ב-processing ומאפשרת retry אחרי timeout
+        if not _msg_failed and message_id:
+            try:
+                await _mark_message_completed(db, message_id)
+            except Exception:
+                logger.error(
+                    "Failed to mark message as completed",
+                    extra_data={"message_id": message_id},
+                    exc_info=True,
+                )
 
 
 # ──────────────────────────────────────────────
@@ -438,10 +456,3 @@ async def _route_message_to_handler(
     return response.text, new_state
 
 
-def _welcome_text() -> str:
-    """טקסט ברוכים הבאים — Cloud API (פרטי) עם כפתורים."""
-    return (
-        "👋 *ברוכים הבאים ל-ShipShare!*\n\n"
-        "אנחנו מערכת שליחויות חכמה.\n"
-        "מה תרצו לעשות?"
-    )

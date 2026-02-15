@@ -24,13 +24,3 @@ def generate_capture_link(delivery_token: str) -> str | None:
     return f"https://wa.me/{phone}?text=capture_{delivery_token}"
 
 
-def generate_menu_link() -> str | None:
-    """יצירת קישור wa.me לפתיחת תפריט ראשי בפרטי.
-
-    Returns:
-        קישור wa.me, או None אם מצב היברידי לא פעיל.
-    """
-    if not settings.WHATSAPP_HYBRID_MODE or not settings.WHATSAPP_CLOUD_API_PHONE_NUMBER:
-        return None
-    phone = settings.WHATSAPP_CLOUD_API_PHONE_NUMBER
-    return f"https://wa.me/{phone}?text=menu"

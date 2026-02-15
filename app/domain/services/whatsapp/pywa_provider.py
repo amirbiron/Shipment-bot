@@ -142,10 +142,10 @@ class PyWaProvider(BaseWhatsAppProvider):
 
         buttons = []
         for label in all_labels:
-            # כפתור Cloud API — title עד 20 תווים, callback_data = הטקסט עצמו
+            # כפתור Cloud API — title עד 20 תווים (תצוגה), callback_data עד 256 תווים (ערך מלא)
             title = label[:20]
             buttons.append(
-                pywa_types.Button(title=title, callback_data=title)
+                pywa_types.Button(title=title, callback_data=label[:256])
             )
         return buttons
 
