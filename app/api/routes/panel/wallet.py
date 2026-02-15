@@ -1,10 +1,10 @@
 """
-ארנק תחנה — יתרה, היסטוריית תנועות עם pagination וסינון
+ארנק תחנה — יתרה, היסטוריית תנועות עם pagination וסינון, עדכון אחוז עמלה
 """
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,7 +13,10 @@ from app.api.dependencies.auth import get_current_station_owner
 from app.db.database import get_db
 from app.db.models.station_ledger import StationLedger, StationLedgerEntryType
 from app.domain.services.station_service import StationService
-from app.api.routes.panel.schemas import parse_date_param
+from app.api.routes.panel.schemas import ActionResponse, parse_date_param
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter()
 
@@ -45,6 +48,18 @@ class PaginatedLedgerResponse(BaseModel):
     page_size: int
     total_pages: int
     summary: dict
+
+
+class UpdateCommissionRateRequest(BaseModel):
+    """בקשת עדכון אחוז עמלה — ערך באחוזים (6–12)"""
+    commission_rate_percent: int
+
+    @field_validator("commission_rate_percent")
+    @classmethod
+    def validate_range(cls, v: int) -> int:
+        if v < 6 or v > 12:
+            raise ValueError("אחוז עמלה חייב להיות בין 6 ל-12")
+        return v
 
 
 # ==================== Endpoints ====================
@@ -156,3 +171,47 @@ async def get_ledger(
         total_pages=max(1, (total + page_size - 1) // page_size),
         summary=summary,
     )
+
+
+@router.put(
+    "/commission-rate",
+    response_model=ActionResponse,
+    summary="עדכון אחוז עמלה",
+    description="עדכון אחוז העמלה של התחנה. ערך חוקי: 6%–12%.",
+    responses={
+        200: {"description": "אחוז העמלה עודכן בהצלחה"},
+        400: {"description": "ערך לא תקין"},
+        422: {"description": "שגיאת ולידציה"},
+    },
+    tags=["Panel - ארנק"],
+)
+async def update_commission_rate(
+    body: UpdateCommissionRateRequest,
+    auth: TokenPayload = Depends(get_current_station_owner),
+    db: AsyncSession = Depends(get_db),
+) -> ActionResponse:
+    """עדכון אחוז עמלה של תחנה"""
+    station_service = StationService(db)
+
+    # המרה מאחוזים (6–12) לערך עשרוני (0.06–0.12)
+    new_rate = body.commission_rate_percent / 100
+
+    success, message = await station_service.update_commission_rate(
+        auth.station_id, new_rate,
+    )
+
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=message,
+        )
+
+    logger.info(
+        "אחוז עמלה עודכן דרך הפאנל",
+        extra_data={
+            "station_id": auth.station_id,
+            "user_id": auth.user_id,
+            "new_rate_percent": body.commission_rate_percent,
+        },
+    )
+    return ActionResponse(success=True, message=message)

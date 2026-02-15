@@ -290,6 +290,9 @@ class StationOwnerState(str, Enum):
     CONFIRM_REMOVE_DISPATCHER = "STATION.CONFIRM_REMOVE_DISPATCHER"
     CONFIRM_REMOVE_BLACKLIST = "STATION.CONFIRM_REMOVE_BLACKLIST"
 
+    # עדכון אחוז עמלה
+    SET_COMMISSION_RATE = "STATION.SET_COMMISSION_RATE"
+
     # שלב 4: הגדרות קבוצות תחנה
     GROUP_SETTINGS = "STATION.GROUP_SETTINGS"
     SET_PUBLIC_GROUP = "STATION.SET_PUBLIC_GROUP"
@@ -350,7 +353,14 @@ STATION_OWNER_TRANSITIONS = {
     ],
 
     # ארנק תחנה
-    StationOwnerState.VIEW_WALLET: [StationOwnerState.MENU],
+    StationOwnerState.VIEW_WALLET: [
+        StationOwnerState.SET_COMMISSION_RATE,
+        StationOwnerState.MENU,
+    ],
+    StationOwnerState.SET_COMMISSION_RATE: [
+        StationOwnerState.VIEW_WALLET,
+        StationOwnerState.MENU,
+    ],
 
     # דוח גבייה
     StationOwnerState.COLLECTION_REPORT: [StationOwnerState.MENU],
