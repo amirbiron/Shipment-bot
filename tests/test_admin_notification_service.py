@@ -424,12 +424,16 @@ def test_get_admin_wa_provider_uses_admin_cb_for_private():
 
 
 @pytest.mark.unit
-def test_get_admin_wa_provider_uses_admin_cb_for_group():
-    """הודעה לקבוצה — משתמש ב-admin circuit breaker."""
+def test_get_admin_wa_provider_routes_group_to_wppconnect():
+    """הודעה לקבוצה (@g.us) — מנותבת ל-group provider (WPPConnect)."""
     with patch(
+        "app.domain.services.admin_notification_service.get_whatsapp_group_provider"
+    ) as mock_group, patch(
         "app.domain.services.admin_notification_service.get_whatsapp_admin_provider"
     ) as mock_admin:
+        mock_group.return_value = MagicMock()
         mock_admin.return_value = MagicMock()
         AdminNotificationService._get_admin_wa_provider("120363123@g.us")
-        mock_admin.assert_called_once()
+        mock_group.assert_called_once()
+        mock_admin.assert_not_called()
 

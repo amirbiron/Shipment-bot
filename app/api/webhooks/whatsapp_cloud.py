@@ -262,14 +262,6 @@ async def _process_cloud_message(
             },
         )
 
-        # בדיקת טקסט מקדים מ-wa.me link (תפיסת משלוח)
-        if text and text.startswith("capture_"):
-            result = await _handle_capture_from_link(
-                db, user, text, background_tasks, normalized_phone
-            )
-            if result:
-                return result
-
         # פקודות אישור/דחייה מהודעות פרטיות של מנהלים —
         # חייב להיות לפני is_new_user כדי שמנהל חדש יוכל לאשר מיד
         is_admin_sender = _is_whatsapp_admin_any(normalized_phone, user.phone_number)
@@ -286,8 +278,23 @@ async def _process_cloud_message(
                 )
                 return {"from": phone_masked, "response": admin_response, "admin_command": True}
 
+        # משתמש חדש — הודעת ברוכים הבאים עם כפתורים.
+        # חייב להיות לפני capture/delivery-approval כדי שמשתמש חדש
+        # שלחץ על capture link לא יקבל רק שגיאה בלי onboarding.
+        if is_new_user:
+            background_tasks.add_task(send_welcome_message, normalized_phone)
+            return {"from": phone_masked, "response": "welcome", "new_user": True}
+
+        # בדיקת טקסט מקדים מ-wa.me link (תפיסת משלוח)
+        if text and text.startswith("capture_"):
+            result = await _handle_capture_from_link(
+                db, user, text, background_tasks, normalized_phone
+            )
+            if result:
+                return result
+
         # פקודות אישור/דחיית משלוח (סדרנים)
-        if text and not is_new_user:
+        if text:
             delivery_approval = _match_delivery_approval_command(text)
             if delivery_approval:
                 action, delivery_id = delivery_approval
@@ -325,11 +332,6 @@ async def _process_cloud_message(
                     send_whatsapp_message, normalized_phone, approval_msg
                 )
                 return {"from": phone_masked, "response": approval_msg, "delivery_approval": True}
-
-        # משתמש חדש — הודעת ברוכים הבאים עם כפתורים
-        if is_new_user:
-            background_tasks.add_task(send_welcome_message, normalized_phone)
-            return {"from": phone_masked, "response": "welcome", "new_user": True}
 
         # "#" — חזרה לתפריט ראשי
         if text and text.strip() in {"#", "תפריט ראשי", "menu"}:

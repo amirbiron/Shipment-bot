@@ -1283,3 +1283,132 @@ class TestConfigValidation:
         # לא זורק — הגדרות תקינות
         s = Settings()
         assert s.WHATSAPP_PROVIDER == "pywa"
+
+
+# ============================================================================
+# TestAdminProviderRouting — ניתוב admin provider לפי הגדרות
+# ============================================================================
+
+
+class TestAdminProviderRouting:
+    """בדיקות ש-admin provider מכבד WHATSAPP_PROVIDER ומנתב קבוצות ל-WPPConnect."""
+
+    @pytest.mark.unit
+    def test_admin_provider_respects_pywa_setting(self, monkeypatch) -> None:
+        """WHATSAPP_PROVIDER=pywa → admin provider הוא pywa."""
+        from app.domain.services.whatsapp.provider_factory import (
+            get_whatsapp_admin_provider, reset_providers
+        )
+
+        monkeypatch.setattr(settings, "WHATSAPP_PROVIDER", "pywa")
+        monkeypatch.setattr(settings, "WHATSAPP_HYBRID_MODE", False)
+        monkeypatch.setattr(settings, "WHATSAPP_CLOUD_API_TOKEN", "test")
+        monkeypatch.setattr(settings, "WHATSAPP_CLOUD_API_PHONE_ID", "123")
+        reset_providers()
+
+        admin_provider = get_whatsapp_admin_provider()
+        assert admin_provider.provider_name == "pywa"
+        reset_providers()
+
+    @pytest.mark.unit
+    def test_admin_provider_hybrid_uses_pywa(self, monkeypatch) -> None:
+        """WHATSAPP_HYBRID_MODE=True → admin provider הוא pywa."""
+        from app.domain.services.whatsapp.provider_factory import (
+            get_whatsapp_admin_provider, reset_providers
+        )
+
+        monkeypatch.setattr(settings, "WHATSAPP_PROVIDER", "wppconnect")
+        monkeypatch.setattr(settings, "WHATSAPP_HYBRID_MODE", True)
+        monkeypatch.setattr(settings, "WHATSAPP_CLOUD_API_TOKEN", "test")
+        monkeypatch.setattr(settings, "WHATSAPP_CLOUD_API_PHONE_ID", "123")
+        reset_providers()
+
+        admin_provider = get_whatsapp_admin_provider()
+        assert admin_provider.provider_name == "pywa"
+        reset_providers()
+
+    @pytest.mark.unit
+    def test_get_admin_wa_provider_routes_group_to_wppconnect(self) -> None:
+        """יעד קבוצתי (@g.us) → תמיד WPPConnect, גם אם admin provider הוא pywa."""
+        from app.domain.services.admin_notification_service import AdminNotificationService
+
+        with patch(
+            "app.domain.services.admin_notification_service.get_whatsapp_group_provider"
+        ) as mock_group, patch(
+            "app.domain.services.admin_notification_service.get_whatsapp_admin_provider"
+        ) as mock_admin:
+            mock_group_instance = MagicMock()
+            mock_group_instance.provider_name = "wppconnect"
+            mock_group.return_value = mock_group_instance
+
+            mock_admin_instance = MagicMock()
+            mock_admin_instance.provider_name = "pywa"
+            mock_admin.return_value = mock_admin_instance
+
+            # קבוצה → WPPConnect
+            provider = AdminNotificationService._get_admin_wa_provider("120363123456789@g.us")
+            assert provider.provider_name == "wppconnect"
+
+            # פרטי → admin provider (pywa)
+            provider = AdminNotificationService._get_admin_wa_provider("+972501234567")
+            assert provider.provider_name == "pywa"
+
+
+# ============================================================================
+# TestNewUserCaptureLink — משתמש חדש עם capture link
+# ============================================================================
+
+
+class TestNewUserCaptureLink:
+    """בדיקות שמשתמש חדש שלוחץ capture link מקבל welcome ראשון."""
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_new_user_capture_link_gets_welcome(self) -> None:
+        """משתמש חדש עם capture_ — מקבל welcome, לא שגיאת capture."""
+        from app.api.webhooks.whatsapp_cloud import _process_cloud_message
+        from app.db.models.user import UserRole
+
+        mock_db = AsyncMock()
+        mock_bg = MagicMock()
+        mock_user = MagicMock()
+        mock_user.id = 99
+        mock_user.role = UserRole.SENDER
+        mock_user.phone_number = "+972501234567"
+        mock_user.name = "חדש"
+
+        msg = {
+            "id": "wamid.new_user_capture",
+            "from": "972501234567",
+            "type": "text",
+            "text": {"body": "capture_abc123"},
+        }
+        value = {"messaging_product": "whatsapp"}
+
+        with patch(
+            "app.api.webhooks.whatsapp_cloud._try_acquire_message",
+            new_callable=AsyncMock,
+            return_value=True,
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud.get_or_create_user",
+            new_callable=AsyncMock,
+            # is_new_user=True
+            return_value=(mock_user, True, "+972501234567"),
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud._is_whatsapp_admin_any",
+            return_value=False,
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud.send_welcome_message",
+            new_callable=AsyncMock,
+        ) as mock_welcome, patch(
+            "app.api.webhooks.whatsapp_cloud._mark_message_completed",
+            new_callable=AsyncMock,
+        ):
+            result = await _process_cloud_message(mock_db, msg, value, mock_bg)
+
+        # קיבל welcome, לא שגיאת capture
+        assert result is not None
+        assert result.get("new_user") is True
+        assert result["response"] == "welcome"
+        # send_welcome_message נקרא דרך background_tasks.add_task
+        mock_bg.add_task.assert_called_once_with(mock_welcome, "+972501234567")

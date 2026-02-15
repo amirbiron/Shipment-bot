@@ -93,14 +93,19 @@ def get_whatsapp_group_provider() -> BaseWhatsAppProvider:
 def get_whatsapp_admin_provider() -> BaseWhatsAppProvider:
     """ספק WhatsApp להודעות מנהלים (circuit breaker נפרד).
 
-    תמיד WPPConnect — הודעות מנהלים נשלחות לקבוצות (@g.us)
-    ש-Cloud API לא תומך בהן.
+    מכבד את WHATSAPP_PROVIDER/HYBRID_MODE — במצב pywa/hybrid
+    משתמש ב-Cloud API גם למנהלים פרטיים. קבוצות מנותבות
+    בנפרד דרך get_whatsapp_group_provider (ב-admin_notification_service).
     """
     global _admin_provider
     if _admin_provider is None:
         with _lock:
             if _admin_provider is None:
-                _admin_provider = _create_provider("wppconnect", is_admin=True)
+                if settings.WHATSAPP_HYBRID_MODE:
+                    provider_type = "pywa"
+                else:
+                    provider_type = settings.WHATSAPP_PROVIDER
+                _admin_provider = _create_provider(provider_type, is_admin=True)
                 logger.info(
                     "ספק WhatsApp admin אותחל",
                     extra_data={"provider": _admin_provider.provider_name, "context": "admin"},

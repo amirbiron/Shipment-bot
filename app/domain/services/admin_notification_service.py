@@ -11,7 +11,7 @@ from app.core.logging import get_logger
 from app.core.circuit_breaker import get_telegram_circuit_breaker, get_whatsapp_cloud_circuit_breaker
 from app.core.exceptions import TelegramError
 from app.core.validation import PhoneNumberValidator, TextSanitizer
-from app.domain.services.whatsapp import get_whatsapp_admin_provider
+from app.domain.services.whatsapp import get_whatsapp_admin_provider, get_whatsapp_group_provider
 
 logger = get_logger(__name__)
 
@@ -737,7 +737,13 @@ class AdminNotificationService:
 
     @staticmethod
     def _get_admin_wa_provider(phone_or_group: str):
-        """בחירת ספק WhatsApp להודעות מנהלים — תמיד admin circuit breaker לבידוד."""
+        """בחירת ספק WhatsApp להודעות מנהלים — ניתוב לפי סוג יעד.
+
+        קבוצות (@g.us) → WPPConnect (Cloud API לא תומך בקבוצות לא רשמיות).
+        מספרים פרטיים → admin provider (pywa במצב hybrid/pywa, WPPConnect אחרת).
+        """
+        if phone_or_group and "@g.us" in phone_or_group:
+            return get_whatsapp_group_provider()
         return get_whatsapp_admin_provider()
 
     @staticmethod
@@ -747,11 +753,11 @@ class AdminNotificationService:
         keyboard: list = None
     ) -> bool:
         """שליחת הודעה למנהל/קבוצה בוואטסאפ — ניתוב לפי סוג יעד."""
-        if not settings.WHATSAPP_GATEWAY_URL:
-            logger.warning("WhatsApp gateway URL not configured")
-            return False
-
         provider = AdminNotificationService._get_admin_wa_provider(phone_or_group)
+        # WPPConnect דורש gateway URL; pywa לא (Cloud API ישיר)
+        if provider.provider_name == "wppconnect" and not settings.WHATSAPP_GATEWAY_URL:
+            logger.warning("WhatsApp gateway URL not configured for WPPConnect admin message")
+            return False
         try:
             await provider.send_text(to=phone_or_group, text=text, keyboard=keyboard)
             return True
@@ -769,15 +775,15 @@ class AdminNotificationService:
     @staticmethod
     async def _send_whatsapp_admin_photo(phone_or_group: str, media_url: str) -> bool:
         """שליחת תמונה למנהל/קבוצה בוואטסאפ — ניתוב לפי סוג יעד."""
-        if not settings.WHATSAPP_GATEWAY_URL:
-            logger.warning("WhatsApp gateway URL not configured for photo sending")
-            return False
-
         if not media_url:
             logger.warning("No media_url provided for WhatsApp admin photo")
             return False
 
         provider = AdminNotificationService._get_admin_wa_provider(phone_or_group)
+        # WPPConnect דורש gateway URL; pywa לא (Cloud API ישיר)
+        if provider.provider_name == "wppconnect" and not settings.WHATSAPP_GATEWAY_URL:
+            logger.warning("WhatsApp gateway URL not configured for WPPConnect admin photo")
+            return False
         try:
             await provider.send_media(
                 to=phone_or_group, media_url=media_url, media_type="image"
