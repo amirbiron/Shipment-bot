@@ -589,7 +589,12 @@ class AdminNotificationService:
         if AdminNotificationService._is_media_url(file_id):
             return file_id
         if platform == "whatsapp":
-            # media_id של Cloud API — צריך להוריד ולהמיר ל-data URI
+            # file_id שהוא לא URL בפלטפורמת WhatsApp — מניחים שזה media_id של Cloud API.
+            # WPPConnect תמיד מספק URLs (http://...) שנתפסים מעלה ב-_is_media_url.
+            logger.debug(
+                "WhatsApp non-URL file_id — מנסה להוריד כ-Cloud API media ID",
+                extra_data={"file_id_prefix": file_id[:8] + "..." if len(file_id) > 8 else file_id},
+            )
             return await AdminNotificationService._download_cloud_api_media_as_data_url(file_id)
         return await AdminNotificationService._download_telegram_file_as_data_url(file_id)
 

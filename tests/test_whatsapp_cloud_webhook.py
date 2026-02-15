@@ -1443,3 +1443,45 @@ class TestNewUserCaptureLink:
         assert result["response"] == "welcome"
         # send_welcome_message נקרא דרך background_tasks.add_task
         mock_bg.add_task.assert_called_once_with(mock_welcome, "+972501234567")
+
+
+# ============================================================================
+# TestCaptureLinkGeneration — יצירת קישורי wa.me עם URL encoding
+# ============================================================================
+
+
+class TestCaptureLinkGeneration:
+    """בדיקות שקישורי capture מקודדים נכון ומכבדים הגדרות."""
+
+    @pytest.mark.unit
+    def test_basic_token_encoded(self, monkeypatch) -> None:
+        """טוקן רגיל — מקודד ב-URL (אותיות ומקפים נשמרים)."""
+        from app.domain.services.whatsapp.wa_me_links import generate_capture_link
+
+        monkeypatch.setattr(settings, "WHATSAPP_HYBRID_MODE", True)
+        monkeypatch.setattr(settings, "WHATSAPP_CLOUD_API_PHONE_NUMBER", "972501234567")
+
+        link = generate_capture_link("abc-123_XY")
+        assert link == "https://wa.me/972501234567?text=capture_abc-123_XY"
+
+    @pytest.mark.unit
+    def test_special_chars_encoded(self, monkeypatch) -> None:
+        """טוקן עם תווים מיוחדים — מקודד כך ש-URL לא נשבר."""
+        from app.domain.services.whatsapp.wa_me_links import generate_capture_link
+
+        monkeypatch.setattr(settings, "WHATSAPP_HYBRID_MODE", True)
+        monkeypatch.setattr(settings, "WHATSAPP_CLOUD_API_PHONE_NUMBER", "972501234567")
+
+        link = generate_capture_link("a+b&c=d")
+        assert link is not None
+        # תווים מיוחדים מקודדים — לא מופיעים כ-raw בקישור
+        assert "a+b&c=d" not in link
+        assert "capture_a" in link
+
+    @pytest.mark.unit
+    def test_returns_none_when_hybrid_disabled(self, monkeypatch) -> None:
+        """מצב היברידי כבוי — מחזיר None."""
+        from app.domain.services.whatsapp.wa_me_links import generate_capture_link
+
+        monkeypatch.setattr(settings, "WHATSAPP_HYBRID_MODE", False)
+        assert generate_capture_link("token123") is None
