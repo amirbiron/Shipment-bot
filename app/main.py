@@ -91,11 +91,12 @@ app.include_router(api_router, prefix="/api")
 
 
 class _SPAStaticFiles(StaticFiles):
-    """StaticFiles עם SPA fallback — מחזיר index.html לכל route שלא תואם קובץ סטטי."""
+    """StaticFiles עם SPA fallback — מחזיר index.html לנתיבי ניווט שלא תואמים קובץ סטטי."""
 
     def lookup_path(self, path: str) -> tuple[str, os.stat_result | None]:
         full_path, stat_result = super().lookup_path(path)
-        if stat_result is None:
+        if stat_result is None and not os.path.splitext(path)[1]:
+            # fallback רק לנתיבי ניווט (בלי סיומת קובץ) — נכסים חסרים (.js, .css) יחזירו 404
             return super().lookup_path("index.html")
         return full_path, stat_result
 
