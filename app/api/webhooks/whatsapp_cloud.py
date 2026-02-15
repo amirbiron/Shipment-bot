@@ -40,6 +40,7 @@ from app.state_machine.handlers import SenderStateHandler, CourierStateHandler
 from app.state_machine.dispatcher_handler import DispatcherStateHandler
 from app.state_machine.station_owner_handler import StationOwnerStateHandler
 from app.state_machine.manager import StateManager
+from app.state_machine.states import DispatcherState
 from app.db.models.user import User, UserRole, ApprovalStatus
 
 logger = get_logger(__name__)
@@ -493,6 +494,31 @@ async def _route_message_to_handler(
         )
         return response.text, new_state
 
+    # ניתוב לתפריט סדרן (כפתור "תפריט סדרן" — פתוח לכל מי שהוא סדרן פעיל)
+    # בדיקת keyword רק כשהמשתמש לא באמצע זרימת סדרן — מונע תפיסת טקסט חופשי
+    _in_dispatcher_flow = isinstance(current_state, str) and current_state.startswith("DISPATCHER.")
+    if text and not _in_dispatcher_flow and ("תפריט סדרן" in text or "🏪 תפריט סדרן" in text):
+        station_service = StationService(db)
+        station = await station_service.get_dispatcher_station(user.id)
+
+        if station:
+            await state_manager.force_state(
+                user.id, "whatsapp", DispatcherState.MENU.value, context={}
+            )
+            handler = DispatcherStateHandler(db, station.id, platform="whatsapp")
+            response, new_state = await handler.handle_message(user, "תפריט", None)
+        else:
+            logger.warning(
+                "Dispatcher clicked station menu but station not found",
+                extra_data={"user_id": user.id},
+            )
+            response, new_state = await _route_to_role_menu_wa(user, db, state_manager)
+
+        background_tasks.add_task(
+            send_whatsapp_message, reply_to, response.text, response.keyboard
+        )
+        return response.text, new_state
+
     # שליח
     if user.role == UserRole.COURIER:
         # שמירת המצב הקודם לפני הטיפול בהודעה
@@ -526,14 +552,26 @@ async def _route_message_to_handler(
         )
         return response.text, new_state
 
-    # שולח (ברירת מחדל)
-    handler = SenderStateHandler(db)
-    response, new_state = await handler.handle_message(
-        user_id=user.id, platform="whatsapp", message=text
-    )
-    background_tasks.add_task(
-        send_whatsapp_message, reply_to, response.text, response.keyboard
-    )
-    return response.text, new_state
+    # שולח — רק אם באמצע זרימת שולח פעילה.
+    # משתמש ב-INITIAL / SENDER.INITIAL / ללא state → welcome message (כמו ב-WPPConnect).
+    if (
+        current_state
+        and current_state not in ("INITIAL", "SENDER.INITIAL")
+        and not current_state.startswith("COURIER.")
+        and not current_state.startswith("DISPATCHER.")
+        and not current_state.startswith("STATION.")
+    ):
+        handler = SenderStateHandler(db)
+        response, new_state = await handler.handle_message(
+            user_id=user.id, platform="whatsapp", message=text
+        )
+        background_tasks.add_task(
+            send_whatsapp_message, reply_to, response.text, response.keyboard
+        )
+        return response.text, new_state
+
+    # ברירת מחדל: welcome message עם בחירת תפקיד
+    background_tasks.add_task(send_welcome_message, reply_to)
+    return "welcome", None
 
 
