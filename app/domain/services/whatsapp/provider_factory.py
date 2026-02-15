@@ -90,14 +90,14 @@ def get_whatsapp_group_provider() -> BaseWhatsAppProvider:
 def get_whatsapp_admin_provider() -> BaseWhatsAppProvider:
     """ספק WhatsApp להודעות מנהלים (circuit breaker נפרד).
 
-    משתמש ב-WPPConnect — admin group הוא תמיד קבוצה.
+    תמיד WPPConnect — הודעות מנהלים נשלחות לקבוצות (@g.us)
+    ש-Cloud API לא תומך בהן.
     """
     global _admin_provider
     if _admin_provider is None:
         with _lock:
             if _admin_provider is None:
-                provider_type = settings.WHATSAPP_PROVIDER
-                _admin_provider = _create_provider(provider_type, is_admin=True)
+                _admin_provider = _create_provider("wppconnect", is_admin=True)
                 logger.info(
                     "ספק WhatsApp admin אותחל",
                     extra_data={"provider": _admin_provider.provider_name, "context": "admin"},

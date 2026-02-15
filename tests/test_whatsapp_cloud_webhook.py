@@ -9,6 +9,9 @@
 - אבטחה: דחיית webhook כשסוד ריק
 - retry: הודעות כושלות נשארות ב-processing
 - ברוכים הבאים: שליחה עם כפתורים
+- פקודות אדמין (אישור/דחיית שליחים) ב-Cloud webhook
+- תפיסת משלוח מקישור wa.me דרך CaptureService
+- אישור/דחיית משלוחים (סדרנים) ב-Cloud webhook
 """
 import hashlib
 import hmac
@@ -392,3 +395,492 @@ class TestWelcomeMessage:
         mock_bg.add_task.assert_called_once_with(
             mock_welcome, "+972501234567"
         )
+
+
+# ============================================================================
+# TestAdminCommands — פקודות אדמין ב-Cloud webhook
+# ============================================================================
+
+
+class TestAdminCommands:
+    """בדיקות שפקודות אדמין מנותבות ל-handle_admin_private_command."""
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_admin_command_routed_to_handler(self) -> None:
+        """אדמין שולח 'אשר 123' — מנותב ל-handle_admin_private_command."""
+        from app.api.webhooks.whatsapp_cloud import _process_cloud_message
+
+        mock_db = AsyncMock()
+        mock_bg = MagicMock()
+        mock_user = MagicMock()
+        mock_user.id = 1
+        mock_user.role = MagicMock(value="sender")
+        mock_user.phone_number = "+972501234567"
+        mock_user.name = "Admin"
+
+        msg = {
+            "id": "wamid.admin_cmd",
+            "from": "972501234567",
+            "type": "text",
+            "text": {"body": "אשר 123"},
+        }
+        value = {"messaging_product": "whatsapp"}
+
+        with patch(
+            "app.api.webhooks.whatsapp_cloud._try_acquire_message",
+            new_callable=AsyncMock,
+            return_value=True,
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud.get_or_create_user",
+            new_callable=AsyncMock,
+            return_value=(mock_user, False, "+972501234567"),
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud._is_whatsapp_admin_any",
+            return_value=True,
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud.handle_admin_private_command",
+            new_callable=AsyncMock,
+            return_value="✅ שליח 123 אושר בהצלחה",
+        ) as mock_admin_cmd, patch(
+            "app.api.webhooks.whatsapp_cloud.send_whatsapp_message",
+            new_callable=AsyncMock,
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud._mark_message_completed",
+            new_callable=AsyncMock,
+        ):
+            result = await _process_cloud_message(mock_db, msg, value, mock_bg)
+
+        assert result is not None
+        assert result.get("admin_command") is True
+        mock_admin_cmd.assert_called_once()
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_non_admin_not_routed_to_admin_handler(self) -> None:
+        """לא-אדמין — לא מנותב ל-handle_admin_private_command."""
+        from app.api.webhooks.whatsapp_cloud import _process_cloud_message
+
+        mock_db = AsyncMock()
+        mock_bg = MagicMock()
+        mock_user = MagicMock()
+        mock_user.id = 1
+        mock_user.role = MagicMock(value="sender")
+        mock_user.phone_number = "+972501234567"
+        mock_user.name = "User"
+
+        mock_response = MagicMock()
+        mock_response.text = "תפריט"
+        mock_response.keyboard = None
+
+        msg = {
+            "id": "wamid.non_admin",
+            "from": "972501234567",
+            "type": "text",
+            "text": {"body": "אשר 123"},
+        }
+        value = {"messaging_product": "whatsapp"}
+
+        with patch(
+            "app.api.webhooks.whatsapp_cloud._try_acquire_message",
+            new_callable=AsyncMock,
+            return_value=True,
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud.get_or_create_user",
+            new_callable=AsyncMock,
+            return_value=(mock_user, False, "+972501234567"),
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud._is_whatsapp_admin_any",
+            return_value=False,
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud.handle_admin_private_command",
+            new_callable=AsyncMock,
+        ) as mock_admin_cmd, patch(
+            "app.api.webhooks.whatsapp_cloud._match_delivery_approval_command",
+            return_value=None,
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud._route_message_to_handler",
+            new_callable=AsyncMock,
+            return_value=("תפריט", "SENDER_MENU"),
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud.send_whatsapp_message",
+            new_callable=AsyncMock,
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud._mark_message_completed",
+            new_callable=AsyncMock,
+        ):
+            result = await _process_cloud_message(mock_db, msg, value, mock_bg)
+
+        assert result is not None
+        assert result.get("admin_command") is None
+        mock_admin_cmd.assert_not_called()
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_admin_non_command_falls_through(self) -> None:
+        """אדמין שולח טקסט רגיל — handle_admin_private_command מחזיר None, ממשיך לניתוב רגיל."""
+        from app.api.webhooks.whatsapp_cloud import _process_cloud_message
+
+        mock_db = AsyncMock()
+        mock_bg = MagicMock()
+        mock_user = MagicMock()
+        mock_user.id = 1
+        mock_user.role = MagicMock(value="sender")
+        mock_user.phone_number = "+972501234567"
+        mock_user.name = "Admin"
+
+        msg = {
+            "id": "wamid.admin_text",
+            "from": "972501234567",
+            "type": "text",
+            "text": {"body": "שלום עולם"},
+        }
+        value = {"messaging_product": "whatsapp"}
+
+        with patch(
+            "app.api.webhooks.whatsapp_cloud._try_acquire_message",
+            new_callable=AsyncMock,
+            return_value=True,
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud.get_or_create_user",
+            new_callable=AsyncMock,
+            return_value=(mock_user, False, "+972501234567"),
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud._is_whatsapp_admin_any",
+            return_value=True,
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud.handle_admin_private_command",
+            new_callable=AsyncMock,
+            return_value=None,
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud._match_delivery_approval_command",
+            return_value=None,
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud._route_message_to_handler",
+            new_callable=AsyncMock,
+            return_value=("תפריט ראשי", "SENDER_MENU"),
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud.send_whatsapp_message",
+            new_callable=AsyncMock,
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud._mark_message_completed",
+            new_callable=AsyncMock,
+        ):
+            result = await _process_cloud_message(mock_db, msg, value, mock_bg)
+
+        assert result is not None
+        assert result.get("admin_command") is None
+        assert result.get("response") == "תפריט ראשי"
+
+
+# ============================================================================
+# TestCaptureFromLink — תפיסת משלוח מקישור wa.me
+# ============================================================================
+
+
+class TestCaptureFromLink:
+    """בדיקות תפיסת משלוח מקישור wa.me דרך CaptureService."""
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_capture_link_success(self) -> None:
+        """שליח מאושר לוחץ על קישור תפיסה — CaptureService מחזיר הצלחה."""
+        from app.api.webhooks.whatsapp_cloud import _process_cloud_message
+        from app.db.models.user import UserRole, ApprovalStatus
+
+        mock_db = AsyncMock()
+        mock_bg = MagicMock()
+        mock_user = MagicMock()
+        mock_user.id = 5
+        mock_user.role = UserRole.COURIER
+        mock_user.approval_status = ApprovalStatus.APPROVED
+        mock_user.phone_number = "+972501234567"
+        mock_user.name = "שליח"
+
+        mock_delivery = MagicMock()
+        mock_delivery.pickup_address = "תל אביב, דיזנגוף 50"
+        mock_delivery.dropoff_address = "חיפה, הרצל 10"
+        mock_delivery.fee = 25.0
+
+        msg = {
+            "id": "wamid.capture_test",
+            "from": "972501234567",
+            "type": "text",
+            "text": {"body": "capture_abc123token"},
+        }
+        value = {"messaging_product": "whatsapp"}
+
+        mock_capture_instance = AsyncMock()
+        mock_capture_instance.capture_delivery_by_token = AsyncMock(
+            return_value=(True, "המשלוח נתפס בהצלחה", mock_delivery)
+        )
+
+        with patch(
+            "app.api.webhooks.whatsapp_cloud._try_acquire_message",
+            new_callable=AsyncMock,
+            return_value=True,
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud.get_or_create_user",
+            new_callable=AsyncMock,
+            return_value=(mock_user, False, "+972501234567"),
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud.CaptureService",
+            return_value=mock_capture_instance,
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud.send_whatsapp_message",
+            new_callable=AsyncMock,
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud._mark_message_completed",
+            new_callable=AsyncMock,
+        ):
+            result = await _process_cloud_message(mock_db, msg, value, mock_bg)
+
+        assert result is not None
+        assert result["response"] == "capture_success"
+        mock_capture_instance.capture_delivery_by_token.assert_called_once_with(
+            "abc123token", 5
+        )
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_capture_link_not_approved_courier(self) -> None:
+        """משתמש שאינו שליח מאושר — מקבל הודעת שגיאה."""
+        from app.api.webhooks.whatsapp_cloud import _process_cloud_message
+        from app.db.models.user import UserRole, ApprovalStatus
+
+        mock_db = AsyncMock()
+        mock_bg = MagicMock()
+        mock_user = MagicMock()
+        mock_user.id = 2
+        mock_user.role = UserRole.SENDER
+        mock_user.approval_status = ApprovalStatus.PENDING
+        mock_user.phone_number = "+972501234567"
+        mock_user.name = "שולח"
+
+        msg = {
+            "id": "wamid.capture_not_courier",
+            "from": "972501234567",
+            "type": "text",
+            "text": {"body": "capture_xyz456"},
+        }
+        value = {"messaging_product": "whatsapp"}
+
+        with patch(
+            "app.api.webhooks.whatsapp_cloud._try_acquire_message",
+            new_callable=AsyncMock,
+            return_value=True,
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud.get_or_create_user",
+            new_callable=AsyncMock,
+            return_value=(mock_user, False, "+972501234567"),
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud.send_whatsapp_message",
+            new_callable=AsyncMock,
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud._mark_message_completed",
+            new_callable=AsyncMock,
+        ):
+            result = await _process_cloud_message(mock_db, msg, value, mock_bg)
+
+        assert result is not None
+        assert result["response"] == "not_approved_courier"
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_capture_link_service_error(self) -> None:
+        """CaptureService זורק exception — הודעת שגיאה גנרית (לא str(exc))."""
+        from app.api.webhooks.whatsapp_cloud import _process_cloud_message
+        from app.db.models.user import UserRole, ApprovalStatus
+
+        mock_db = AsyncMock()
+        mock_bg = MagicMock()
+        mock_user = MagicMock()
+        mock_user.id = 5
+        mock_user.role = UserRole.COURIER
+        mock_user.approval_status = ApprovalStatus.APPROVED
+        mock_user.phone_number = "+972501234567"
+        mock_user.name = "שליח"
+
+        msg = {
+            "id": "wamid.capture_error",
+            "from": "972501234567",
+            "type": "text",
+            "text": {"body": "capture_errortoken"},
+        }
+        value = {"messaging_product": "whatsapp"}
+
+        mock_capture_instance = AsyncMock()
+        mock_capture_instance.capture_delivery_by_token = AsyncMock(
+            side_effect=Exception("DB connection lost")
+        )
+
+        with patch(
+            "app.api.webhooks.whatsapp_cloud._try_acquire_message",
+            new_callable=AsyncMock,
+            return_value=True,
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud.get_or_create_user",
+            new_callable=AsyncMock,
+            return_value=(mock_user, False, "+972501234567"),
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud.CaptureService",
+            return_value=mock_capture_instance,
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud.send_whatsapp_message",
+            new_callable=AsyncMock,
+        ) as mock_send, patch(
+            "app.api.webhooks.whatsapp_cloud._mark_message_completed",
+            new_callable=AsyncMock,
+        ):
+            result = await _process_cloud_message(mock_db, msg, value, mock_bg)
+
+        assert result is not None
+        assert result["response"] == "capture_failed"
+        # וידוא שההודעה שנשלחת למשתמש לא מכילה את פרטי השגיאה הפנימיים
+        send_call_args = mock_bg.add_task.call_args_list
+        # ה-add_task נקרא עם (send_whatsapp_message, phone, message)
+        sent_message = send_call_args[0][0][2]  # הארגומנט השלישי
+        assert "DB connection lost" not in sent_message
+        assert "שגיאה" in sent_message
+
+
+# ============================================================================
+# TestDeliveryApproval — אישור/דחיית משלוחים (סדרנים) ב-Cloud webhook
+# ============================================================================
+
+
+class TestDeliveryApproval:
+    """בדיקות שפקודות אישור/דחיית משלוח מנותבות ל-_handle_whatsapp_delivery_approval."""
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_dispatcher_approves_delivery(self) -> None:
+        """סדרן שולח 'אשר משלוח 42' — מנותב לטיפול באישור משלוח."""
+        from app.api.webhooks.whatsapp_cloud import _process_cloud_message
+
+        mock_db = AsyncMock()
+        mock_bg = MagicMock()
+        mock_user = MagicMock()
+        mock_user.id = 10
+        mock_user.role = MagicMock(value="courier")
+        mock_user.phone_number = "+972501234567"
+        mock_user.name = "סדרן"
+
+        # הגדרת mock למשלוח עם station_id
+        mock_delivery = MagicMock()
+        mock_delivery.station_id = 5
+
+        # mock לתוצאת שאילתת DB
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_delivery
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        msg = {
+            "id": "wamid.approval_test",
+            "from": "972501234567",
+            "type": "text",
+            "text": {"body": "אשר משלוח 42"},
+        }
+        value = {"messaging_product": "whatsapp"}
+
+        mock_station_instance = MagicMock()
+        mock_station_instance.is_dispatcher_of_station = AsyncMock(return_value=True)
+
+        with patch(
+            "app.api.webhooks.whatsapp_cloud._try_acquire_message",
+            new_callable=AsyncMock,
+            return_value=True,
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud.get_or_create_user",
+            new_callable=AsyncMock,
+            return_value=(mock_user, False, "+972501234567"),
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud._is_whatsapp_admin_any",
+            return_value=False,
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud._match_delivery_approval_command",
+            return_value=("approve", 42),
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud.StationService",
+            return_value=mock_station_instance,
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud._handle_whatsapp_delivery_approval",
+            new_callable=AsyncMock,
+            return_value="✅ משלוח #42 אושר. נשלח לנהג.",
+        ) as mock_approval, patch(
+            "app.api.webhooks.whatsapp_cloud.send_whatsapp_message",
+            new_callable=AsyncMock,
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud._mark_message_completed",
+            new_callable=AsyncMock,
+        ):
+            result = await _process_cloud_message(mock_db, msg, value, mock_bg)
+
+        assert result is not None
+        assert result.get("delivery_approval") is True
+        mock_approval.assert_called_once_with(
+            mock_db, "approve", 42, dispatcher_id=10,
+        )
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_non_dispatcher_rejected(self) -> None:
+        """משתמש שאינו סדרן — מקבל הודעת 'אין הרשאה'."""
+        from app.api.webhooks.whatsapp_cloud import _process_cloud_message
+
+        mock_db = AsyncMock()
+        mock_bg = MagicMock()
+        mock_user = MagicMock()
+        mock_user.id = 20
+        mock_user.role = MagicMock(value="sender")
+        mock_user.phone_number = "+972509999999"
+        mock_user.name = "משתמש"
+
+        # משלוח עם station_id
+        mock_delivery = MagicMock()
+        mock_delivery.station_id = 5
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_delivery
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        msg = {
+            "id": "wamid.not_dispatcher",
+            "from": "972509999999",
+            "type": "text",
+            "text": {"body": "אשר משלוח 42"},
+        }
+        value = {"messaging_product": "whatsapp"}
+
+        mock_station_instance = MagicMock()
+        mock_station_instance.is_dispatcher_of_station = AsyncMock(return_value=False)
+
+        with patch(
+            "app.api.webhooks.whatsapp_cloud._try_acquire_message",
+            new_callable=AsyncMock,
+            return_value=True,
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud.get_or_create_user",
+            new_callable=AsyncMock,
+            return_value=(mock_user, False, "+972509999999"),
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud._is_whatsapp_admin_any",
+            return_value=False,
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud._match_delivery_approval_command",
+            return_value=("approve", 42),
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud.StationService",
+            return_value=mock_station_instance,
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud.send_whatsapp_message",
+            new_callable=AsyncMock,
+        ), patch(
+            "app.api.webhooks.whatsapp_cloud._mark_message_completed",
+            new_callable=AsyncMock,
+        ):
+            result = await _process_cloud_message(mock_db, msg, value, mock_bg)
+
+        assert result is not None
+        assert result.get("delivery_approval") is True
+        assert result["response"] == "not_authorized"

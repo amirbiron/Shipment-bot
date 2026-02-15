@@ -27,9 +27,14 @@ from app.api.webhooks.whatsapp import (
     send_whatsapp_message,
     send_welcome_message,
     _route_to_role_menu_wa,
+    handle_admin_private_command,
+    _is_whatsapp_admin_any,
+    _match_delivery_approval_command,
+    _handle_whatsapp_delivery_approval,
 )
+from app.domain.services.capture_service import CaptureService
+from app.domain.services.station_service import StationService
 from app.state_machine.handlers import SenderStateHandler, CourierStateHandler
-from app.state_machine.states import CourierState, DispatcherState
 from app.state_machine.dispatcher_handler import DispatcherStateHandler
 from app.state_machine.station_owner_handler import StationOwnerStateHandler
 from app.state_machine.manager import StateManager
@@ -239,7 +244,7 @@ async def _process_cloud_message(
 
         user, is_new_user, _normalized = await get_or_create_user(
             db,
-            sender_id=normalized_phone,
+            sender_identifier=normalized_phone,
             from_number=normalized_phone,
             reply_to=normalized_phone,
             resolved_phone=normalized_phone,
@@ -262,6 +267,62 @@ async def _process_cloud_message(
             )
             if result:
                 return result
+
+        # פקודות אישור/דחייה מהודעות פרטיות של מנהלים —
+        # חייב להיות לפני is_new_user כדי שמנהל חדש יוכל לאשר מיד
+        is_admin_sender = _is_whatsapp_admin_any(normalized_phone, user.phone_number)
+        if is_admin_sender and text:
+            admin_response = await handle_admin_private_command(
+                db,
+                text,
+                admin_name=user.name or PhoneNumberValidator.mask(normalized_phone),
+                background_tasks=background_tasks,
+            )
+            if admin_response:
+                background_tasks.add_task(
+                    send_whatsapp_message, normalized_phone, admin_response
+                )
+                return {"from": phone_masked, "response": admin_response, "admin_command": True}
+
+        # פקודות אישור/דחיית משלוח (סדרנים)
+        if text and not is_new_user:
+            delivery_approval = _match_delivery_approval_command(text)
+            if delivery_approval:
+                action, delivery_id = delivery_approval
+                station_service = StationService(db)
+                from app.db.models.delivery import Delivery
+                from sqlalchemy import select as sa_select
+
+                delivery_result = await db.execute(
+                    sa_select(Delivery).where(Delivery.id == delivery_id)
+                )
+                target_delivery = delivery_result.scalar_one_or_none()
+
+                if not target_delivery or not target_delivery.station_id:
+                    background_tasks.add_task(
+                        send_whatsapp_message, normalized_phone,
+                        "❌ המשלוח לא נמצא."
+                    )
+                    return {"from": phone_masked, "response": "delivery_not_found", "delivery_approval": True}
+
+                is_disp = await station_service.is_dispatcher_of_station(
+                    user.id, target_delivery.station_id
+                )
+                if not is_disp:
+                    background_tasks.add_task(
+                        send_whatsapp_message, normalized_phone,
+                        "❌ אין לך הרשאה לאשר/לדחות משלוחים בתחנה זו."
+                    )
+                    return {"from": phone_masked, "response": "not_authorized", "delivery_approval": True}
+
+                approval_msg = await _handle_whatsapp_delivery_approval(
+                    db, action, delivery_id,
+                    dispatcher_id=user.id,
+                )
+                background_tasks.add_task(
+                    send_whatsapp_message, normalized_phone, approval_msg
+                )
+                return {"from": phone_masked, "response": approval_msg, "delivery_approval": True}
 
         # משתמש חדש — הודעת ברוכים הבאים עם כפתורים
         if is_new_user:
@@ -327,29 +388,7 @@ async def _handle_capture_from_link(
     if not token:
         return None
 
-    from app.domain.services.delivery_service import DeliveryService
-    from app.db.models.delivery import Delivery, DeliveryStatus
-    from sqlalchemy import select
-
-    # חיפוש משלוח לפי token
-    result = await db.execute(
-        select(Delivery).where(Delivery.token == token)
-    )
-    delivery = result.scalar_one_or_none()
-
-    if not delivery:
-        background_tasks.add_task(
-            send_whatsapp_message, reply_to,
-            "❌ המשלוח לא נמצא. ייתכן שהקישור לא תקף יותר."
-        )
-        return {"from": PhoneNumberValidator.mask(reply_to), "response": "delivery_not_found"}
-
-    if delivery.status not in (DeliveryStatus.OPEN, DeliveryStatus.PENDING_APPROVAL):
-        background_tasks.add_task(
-            send_whatsapp_message, reply_to,
-            "❌ המשלוח כבר נתפס או אינו זמין יותר."
-        )
-        return {"from": PhoneNumberValidator.mask(reply_to), "response": "delivery_not_available"}
+    phone_masked = PhoneNumberValidator.mask(reply_to)
 
     # בדיקה שהמשתמש שליח מאושר
     if user.role != UserRole.COURIER or user.approval_status != ApprovalStatus.APPROVED:
@@ -358,27 +397,17 @@ async def _handle_capture_from_link(
             "❌ רק שליחים מאושרים יכולים לתפוס משלוחים.\n"
             "הקלד # לחזרה לתפריט הראשי."
         )
-        return {"from": PhoneNumberValidator.mask(reply_to), "response": "not_approved_courier"}
+        return {"from": phone_masked, "response": "not_approved_courier"}
 
-    # ניסיון תפיסה דרך DeliveryService
-    delivery_service = DeliveryService(db)
+    # ניסיון תפיסה דרך CaptureService — מטפל בחיפוש לפי token, ולידציית סטטוס, ונעילת ארנק
+    capture_service = CaptureService(db)
     try:
-        await delivery_service.capture_delivery(delivery.id, user.id)
-        await db.commit()
-        background_tasks.add_task(
-            send_whatsapp_message, reply_to,
-            f"✅ המשלוח נתפס בהצלחה!\n\n"
-            f"📍 איסוף: {delivery.pickup_address}\n"
-            f"🎯 יעד: {delivery.dropoff_address}\n"
-            f"💰 עמלה: {delivery.fee}₪\n\n"
-            f"הקלד # לחזרה לתפריט."
-        )
-        return {"from": PhoneNumberValidator.mask(reply_to), "response": "capture_success"}
+        success, message, delivery = await capture_service.capture_delivery_by_token(token, user.id)
     except Exception as exc:
         logger.error(
             "Cloud API capture failed",
             extra_data={
-                "delivery_id": delivery.id,
+                "token": token[:8] + "...",
                 "user_id": user.id,
                 "error": str(exc),
             },
@@ -386,9 +415,33 @@ async def _handle_capture_from_link(
         )
         background_tasks.add_task(
             send_whatsapp_message, reply_to,
-            f"❌ לא ניתן לתפוס את המשלוח: {str(exc)}"
+            "❌ אירעה שגיאה בתפיסת המשלוח. נסה שוב מאוחר יותר."
         )
-        return {"from": PhoneNumberValidator.mask(reply_to), "response": "capture_failed"}
+        return {"from": phone_masked, "response": "capture_failed"}
+
+    if not success:
+        background_tasks.add_task(
+            send_whatsapp_message, reply_to,
+            f"❌ {message}"
+        )
+        return {"from": phone_masked, "response": "capture_rejected"}
+
+    # הצלחה — הצגת פרטי המשלוח
+    if delivery:
+        background_tasks.add_task(
+            send_whatsapp_message, reply_to,
+            f"✅ {message}\n\n"
+            f"📍 איסוף: {delivery.pickup_address}\n"
+            f"🎯 יעד: {delivery.dropoff_address}\n"
+            f"💰 עמלה: {delivery.fee}₪\n\n"
+            f"הקלד # לחזרה לתפריט."
+        )
+    else:
+        background_tasks.add_task(
+            send_whatsapp_message, reply_to,
+            f"✅ {message}\nהקלד # לחזרה לתפריט."
+        )
+    return {"from": phone_masked, "response": "capture_success"}
 
 
 # ──────────────────────────────────────────────
@@ -410,7 +463,6 @@ async def _route_message_to_handler(
 
     # בעל תחנה
     if user.role == UserRole.STATION_OWNER:
-        from app.domain.services.station_service import StationService
         station_service = StationService(db)
         station = await station_service.get_station_by_owner(user.id)
         if station:
@@ -425,7 +477,6 @@ async def _route_message_to_handler(
 
     # זרימת סדרן
     if current_state and isinstance(current_state, str) and current_state.startswith("DISPATCHER."):
-        from app.domain.services.station_service import StationService
         station_service = StationService(db)
         station = await station_service.get_dispatcher_station(user.id)
         if station:
