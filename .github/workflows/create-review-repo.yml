@@ -42,6 +42,10 @@ jobs:
           REVIEWER: ${{ inputs.reviewer }}
         run: |
           GITHUB_USER=$(gh api user --jq '.login')
+          if [[ -z "$GITHUB_USER" ]]; then
+            echo "::error::לא ניתן לזהות את המשתמש ב-GitHub"
+            exit 1
+          fi
           gh api "repos/${GITHUB_USER}/${REPO_NAME}/collaborators/${REVIEWER}" \
             -X PUT -f permission=pull
           echo "הסוקר ${REVIEWER} הוזמן בהצלחה"
@@ -53,6 +57,10 @@ jobs:
           REVIEWER: ${{ inputs.reviewer }}
         run: |
           GITHUB_USER=$(gh api user --jq '.login')
+          if [[ -z "$GITHUB_USER" ]]; then
+            echo "::error::לא ניתן לזהות את המשתמש ב-GitHub"
+            exit 1
+          fi
           REPO_URL="https://github.com/${GITHUB_USER}/${REPO_NAME}"
 
           echo "## ריפו לסקירת קוד נוצר בהצלחה" >> $GITHUB_STEP_SUMMARY

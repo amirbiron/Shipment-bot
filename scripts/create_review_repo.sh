@@ -36,10 +36,18 @@ GITHUB_REPO=""
 while [[ $# -gt 0 ]]; do
     case $1 in
         --github)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "שגיאה: --github דורש שם ריפו כארגומנט"
+                exit 1
+            fi
             GITHUB_REPO="$2"
             shift 2
             ;;
         --target)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "שגיאה: --target דורש נתיב תיקייה כארגומנט"
+                exit 1
+            fi
             TARGET_DIR="$2"
             shift 2
             ;;
@@ -127,8 +135,12 @@ tar -C "$SOURCE_DIR" \
     \
     -cf - . | tar -xf - -C "$TARGET_DIR"
 
-# ספירת קבצים שהועתקו
+# ספירת קבצים שהועתקו ובדיקה שיש תוכן
 FILE_COUNT=$(find "$TARGET_DIR" -type f | wc -l)
+if [[ "$FILE_COUNT" -eq 0 ]]; then
+    echo "שגיאה: לא הועתקו קבצים - התיקייה ריקה"
+    exit 1
+fi
 echo "הועתקו $FILE_COUNT קבצים"
 echo ""
 
@@ -174,7 +186,14 @@ if [[ -n "$GITHUB_REPO" ]]; then
     fi
 
     # יצירת ריפו פרטי
-    GITHUB_USER=$(gh api user --jq '.login')
+    GITHUB_USER=$(gh api user --jq '.login') || {
+        echo "שגיאה: לא ניתן לזהות את המשתמש ב-GitHub (בעיית רשת או אימות)"
+        exit 1
+    }
+    if [[ -z "$GITHUB_USER" ]]; then
+        echo "שגיאה: לא ניתן לזהות את המשתמש ב-GitHub (תשובה ריקה)"
+        exit 1
+    fi
     FULL_REPO="${GITHUB_USER}/${GITHUB_REPO}"
 
     # בדיקה שהריפו לא קיים
