@@ -5,22 +5,18 @@ SSE (Server-Sent Events) משמש לשידור חד-כיווני מהשרת לל
 הלקוח מתחבר ל-/stream עם JWT token ומקבל אירועים בזמן אמת.
 """
 import asyncio
-import json
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, field_validator
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.auth import TokenPayload, verify_token
 from app.core.logging import get_logger
 from app.core.redis_client import get_redis
-from app.db.database import get_db
+from app.db.database import AsyncSessionLocal
 from app.api.dependencies.auth import get_current_station_owner, validate_station_owner
 from app.domain.services.alert_service import (
-    AlertType,
     get_alert_history,
     get_wallet_threshold,
     set_wallet_threshold,
@@ -163,9 +159,13 @@ async def _sse_event_generator(
 async def alerts_stream(
     request: Request,
     token: str = Query(..., description="JWT token לאימות"),
-    db: AsyncSession = Depends(get_db),
 ) -> StreamingResponse:
-    """חיבור SSE — אימות JWT דרך query param (EventSource לא תומך ב-headers)."""
+    """חיבור SSE — אימות JWT דרך query param (EventSource לא תומך ב-headers).
+
+    שימוש ב-session קצר-חיים לולידציה — לא Depends(get_db) — כי FastAPI שומר
+    yield-dependencies פתוחים עד סיום ה-response. בחיבור SSE שנמשך שעות,
+    זה מחזיק חיבור DB מה-pool לכל זמן השידור ועלול לרוקן את ה-pool.
+    """
     # אימות JWT — EventSource API לא מאפשר שליחת Authorization header
     token_data = verify_token(token)
     if not token_data:
@@ -174,8 +174,9 @@ async def alerts_stream(
             detail="טוקן לא תקין או פג תוקף",
         )
 
-    # ולידציה מלאה: משתמש פעיל, תחנה פעילה, בעלות — זהה ל-get_current_station_owner
-    await validate_station_owner(token_data, db)
+    # ולידציה מלאה עם session קצר-חיים — משוחרר לפני תחילת השידור
+    async with AsyncSessionLocal() as db:
+        await validate_station_owner(token_data, db)
 
     station_id = token_data.station_id
 

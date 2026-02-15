@@ -97,7 +97,7 @@ def _reset_rate_limiter(middleware_stack) -> None:
 
 
 @pytest.fixture(scope="function")
-async def test_client(db_session: AsyncSession):
+async def test_client(db_session: AsyncSession, async_engine):
     """Create test client with database override"""
     from httpx import AsyncClient, ASGITransport
 
@@ -111,9 +111,18 @@ async def test_client(db_session: AsyncSession):
     if app.middleware_stack is not None:
         _reset_rate_limiter(app.middleware_stack)
 
+    # SSE endpoint משתמש ב-AsyncSessionLocal ישירות (לא Depends) כדי לא להחזיק
+    # חיבור DB לכל אורך השידור. צריך לוודא שבבדיקות הוא משתמש ב-test engine.
+    test_session_maker = async_sessionmaker(
+        bind=async_engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    )
+
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        yield client
+    with patch("app.api.routes.panel.alerts.AsyncSessionLocal", test_session_maker):
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            yield client
 
     app.dependency_overrides.clear()
 
