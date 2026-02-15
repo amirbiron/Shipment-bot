@@ -457,7 +457,8 @@ def fake_redis():
 
     with patch("app.core.redis_client.get_redis", _get_fake_redis), \
          patch("app.core.auth.get_redis", _get_fake_redis), \
-         patch("app.domain.services.alert_service.get_redis", _get_fake_redis):
+         patch("app.domain.services.alert_service.get_redis", _get_fake_redis), \
+         patch("app.api.routes.panel.alerts.get_redis", _get_fake_redis):
         yield _fake
 
 

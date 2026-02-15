@@ -12,11 +12,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, field_validator
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.auth import TokenPayload, verify_token
 from app.core.logging import get_logger
 from app.core.redis_client import get_redis
-from app.api.dependencies.auth import get_current_station_owner
-from app.db.models.user import UserRole
+from app.db.database import get_db
+from app.api.dependencies.auth import get_current_station_owner, validate_station_owner
 from app.domain.services.alert_service import (
     AlertType,
     get_alert_history,
@@ -154,21 +156,26 @@ async def _sse_event_generator(
     responses={
         200: {"description": "חיבור SSE נפתח בהצלחה", "content": {"text/event-stream": {}}},
         401: {"description": "טוקן לא תקין או פג תוקף"},
+        403: {"description": "אין הרשאה — משתמש/תחנה לא פעילים או בעלות השתנתה"},
     },
     tags=["Panel - התראות"],
 )
 async def alerts_stream(
     request: Request,
     token: str = Query(..., description="JWT token לאימות"),
+    db: AsyncSession = Depends(get_db),
 ) -> StreamingResponse:
     """חיבור SSE — אימות JWT דרך query param (EventSource לא תומך ב-headers)."""
     # אימות JWT — EventSource API לא מאפשר שליחת Authorization header
     token_data = verify_token(token)
-    if not token_data or token_data.role != UserRole.STATION_OWNER.value:
+    if not token_data:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="טוקן לא תקין או פג תוקף",
         )
+
+    # ולידציה מלאה: משתמש פעיל, תחנה פעילה, בעלות — זהה ל-get_current_station_owner
+    await validate_station_owner(token_data, db)
 
     station_id = token_data.station_id
 

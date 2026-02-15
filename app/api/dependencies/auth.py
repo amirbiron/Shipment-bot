@@ -25,24 +25,22 @@ logger = get_logger(__name__)
 security = HTTPBearer()
 
 
-async def get_current_station_owner(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-    db: AsyncSession = Depends(get_db),
-) -> TokenPayload:
+async def validate_station_owner(
+    token_data: TokenPayload,
+    db: AsyncSession,
+) -> None:
     """
-    אימות JWT ווידוא שהמשתמש הוא בעל תחנה פעילה.
+    ולידציה מלאה שהמשתמש הוא בעל תחנה פעילה.
 
-    מחזיר TokenPayload עם user_id, station_id, role.
-    זורק 401 אם הטוקן לא תקין, 403 אם התחנה לא פעילה או הבעלות השתנתה.
+    בודק:
+    1. תפקיד station_owner בטוקן
+    2. המשתמש עדיין פעיל ב-DB
+    3. התחנה עדיין פעילה
+    4. המשתמש עדיין בעלים של התחנה
+
+    זורק HTTPException 403 אם אחד מהתנאים לא מתקיים.
     """
-    token_data = verify_token(credentials.credentials)
-    if not token_data:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="טוקן לא תקין או פג תוקף",
-        )
-
-    # ולידציה שהטוקן שייך לבעל תחנה (מונע שימוש חוזר בטוקנים מסוג אחר)
+    # ולידציה שהטוקן שייך לבעל תחנה
     if token_data.role != "station_owner":
         logger.error(
             "Panel access denied — wrong role in token",
@@ -88,7 +86,7 @@ async def get_current_station_owner(
             detail="התחנה לא פעילה",
         )
 
-    # ולידציה שהמשתמש עדיין בעלים של התחנה (בודק station_owners + fallback ל-owner_id)
+    # ולידציה שהמשתמש עדיין בעלים של התחנה
     is_owner = await station_service.is_owner_of_station(
         token_data.user_id, token_data.station_id
     )
@@ -106,4 +104,23 @@ async def get_current_station_owner(
             detail="אין הרשאה — הבעלות על התחנה השתנתה",
         )
 
+
+async def get_current_station_owner(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: AsyncSession = Depends(get_db),
+) -> TokenPayload:
+    """
+    אימות JWT ווידוא שהמשתמש הוא בעל תחנה פעילה.
+
+    מחזיר TokenPayload עם user_id, station_id, role.
+    זורק 401 אם הטוקן לא תקין, 403 אם התחנה לא פעילה או הבעלות השתנתה.
+    """
+    token_data = verify_token(credentials.credentials)
+    if not token_data:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="טוקן לא תקין או פג תוקף",
+        )
+
+    await validate_station_owner(token_data, db)
     return token_data
