@@ -500,6 +500,10 @@ def check_station_alerts():
     1. בודקת אם יתרת הארנק מתחת לסף שהוגדר (Redis)
     2. בודקת אם יש משלוחים פתוחים שלא נאספו מעל 2 שעות
     משלחת התראות בזמן אמת לפאנל דרך Redis Pub/Sub.
+
+    משתמשת ב-Redis SET NX EX למניעת התראות כפולות:
+    - סף ארנק: throttle של שעה אחת לכל תחנה
+    - משלוח לא נאסף: throttle של שעה אחת לכל משלוח
     """
     from app.db.models.station import Station
     from app.db.models.station_wallet import StationWallet
@@ -510,6 +514,10 @@ def check_station_alerts():
         publish_uncollected_shipment_alert,
         DEFAULT_UNCOLLECTED_HOURS,
     )
+    from app.core.redis_client import get_redis
+
+    # זמן throttle בשניות — התראה אחת לשעה לכל סוג/ישות
+    _ALERT_THROTTLE_SECONDS = 3600
 
     async def _check():
         async with get_task_session() as db:
@@ -519,6 +527,7 @@ def check_station_alerts():
             )
             stations = list(result.scalars().all())
 
+            redis = await get_redis()
             alerts_sent = 0
             for station in stations:
                 try:
@@ -532,12 +541,17 @@ def check_station_alerts():
                         )
                         wallet = wallet_result.scalar_one_or_none()
                         if wallet and float(wallet.balance) < threshold:
-                            await publish_wallet_threshold_alert(
-                                station_id=station.id,
-                                current_balance=float(wallet.balance),
-                                threshold=threshold,
-                            )
-                            alerts_sent += 1
+                            # dedupe — התראה אחת לשעה לכל תחנה
+                            throttle_key = f"alert_throttle:wallet:{station.id}"
+                            if await redis.set(
+                                throttle_key, "1", nx=True, ex=_ALERT_THROTTLE_SECONDS
+                            ):
+                                await publish_wallet_threshold_alert(
+                                    station_id=station.id,
+                                    current_balance=float(wallet.balance),
+                                    threshold=threshold,
+                                )
+                                alerts_sent += 1
 
                     # --- בדיקת משלוחים שלא נאספו ---
                     cutoff = datetime.now(timezone.utc) - timedelta(
@@ -552,6 +566,12 @@ def check_station_alerts():
                     )
                     uncollected = list(uncollected_result.scalars().all())
                     for d in uncollected:
+                        # dedupe — התראה אחת לשעה לכל משלוח
+                        throttle_key = f"alert_throttle:uncollected:{d.id}"
+                        if not await redis.set(
+                            throttle_key, "1", nx=True, ex=_ALERT_THROTTLE_SECONDS
+                        ):
+                            continue
                         hours_open = (
                             datetime.now(timezone.utc) - d.created_at.replace(
                                 tzinfo=timezone.utc
@@ -574,6 +594,8 @@ def check_station_alerts():
                         },
                         exc_info=True,
                     )
+                    # rollback למניעת דליפת אובייקטים מתחנה שנכשלה לתחנה הבאה
+                    await db.rollback()
 
             logger.info(
                 "סיום בדיקת התראות תקופתית",

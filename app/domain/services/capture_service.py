@@ -176,8 +176,16 @@ class CaptureService:
                 # כך ש-refresh מהקורא יראה את השינויים
                 await self.db.flush()
 
-            # התראה בזמן אמת לפאנל — רק למשלוחי תחנה, ורק אחרי commit
-            if auto_commit and delivery.station_id:
+        except Exception as e:
+            # rollback רק כש-auto_commit=True — אחרת הקורא מנהל את הטרנזקציה
+            if auto_commit:
+                await self.db.rollback()
+            raise CaptureError(f"שגיאה בתפיסת המשלוח: {str(e)}")
+
+        # התראה בזמן אמת לפאנל — מחוץ ל-try העסקי כדי שכשלון התראה
+        # לא ישפיע על תוצאת הפעולה (הפעולה כבר committed)
+        if auto_commit and delivery.station_id:
+            try:
                 courier_name = ""
                 courier_result = await self.db.execute(
                     select(User).where(User.id == courier_id)
@@ -190,14 +198,18 @@ class CaptureService:
                     delivery_id=delivery.id,
                     courier_name=courier_name,
                 )
+            except Exception as e:
+                logger.error(
+                    "כשלון בפרסום התראת משלוח נתפס — הפעולה העסקית הצליחה",
+                    extra_data={
+                        "delivery_id": delivery_id,
+                        "courier_id": courier_id,
+                        "error": str(e),
+                    },
+                    exc_info=True,
+                )
 
-            return True, f"המשלוח נתפס בהצלחה! עמלה: {fee}₪, יתרה חדשה: {future_balance}₪", delivery
-
-        except Exception as e:
-            # rollback רק כש-auto_commit=True — אחרת הקורא מנהל את הטרנזקציה
-            if auto_commit:
-                await self.db.rollback()
-            raise CaptureError(f"שגיאה בתפיסת המשלוח: {str(e)}")
+        return True, f"המשלוח נתפס בהצלחה! עמלה: {fee}₪, יתרה חדשה: {future_balance}₪", delivery
 
     async def release_delivery(
         self,

@@ -16,12 +16,13 @@ from app.core.auth import TokenPayload, verify_token
 from app.core.logging import get_logger
 from app.core.redis_client import get_redis
 from app.api.dependencies.auth import get_current_station_owner
+from app.db.models.user import UserRole
 from app.domain.services.alert_service import (
     AlertType,
     get_alert_history,
     get_wallet_threshold,
     set_wallet_threshold,
-    _channel_name,
+    channel_name,
     DEFAULT_WALLET_THRESHOLD,
 )
 from app.api.routes.panel.schemas import ActionResponse
@@ -73,11 +74,9 @@ async def _sse_event_generator(
     שולח heartbeat כל _SSE_HEARTBEAT_INTERVAL שניות לשמירת החיבור.
     מפסיק כשהלקוח מתנתק.
     """
-    import redis.asyncio as aioredis
-
     redis = await get_redis()
     pubsub = redis.pubsub()
-    channel = _channel_name(station_id)
+    channel = channel_name(station_id)
 
     try:
         await pubsub.subscribe(channel)
@@ -122,8 +121,11 @@ async def _sse_event_generator(
             exc_info=True,
         )
     finally:
-        await pubsub.unsubscribe(channel)
-        await pubsub.aclose()
+        try:
+            await pubsub.unsubscribe(channel)
+            await pubsub.aclose()
+        except Exception:
+            pass
         logger.info(
             "SSE משאבים שוחררו",
             extra_data={"station_id": station_id},
@@ -162,7 +164,7 @@ async def alerts_stream(
     """חיבור SSE — אימות JWT דרך query param (EventSource לא תומך ב-headers)."""
     # אימות JWT — EventSource API לא מאפשר שליחת Authorization header
     token_data = verify_token(token)
-    if not token_data or token_data.role != "station_owner":
+    if not token_data or token_data.role != UserRole.STATION_OWNER.value:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="טוקן לא תקין או פג תוקף",

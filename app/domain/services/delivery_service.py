@@ -175,7 +175,18 @@ class DeliveryService:
             await self.db.commit()
             await self.db.refresh(delivery)
 
-            # התראה בזמן אמת לפאנל — רק למשלוחי תחנה
+        except SQLAlchemyError as e:
+            logger.error(
+                "כשלון בסימון משלוח כנמסר",
+                extra_data={"delivery_id": delivery_id, "error": str(e)},
+                exc_info=True,
+            )
+            await self.db.rollback()
+            return None
+
+        # התראה בזמן אמת לפאנל — מחוץ ל-try העסקי כדי שכשלון התראה
+        # לא ישפיע על תוצאת הפעולה (הפעולה כבר committed)
+        try:
             if delivery.station_id:
                 courier_name = ""
                 if delivery.courier_id:
@@ -191,17 +202,14 @@ class DeliveryService:
                     delivery_id=delivery.id,
                     courier_name=courier_name,
                 )
-
-            return delivery
-
-        except SQLAlchemyError as e:
+        except Exception as e:
             logger.error(
-                "כשלון בסימון משלוח כנמסר",
+                "כשלון בפרסום התראת משלוח נמסר — הפעולה העסקית הצליחה",
                 extra_data={"delivery_id": delivery_id, "error": str(e)},
                 exc_info=True,
             )
-            await self.db.rollback()
-            return None
+
+        return delivery
 
     async def cancel_delivery(self, delivery_id: int) -> Optional[Delivery]:
         """Cancel a delivery"""

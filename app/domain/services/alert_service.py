@@ -57,7 +57,7 @@ _ALERT_DESCRIPTIONS: dict[AlertType, str] = {
 }
 
 
-def _channel_name(station_id: int) -> str:
+def channel_name(station_id: int) -> str:
     """שם ערוץ Pub/Sub לתחנה"""
     return f"{_CHANNEL_PREFIX}:{station_id}"
 
@@ -98,7 +98,7 @@ async def publish_alert(
     try:
         redis = await get_redis()
         # פרסום לערוץ — לקוחות SSE מאזינים
-        await redis.publish(_channel_name(station_id), message)
+        await redis.publish(channel_name(station_id), message)
         # שמירה בהיסטוריה — LPUSH + LTRIM לגודל מוגבל
         history_key = _history_key(station_id)
         await redis.lpush(history_key, message)
@@ -171,7 +171,12 @@ async def set_wallet_threshold(station_id: int, threshold: float) -> None:
     Args:
         station_id: מזהה התחנה
         threshold: סף יתרה ב-₪ — כשהיתרה יורדת מתחת, נשלחת התראה
+
+    Raises:
+        ValueError: אם הסף שלילי
     """
+    if threshold < 0:
+        raise ValueError("סף ארנק חייב להיות 0 או יותר")
     try:
         redis = await get_redis()
         await redis.set(_threshold_key(station_id), str(threshold))
