@@ -499,8 +499,10 @@ async def _route_message_to_handler(
         return response.text, new_state
 
     # שולח (ברירת מחדל)
-    handler = SenderStateHandler(db, platform="whatsapp")
-    response, new_state = await handler.handle_message(user, text, photo_file_id)
+    handler = SenderStateHandler(db)
+    response, new_state = await handler.handle_message(
+        user_id=user.id, platform="whatsapp", message=text
+    )
     background_tasks.add_task(
         send_whatsapp_message, reply_to, response.text, response.keyboard
     )

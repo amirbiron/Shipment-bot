@@ -41,7 +41,10 @@ def _create_provider(provider_type: str, *, is_admin: bool = False) -> BaseWhats
     if provider_type == "pywa":
         from app.domain.services.whatsapp.pywa_provider import PyWaProvider
 
-        circuit_breaker = get_whatsapp_cloud_circuit_breaker()
+        circuit_breaker = (
+            get_whatsapp_admin_circuit_breaker() if is_admin
+            else get_whatsapp_cloud_circuit_breaker()
+        )
         return PyWaProvider(circuit_breaker=circuit_breaker)
 
     raise ValueError(f"סוג ספק WhatsApp לא מוכר: {provider_type}")
