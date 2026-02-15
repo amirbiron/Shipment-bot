@@ -1312,7 +1312,9 @@ async def whatsapp_webhook(
                 continue
     
             # ניתוב לתפריט סדרן (כפתור "תפריט סדרן" — פתוח לכל תפקיד שהוא סדרן פעיל) [שלב 3.2]
-            if "תפריט סדרן" in text or "🏪 תפריט סדרן" in text:
+            # בדיקת keyword רק כשהמשתמש לא באמצע זרימת סדרן — מונע תפיסת טקסט חופשי כלחיצת כפתור
+            _in_dispatcher_flow = isinstance(current_state, str) and current_state.startswith("DISPATCHER.")
+            if not _in_dispatcher_flow and ("תפריט סדרן" in text or "🏪 תפריט סדרן" in text):
                 from app.domain.services.station_service import StationService
     
                 station_service = StationService(db)

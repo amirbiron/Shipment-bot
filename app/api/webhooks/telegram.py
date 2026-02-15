@@ -1091,8 +1091,11 @@ async def telegram_webhook(
         return {"ok": True, "new_state": new_state}
 
     # ניתוב לתפריט סדרן / זרימת סדרן — פתוח לכל תפקיד שהוא סדרן פעיל [שלב 3.2]
-    is_dispatcher_menu_click = ("תפריט סדרן" in text) or ("🏪 תפריט סדרן" in text)
     is_dispatcher_flow = isinstance(current_state, str) and current_state.startswith("DISPATCHER.")
+    # בדיקת keyword רק כשהמשתמש לא באמצע זרימת סדרן — מונע תפיסת טקסט חופשי כלחיצת כפתור
+    is_dispatcher_menu_click = (not is_dispatcher_flow) and (
+        ("תפריט סדרן" in text) or ("🏪 תפריט סדרן" in text)
+    )
 
     if is_dispatcher_menu_click or is_dispatcher_flow:
         station = await _get_dispatcher_station(user, db)
