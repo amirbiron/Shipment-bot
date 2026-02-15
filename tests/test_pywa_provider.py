@@ -165,10 +165,10 @@ class TestPyWaSendText:
         call_kwargs = mock_client.send_message.call_args[1]
         # כפתורים ורשימה — None כי חורגים מכל המגבלות
         assert call_kwargs["buttons"] is None
-        # הטקסט כולל הנחיות טקסטואליות
-        assert "הקלד אחת מהאפשרויות:" in call_kwargs["text"]
-        assert "1. אפשרות 1" in call_kwargs["text"]
-        assert "11. אפשרות 11" in call_kwargs["text"]
+        # הטקסט כולל הנחיות טקסטואליות (ללא מספור — טקסט מדויק)
+        assert "הקלד בדיוק את טקסט האפשרות הרצויה:" in call_kwargs["text"]
+        assert "• אפשרות 1" in call_kwargs["text"]
+        assert "• אפשרות 11" in call_kwargs["text"]
 
     @pytest.mark.unit
     @pytest.mark.asyncio
@@ -199,6 +199,103 @@ class TestPyWaSendText:
         assert len(first_row_call[1]["title"]) <= 24
         # callback_data שומר על הערך המלא (עד 200)
         assert first_row_call[1]["callback_data"] == long_label
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_send_text_button_callback_too_long_fallback(self) -> None:
+        """כפתור עם callback_data שחורג מ-256 — כפתורים לא נוצרים, נופל לרשימה/טקסט."""
+        provider, _ = self._make_provider()
+
+        mock_client = AsyncMock()
+        mock_client.send_message = AsyncMock(return_value=None)
+        provider._client = mock_client
+
+        mock_pywa_types = MagicMock()
+        # label אחד שחורג מ-256 תווים — עם כפתור אחד אין fallback טקסטואלי
+        # (≤3 אפשרויות), אבל הכפתור לא ייווצר
+        long_label = "א" * 300
+
+        with patch.dict("sys.modules", {"pywa": MagicMock(types=mock_pywa_types), "pywa.types": mock_pywa_types}):
+            keyboard = [[long_label]]
+            await provider.send_text(
+                to="+972501234567", text="בחר:", keyboard=keyboard
+            )
+
+        call_kwargs = mock_client.send_message.call_args[1]
+        # כפתור לא נוצר בגלל guard — buttons=None
+        assert call_kwargs["buttons"] is None
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_send_text_list_callback_too_long_full_fallback(self) -> None:
+        """4 אפשרויות עם אחת ארוכה מ-200 — גם רשימה נכשלת, fallback טקסטואלי."""
+        provider, _ = self._make_provider()
+
+        mock_client = AsyncMock()
+        mock_client.send_message = AsyncMock(return_value=None)
+        provider._client = mock_client
+
+        mock_pywa_types = MagicMock()
+        # label שחורג מ-200 + 3 רגילים — buttons=None (>3), list=None (guard), text=fallback
+        long_label = "ג" * 210
+
+        with patch.dict("sys.modules", {"pywa": MagicMock(types=mock_pywa_types), "pywa.types": mock_pywa_types}):
+            keyboard = [[long_label, "קצר 1", "קצר 2", "קצר 3"]]
+            await provider.send_text(
+                to="+972501234567", text="בחר:", keyboard=keyboard
+            )
+
+        call_kwargs = mock_client.send_message.call_args[1]
+        assert call_kwargs["buttons"] is None
+        assert "הקלד בדיוק את טקסט האפשרות הרצויה:" in call_kwargs["text"]
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_send_text_list_callback_too_long_fallback(self) -> None:
+        """שורת רשימה עם callback_data שחורג מ-200 — fallback טקסטואלי."""
+        provider, _ = self._make_provider()
+
+        mock_client = AsyncMock()
+        mock_client.send_message = AsyncMock(return_value=None)
+        provider._client = mock_client
+
+        mock_pywa_types = MagicMock()
+        # 4 כפתורים כדי להגיע לטווח רשימה, אחד חורג מ-200
+        long_label = "ב" * 210
+
+        with patch.dict("sys.modules", {"pywa": MagicMock(types=mock_pywa_types), "pywa.types": mock_pywa_types}):
+            keyboard = [[long_label, "קצר 1", "קצר 2", "קצר 3"]]
+            await provider.send_text(
+                to="+972501234567", text="בחר:", keyboard=keyboard
+            )
+
+        call_kwargs = mock_client.send_message.call_args[1]
+        # גם כפתורים וגם רשימה לא מתאימים — fallback טקסטואלי
+        assert call_kwargs["buttons"] is None
+        assert "הקלד בדיוק את טקסט האפשרות הרצויה:" in call_kwargs["text"]
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_send_text_list_duplicate_labels_fallback(self) -> None:
+        """labels כפולים ברשימת בחירה — fallback טקסטואלי."""
+        provider, _ = self._make_provider()
+
+        mock_client = AsyncMock()
+        mock_client.send_message = AsyncMock(return_value=None)
+        provider._client = mock_client
+
+        mock_pywa_types = MagicMock()
+        with patch.dict("sys.modules", {"pywa": MagicMock(types=mock_pywa_types), "pywa.types": mock_pywa_types}):
+            # 4 אפשרויות עם כפילות — "אפשרות א" מופיע פעמיים
+            keyboard = [["אפשרות א", "אפשרות ב", "אפשרות א", "אפשרות ג"]]
+            await provider.send_text(
+                to="+972501234567", text="בחר:", keyboard=keyboard
+            )
+
+        call_kwargs = mock_client.send_message.call_args[1]
+        # כפילויות → fallback טקסטואלי
+        assert call_kwargs["buttons"] is None
+        assert "הקלד בדיוק את טקסט האפשרות הרצויה:" in call_kwargs["text"]
 
     @pytest.mark.unit
     @pytest.mark.asyncio

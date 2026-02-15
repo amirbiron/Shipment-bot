@@ -23,6 +23,9 @@ logger = get_logger(__name__)
 _MAX_REPLY_BUTTONS = 3
 # מספר פריטים מקסימלי ברשימת בחירה (Interactive List) ב-Cloud API
 _MAX_LIST_ROWS = 10
+# מגבלות אורך callback_data לפי סוג אינטראקציה
+_MAX_BUTTON_CALLBACK_LEN = 256
+_MAX_LIST_ROW_CALLBACK_LEN = 200
 
 
 class PyWaProvider(BaseWhatsAppProvider):
@@ -143,12 +146,25 @@ class PyWaProvider(BaseWhatsAppProvider):
         if len(all_labels) > _MAX_REPLY_BUTTONS:
             return None
 
+        # guard: label שחורג ממגבלת callback_data → fallback
+        # (חיתוך שקט עלול לשבור ייחודיות/משמעות)
+        for label in all_labels:
+            if len(label) > _MAX_BUTTON_CALLBACK_LEN:
+                logger.warning(
+                    "label חורג ממגבלת callback_data לכפתור — fallback טקסטואלי",
+                    extra_data={
+                        "label_length": len(label),
+                        "max_allowed": _MAX_BUTTON_CALLBACK_LEN,
+                    },
+                )
+                return None
+
         buttons = []
         for label in all_labels:
-            # כפתור Cloud API — title עד 20 תווים (תצוגה), callback_data עד 256 תווים (ערך מלא)
+            # כפתור Cloud API — title עד 20 תווים (תצוגה), callback_data שלם
             title = label[:20]
             buttons.append(
-                pywa_types.Button(title=title, callback_data=label[:256])
+                pywa_types.Button(title=title, callback_data=label)
             )
         return buttons
 
@@ -182,12 +198,32 @@ class PyWaProvider(BaseWhatsAppProvider):
         if len(all_labels) > _MAX_LIST_ROWS:
             return None
 
+        # guard: label שחורג ממגבלת callback_data → fallback
+        for label in all_labels:
+            if len(label) > _MAX_LIST_ROW_CALLBACK_LEN:
+                logger.warning(
+                    "label חורג ממגבלת callback_data לשורת רשימה — fallback טקסטואלי",
+                    extra_data={
+                        "label_length": len(label),
+                        "max_allowed": _MAX_LIST_ROW_CALLBACK_LEN,
+                    },
+                )
+                return None
+
+        # guard: ייחודיות — Cloud API דורש id ייחודי לכל שורה
+        if len(set(all_labels)) != len(all_labels):
+            logger.warning(
+                "labels כפולים ברשימת בחירה — fallback טקסטואלי",
+                extra_data={"labels": all_labels},
+            )
+            return None
+
         rows = []
         for label in all_labels:
             rows.append(
                 pywa_types.SectionRow(
                     title=label[:24],
-                    callback_data=label[:200],
+                    callback_data=label,
                 )
             )
 
@@ -217,9 +253,9 @@ class PyWaProvider(BaseWhatsAppProvider):
         if not all_labels or len(all_labels) <= _MAX_REPLY_BUTTONS:
             return ""
 
-        lines = ["\n\nהקלד אחת מהאפשרויות:"]
-        for i, label in enumerate(all_labels, 1):
-            lines.append(f"{i}. {label}")
+        lines = ["\n\nהקלד בדיוק את טקסט האפשרות הרצויה:"]
+        for label in all_labels:
+            lines.append(f"• {label}")
         return "\n".join(lines)
 
     # ── שליחת הודעות ──
