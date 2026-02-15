@@ -86,16 +86,16 @@ async def publish_alert(
         data: נתוני ההתראה (משתנים לפי סוג)
         title: כותרת מותאמת (אופציונלי — ברירת מחדל מתוך _ALERT_DESCRIPTIONS)
     """
-    payload = {
-        "type": alert_type.value,
-        "title": title or _ALERT_DESCRIPTIONS.get(alert_type, alert_type.value),
-        "data": data,
-        "station_id": station_id,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-    message = json.dumps(payload, ensure_ascii=False, default=str)
-
     try:
+        payload = {
+            "type": alert_type.value,
+            "title": title or _ALERT_DESCRIPTIONS.get(alert_type, alert_type.value),
+            "data": data,
+            "station_id": station_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        message = json.dumps(payload, ensure_ascii=False, default=str)
+
         redis = await get_redis()
         # פרסום לערוץ — לקוחות SSE מאזינים
         await redis.publish(channel_name(station_id), message)
