@@ -698,7 +698,7 @@ class StationService:
             "Commission rate updated",
             extra_data={
                 "station_id": station_id,
-                "old_rate": float(old_rate),
+                "old_rate": float(old_rate) if old_rate is not None else None,
                 "new_rate": float(rate),
             }
         )
