@@ -239,7 +239,12 @@ class PyWaProvider(BaseWhatsAppProvider):
 
     @staticmethod
     def _keyboard_to_text_instructions(keyboard: list[list[str]] | None) -> str:
-        """המרת כפתורים להנחיות טקסטואליות (fallback כשיש יותר מ-3 כפתורים)."""
+        """המרת כפתורים להנחיות טקסטואליות.
+
+        נקרא רק כש-buttons ו-list שניהם נכשלו (guard על אורך,
+        כפילויות, או חריגה מכמות מקסימלית). לכן — תמיד מספק
+        הנחיות בלי קשר לכמות הפריטים.
+        """
         if not keyboard:
             return ""
 
@@ -250,7 +255,7 @@ class PyWaProvider(BaseWhatsAppProvider):
             else:
                 all_labels.append(str(row))
 
-        if not all_labels or len(all_labels) <= _MAX_REPLY_BUTTONS:
+        if not all_labels:
             return ""
 
         lines = ["\n\nהקלד בדיוק את טקסט האפשרות הרצויה:"]

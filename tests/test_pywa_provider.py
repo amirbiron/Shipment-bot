@@ -203,7 +203,7 @@ class TestPyWaSendText:
     @pytest.mark.unit
     @pytest.mark.asyncio
     async def test_send_text_button_callback_too_long_fallback(self) -> None:
-        """כפתור עם callback_data שחורג מ-256 — כפתורים לא נוצרים, נופל לרשימה/טקסט."""
+        """כפתור עם callback_data שחורג מ-256 — fallback טקסטואלי גם ב-≤3 אפשרויות."""
         provider, _ = self._make_provider()
 
         mock_client = AsyncMock()
@@ -211,8 +211,6 @@ class TestPyWaSendText:
         provider._client = mock_client
 
         mock_pywa_types = MagicMock()
-        # label אחד שחורג מ-256 תווים — עם כפתור אחד אין fallback טקסטואלי
-        # (≤3 אפשרויות), אבל הכפתור לא ייווצר
         long_label = "א" * 300
 
         with patch.dict("sys.modules", {"pywa": MagicMock(types=mock_pywa_types), "pywa.types": mock_pywa_types}):
@@ -224,6 +222,8 @@ class TestPyWaSendText:
         call_kwargs = mock_client.send_message.call_args[1]
         # כפתור לא נוצר בגלל guard — buttons=None
         assert call_kwargs["buttons"] is None
+        # fallback טקסטואלי נכנס גם ב-≤3 אפשרויות
+        assert "הקלד בדיוק את טקסט האפשרות הרצויה:" in call_kwargs["text"]
 
     @pytest.mark.unit
     @pytest.mark.asyncio
