@@ -3,11 +3,12 @@ Shipment Bot - Main FastAPI Application
 """
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_redoc_html
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import Response
 
 from app.core.config import settings
 from app.core.logging import setup_logging, get_logger
@@ -88,10 +89,24 @@ if allowed_origins:
 
 app.include_router(api_router, prefix="/api")
 
+
+class _SPAStaticFiles(StaticFiles):
+    """StaticFiles עם SPA fallback — מחזיר index.html לכל route שלא תואם קובץ סטטי."""
+
+    async def get_response(self, path: str, scope) -> Response:
+        try:
+            response = await super().get_response(path, scope)
+            if response.status_code == 404:
+                return await super().get_response("index.html", scope)
+            return response
+        except HTTPException:
+            return await super().get_response("index.html", scope)
+
+
 # הגשת Frontend של פאנל ניהול התחנה — SPA עם client-side routing
 _PANEL_DIR = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 if _PANEL_DIR.exists():
-    app.mount("/panel", StaticFiles(directory=_PANEL_DIR, html=True), name="panel")
+    app.mount("/panel", _SPAStaticFiles(directory=_PANEL_DIR, html=True), name="panel")
 else:
     logger.warning("frontend/dist לא נמצא — הפאנל לא יוגש", extra_data={"path": str(_PANEL_DIR)})
 
