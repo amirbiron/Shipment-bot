@@ -691,6 +691,15 @@ async def _route_to_role_menu(
         return await _sender_fallback(user, db, state_manager)
 
     if user.role == UserRole.SENDER or user.role == UserRole.ADMIN:
+        # בדיקה אם המשתמש הוא סדרן פעיל — סדרנים שאינם שליחים נכנסים ישירות לתפריט סדרן
+        dispatcher_station = await _get_dispatcher_station(user, db)
+        if dispatcher_station is not None:
+            await state_manager.force_state(
+                user.id, "telegram", DispatcherState.MENU.value, context={}
+            )
+            handler = DispatcherStateHandler(db, dispatcher_station.id)
+            return await handler.handle_message(user, "תפריט", None)
+
         # ADMIN מנוהל דרך ממשק אחר - בבוט מקבל תפריט שולח
         return await _sender_fallback(user, db, state_manager)
 
@@ -1022,13 +1031,16 @@ async def telegram_webhook(
             return {"ok": True, "new_state": new_state, "reset": True}
 
         if current_state.startswith("DISPATCHER.") and user.role != UserRole.COURIER:
-            logger.warning(
-                "Stale dispatcher state for role-mismatched user; resetting to role menu",
-                extra_data={"user_id": user.id, "role": str(user.role), "state": current_state},
-            )
-            response, new_state = await _route_to_role_menu(user, db, state_manager)
-            _queue_response_send(background_tasks, send_chat_id, response)
-            return {"ok": True, "new_state": new_state, "reset": True}
+            # סדרנים שאינם שליחים — בודקים בטבלת station_dispatchers לפני איפוס
+            dispatcher_station = await _get_dispatcher_station(user, db)
+            if dispatcher_station is None:
+                logger.warning(
+                    "Stale dispatcher state for non-dispatcher user; resetting to role menu",
+                    extra_data={"user_id": user.id, "role": str(user.role), "state": current_state},
+                )
+                response, new_state = await _route_to_role_menu(user, db, state_manager)
+                _queue_response_send(background_tasks, send_chat_id, response)
+                return {"ok": True, "new_state": new_state, "reset": True}
 
         if current_state.startswith("COURIER.") and user.role != UserRole.COURIER:
             logger.warning(
@@ -1078,47 +1090,56 @@ async def telegram_webhook(
         _queue_response_send(background_tasks, send_chat_id, response)
         return {"ok": True, "new_state": new_state}
 
-    if user.role == UserRole.COURIER:
-        is_dispatcher_menu_click = ("תפריט סדרן" in text) or ("🏪 תפריט סדרן" in text)
-        is_dispatcher_flow = isinstance(current_state, str) and current_state.startswith("DISPATCHER.")
+    # ניתוב לתפריט סדרן / זרימת סדרן — פתוח לכל תפקיד שהוא סדרן פעיל [שלב 3.2]
+    is_dispatcher_flow = isinstance(current_state, str) and current_state.startswith("DISPATCHER.")
+    # בדיקת keyword רק כשהמשתמש לא באמצע זרימת סדרן — מונע תפיסת טקסט חופשי כלחיצת כפתור
+    is_dispatcher_menu_click = (not is_dispatcher_flow) and (
+        ("תפריט סדרן" in text) or ("🏪 תפריט סדרן" in text)
+    )
 
-        if is_dispatcher_menu_click or is_dispatcher_flow:
-            station = await _get_dispatcher_station(user, db)
+    if is_dispatcher_menu_click or is_dispatcher_flow:
+        station = await _get_dispatcher_station(user, db)
 
-            if station is not None:
-                if is_dispatcher_menu_click:
-                    await state_manager.force_state(
-                        user.id, "telegram", DispatcherState.MENU.value, context={}
-                    )
-                    handler = DispatcherStateHandler(db, station.id)
-                    response, new_state = await handler.handle_message(user, "תפריט", None)
-                    _queue_response_send(background_tasks, send_chat_id, response)
-                    return {"ok": True, "new_state": new_state}
+        if station is not None:
+            if is_dispatcher_menu_click:
+                await state_manager.force_state(
+                    user.id, "telegram", DispatcherState.MENU.value, context={}
+                )
+                handler = DispatcherStateHandler(db, station.id)
+                response, new_state = await handler.handle_message(user, "תפריט", None)
+                _queue_response_send(background_tasks, send_chat_id, response)
+                return {"ok": True, "new_state": new_state}
 
-                # זרימת סדרן פעילה
-                if "חזרה לתפריט נהג" in text:
+            # כפתור "חזרה לתפריט ראשי"/"חזרה לתפריט נהג" — חזרה לתפריט לפי תפקיד
+            # חשוב: קוראים ישירות ל-fallback ולא ל-_route_to_role_menu כדי למנוע
+            # לולאה (כי _route_to_role_menu יזהה שהמשתמש סדרן ויחזיר לתפריט סדרן)
+            if "חזרה לתפריט נהג" in text or "חזרה לתפריט ראשי" in text:
+                if user.role == UserRole.COURIER:
                     await state_manager.force_state(
                         user.id, "telegram", CourierState.MENU.value, context={}
                     )
                     handler = CourierStateHandler(db)
                     response, new_state = await handler.handle_message(user, "תפריט", None)
-                    _queue_response_send(background_tasks, send_chat_id, response)
-                    return {"ok": True, "new_state": new_state}
-
-                handler = DispatcherStateHandler(db, station.id)
-                response, new_state = await handler.handle_message(user, text, photo_file_id)
+                else:
+                    response, new_state = await _sender_fallback(user, db, state_manager)
                 _queue_response_send(background_tasks, send_chat_id, response)
                 return {"ok": True, "new_state": new_state}
 
-            # אין תחנה לסדרן - fallback לתפריט מתאים
-            logger.warning(
-                "Dispatcher station not found, falling back to role menu",
-                extra_data={"user_id": user.id, "state": current_state},
-            )
-            response, new_state = await _route_to_role_menu(user, db, state_manager)
+            handler = DispatcherStateHandler(db, station.id)
+            response, new_state = await handler.handle_message(user, text, photo_file_id)
             _queue_response_send(background_tasks, send_chat_id, response)
             return {"ok": True, "new_state": new_state}
 
+        # אין תחנה לסדרן - fallback לתפריט מתאים
+        logger.warning(
+            "Dispatcher station not found, falling back to role menu",
+            extra_data={"user_id": user.id, "state": current_state},
+        )
+        response, new_state = await _route_to_role_menu(user, db, state_manager)
+        _queue_response_send(background_tasks, send_chat_id, response)
+        return {"ok": True, "new_state": new_state}
+
+    if user.role == UserRole.COURIER:
         # ניתוב רגיל של שליח
         previous_state = current_state
         handler = CourierStateHandler(db)

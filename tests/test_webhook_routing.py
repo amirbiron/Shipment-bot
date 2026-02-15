@@ -447,6 +447,227 @@ class TestStaleStateRoleMismatchReset:
 
 
 # ============================================================================
+# נראות סדרן למשתמשים שאינם שליחים (באג: סדרן שנוסף מהפאנל לא רואה תפריט סדרן)
+# ============================================================================
+
+
+class TestNonCourierDispatcherVisibility:
+    """מוודא שמשתמשים שנוספו כסדרנים דרך הפאנל — גם אם הם לא שליחים — רואים את תפריט הסדרן."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("reset_command", ["/start", "#"])
+    async def test_sender_dispatcher_reset_routes_to_dispatcher_menu(
+        self, test_client, db_session, user_factory, reset_command
+    ):
+        """שולח שהוא סדרן פעיל — /start ו-# מנתבים לתפריט סדרן"""
+        from app.db.models.station_dispatcher import StationDispatcher
+
+        sender = await user_factory(
+            phone_number="+972501111020",
+            name="Sender Dispatcher",
+            role=UserRole.SENDER,
+            platform="telegram",
+            telegram_chat_id="81020",
+        )
+
+        # יצירת תחנה + סדרן
+        owner = await user_factory(
+            phone_number="+972501111021",
+            name="Owner Disp",
+            role=UserRole.STATION_OWNER,
+            platform="telegram",
+            telegram_chat_id="81021",
+        )
+        station = Station(name="תחנת סדרן", owner_id=owner.id)
+        db_session.add(station)
+        await db_session.flush()
+        wallet = StationWallet(station_id=station.id)
+        db_session.add(wallet)
+        link = StationDispatcher(station_id=station.id, user_id=sender.id)
+        db_session.add(link)
+        await db_session.commit()
+
+        resp = await test_client.post(
+            "/api/telegram/webhook",
+            json={
+                "update_id": 120,
+                "message": {
+                    "message_id": 120,
+                    "chat": {"id": 81020, "type": "private"},
+                    "text": reset_command,
+                    "date": 1700000000,
+                    "from": {"id": 81020, "first_name": "Sender"},
+                },
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        from app.state_machine.states import DispatcherState
+        assert data.get("new_state") == DispatcherState.MENU.value
+
+    @pytest.mark.asyncio
+    async def test_admin_dispatcher_reset_routes_to_dispatcher_menu(
+        self, test_client, db_session, user_factory
+    ):
+        """אדמין שהוא סדרן פעיל — /start מנתב לתפריט סדרן"""
+        from app.db.models.station_dispatcher import StationDispatcher
+
+        admin = await user_factory(
+            phone_number="+972501111022",
+            name="Admin Dispatcher",
+            role=UserRole.ADMIN,
+            platform="telegram",
+            telegram_chat_id="81022",
+        )
+
+        owner = await user_factory(
+            phone_number="+972501111023",
+            name="Owner Admin",
+            role=UserRole.STATION_OWNER,
+            platform="telegram",
+            telegram_chat_id="81023",
+        )
+        station = Station(name="תחנת אדמין", owner_id=owner.id)
+        db_session.add(station)
+        await db_session.flush()
+        wallet = StationWallet(station_id=station.id)
+        db_session.add(wallet)
+        link = StationDispatcher(station_id=station.id, user_id=admin.id)
+        db_session.add(link)
+        await db_session.commit()
+
+        resp = await test_client.post(
+            "/api/telegram/webhook",
+            json={
+                "update_id": 121,
+                "message": {
+                    "message_id": 121,
+                    "chat": {"id": 81022, "type": "private"},
+                    "text": "/start",
+                    "date": 1700000000,
+                    "from": {"id": 81022, "first_name": "Admin"},
+                },
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        from app.state_machine.states import DispatcherState
+        assert data.get("new_state") == DispatcherState.MENU.value
+
+    @pytest.mark.asyncio
+    async def test_sender_dispatcher_continues_dispatcher_flow(
+        self, test_client, db_session, user_factory
+    ):
+        """שולח שהוא סדרן באמצע זרימת סדרן — ממשיך בזרימה ולא מאופס"""
+        from app.state_machine.manager import StateManager
+        from app.state_machine.states import DispatcherState
+        from app.db.models.station_dispatcher import StationDispatcher
+
+        sender = await user_factory(
+            phone_number="+972501111024",
+            name="Sender Flow Disp",
+            role=UserRole.SENDER,
+            platform="telegram",
+            telegram_chat_id="81024",
+        )
+
+        owner = await user_factory(
+            phone_number="+972501111025",
+            name="Owner Flow Disp",
+            role=UserRole.STATION_OWNER,
+            platform="telegram",
+            telegram_chat_id="81025",
+        )
+        station = Station(name="תחנת זרימה", owner_id=owner.id)
+        db_session.add(station)
+        await db_session.flush()
+        wallet = StationWallet(station_id=station.id)
+        db_session.add(wallet)
+        link = StationDispatcher(station_id=station.id, user_id=sender.id)
+        db_session.add(link)
+        await db_session.commit()
+
+        # הגדרת state לאמצע הזנת כתובת בתפריט סדרן
+        sm = StateManager(db_session)
+        await sm.force_state(
+            sender.id, "telegram",
+            DispatcherState.ADD_SHIPMENT_PICKUP_CITY.value,
+            {"pickup_city": ""}
+        )
+
+        resp = await test_client.post(
+            "/api/telegram/webhook",
+            json={
+                "update_id": 122,
+                "message": {
+                    "message_id": 122,
+                    "chat": {"id": 81024, "type": "private"},
+                    "text": "תל אביב",
+                    "date": 1700000000,
+                    "from": {"id": 81024, "first_name": "Sender"},
+                },
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        # צריך להמשיך בזרימה ולעבור ל-state הבא (רחוב), לא להתאפס
+        assert data.get("new_state") == DispatcherState.ADD_SHIPMENT_PICKUP_STREET.value
+
+    @pytest.mark.asyncio
+    async def test_whatsapp_sender_dispatcher_hash_routes_to_dispatcher_menu(
+        self, test_client, db_session, user_factory, mock_whatsapp_gateway
+    ):
+        """שולח שהוא סדרן בווטסאפ — # מנתב לתפריט סדרן"""
+        from app.db.models.station_dispatcher import StationDispatcher
+        from app.state_machine.states import DispatcherState
+
+        sender = await user_factory(
+            phone_number="+972501111026",
+            name="WA Sender Disp",
+            role=UserRole.SENDER,
+            platform="whatsapp",
+        )
+
+        owner = await user_factory(
+            phone_number="+972501111027",
+            name="WA Owner Disp",
+            role=UserRole.STATION_OWNER,
+            platform="whatsapp",
+        )
+        station = Station(name="תחנת WA סדרן", owner_id=owner.id)
+        db_session.add(station)
+        await db_session.flush()
+        wallet = StationWallet(station_id=station.id)
+        db_session.add(wallet)
+        link = StationDispatcher(station_id=station.id, user_id=sender.id)
+        db_session.add(link)
+        await db_session.commit()
+
+        resp = await test_client.post(
+            "/api/whatsapp/webhook",
+            json={
+                "messages": [
+                    {
+                        "from_number": "972501111026@c.us",
+                        "sender_id": "972501111026@lid",
+                        "reply_to": "972501111026@c.us",
+                        "message_id": "m-wa-disp-1",
+                        "text": "#",
+                        "timestamp": 1700000000,
+                    }
+                ]
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["processed"] == 1
+        assert DispatcherState.MENU.value in (data["responses"][0].get("new_state") or "")
+
+
+# ============================================================================
 # נרמול מזהי וואטסאפ וזיהוי מנהלים
 # ============================================================================
 
