@@ -21,6 +21,8 @@ logger = get_logger(__name__)
 
 # מספר כפתורי reply מקסימלי ב-Cloud API
 _MAX_REPLY_BUTTONS = 3
+# מספר פריטים מקסימלי ברשימת בחירה (Interactive List) ב-Cloud API
+_MAX_LIST_ROWS = 10
 
 
 class PyWaProvider(BaseWhatsAppProvider):
@@ -151,6 +153,55 @@ class PyWaProvider(BaseWhatsAppProvider):
         return buttons
 
     @staticmethod
+    def _build_list_message(keyboard: list[list[str]] | None):
+        """המרת keyboard לרשימת בחירה אינטראקטיבית (SectionList).
+
+        Cloud API תומך ב-Interactive List Message עם עד 10 פריטים.
+        משמש כאשר יש 4-10 אפשרויות — מעל מגבלת reply buttons
+        אבל בתוך מגבלת הרשימה.
+        מחזיר None אם אין keyboard, מספר הפריטים ≤3, או >10.
+        """
+        if not keyboard:
+            return None
+
+        from pywa import types as pywa_types
+
+        all_labels: list[str] = []
+        for row in keyboard:
+            if isinstance(row, list):
+                all_labels.extend(row)
+            else:
+                all_labels.append(str(row))
+
+        if not all_labels:
+            return None
+
+        # עד 3 — כפתורי reply רגילים, מעל 10 — fallback טקסטואלי
+        if len(all_labels) <= _MAX_REPLY_BUTTONS:
+            return None
+        if len(all_labels) > _MAX_LIST_ROWS:
+            return None
+
+        rows = []
+        for label in all_labels:
+            rows.append(
+                pywa_types.SectionRow(
+                    title=label[:24],
+                    callback_data=label[:200],
+                )
+            )
+
+        return pywa_types.SectionList(
+            button_title="בחר אפשרות",
+            sections=[
+                pywa_types.Section(
+                    title="אפשרויות",
+                    rows=rows,
+                ),
+            ],
+        )
+
+    @staticmethod
     def _keyboard_to_text_instructions(keyboard: list[list[str]] | None) -> str:
         """המרת כפתורים להנחיות טקסטואליות (fallback כשיש יותר מ-3 כפתורים)."""
         if not keyboard:
@@ -187,10 +238,16 @@ class PyWaProvider(BaseWhatsAppProvider):
         to = self.normalize_phone(to)
         phone_masked = PhoneNumberValidator.mask(to)
 
+        # סדר עדיפויות: כפתורי reply (≤3) → רשימת בחירה (4-10) → fallback טקסטואלי (>10)
         buttons = self._build_buttons(keyboard)
+        list_message = None
+        if buttons is None:
+            list_message = self._build_list_message(keyboard)
 
-        # fallback: אם יש יותר מ-3 כפתורים — הנחיות טקסטואליות
-        text_suffix = self._keyboard_to_text_instructions(keyboard)
+        # fallback טקסטואלי רק אם גם כפתורים וגם רשימה לא מתאימים
+        text_suffix = ""
+        if buttons is None and list_message is None:
+            text_suffix = self._keyboard_to_text_instructions(keyboard)
         final_text = text + text_suffix
 
         client = self._get_client()
@@ -199,7 +256,7 @@ class PyWaProvider(BaseWhatsAppProvider):
             await client.send_message(
                 to=to,
                 text=final_text,
-                buttons=buttons,
+                buttons=buttons or list_message,
             )
 
         async def _send_with_retry() -> None:
