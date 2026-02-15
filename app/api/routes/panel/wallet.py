@@ -1,6 +1,7 @@
 """
 ארנק תחנה — יתרה, היסטוריית תנועות עם pagination וסינון, עדכון אחוז עמלה
 """
+from decimal import Decimal
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -57,8 +58,10 @@ class UpdateCommissionRateRequest(BaseModel):
     @field_validator("commission_rate_percent")
     @classmethod
     def validate_range(cls, v: int) -> int:
-        if v < 6 or v > 12:
-            raise ValueError("אחוז עמלה חייב להיות בין 6 ל-12")
+        _min = StationService.COMMISSION_MIN_PCT
+        _max = StationService.COMMISSION_MAX_PCT
+        if v < _min or v > _max:
+            raise ValueError(f"אחוז עמלה חייב להיות בין {_min} ל-{_max}")
         return v
 
 
@@ -193,11 +196,11 @@ async def update_commission_rate(
     """עדכון אחוז עמלה של תחנה"""
     station_service = StationService(db)
 
-    # המרה מאחוזים (6–12) לערך עשרוני (0.06–0.12)
-    new_rate = body.commission_rate_percent / 100
+    # המרה מאחוזים (6–12) לערך עשרוני (0.06–0.12) — Decimal למניעת עיגול
+    new_rate = Decimal(body.commission_rate_percent) / Decimal("100")
 
     success, message = await station_service.update_commission_rate(
-        auth.station_id, new_rate,
+        auth.station_id, float(new_rate), actor_user_id=auth.user_id,
     )
 
     if not success:
