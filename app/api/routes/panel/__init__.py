@@ -19,6 +19,7 @@ from app.api.routes.panel.settings import router as settings_router
 from app.api.routes.panel.stations import router as stations_router
 from app.api.routes.panel.auto_block import router as auto_block_router
 from app.api.routes.panel.audit import router as audit_router
+from app.api.routes.panel.senders import router as senders_router
 
 router = APIRouter()
 
@@ -27,6 +28,7 @@ router.include_router(dashboard_router, prefix="/dashboard", tags=["Panel - דש
 router.include_router(stations_router, prefix="/stations", tags=["Panel - מולטי-תחנה"])
 router.include_router(owners_router, prefix="/owners", tags=["Panel - בעלים"])
 router.include_router(dispatchers_router, prefix="/dispatchers", tags=["Panel - סדרנים"])
+router.include_router(senders_router, prefix="/senders", tags=["Panel - שולחים"])
 router.include_router(deliveries_router, prefix="/deliveries", tags=["Panel - משלוחים"])
 router.include_router(wallet_router, prefix="/wallet", tags=["Panel - ארנק"])
 router.include_router(blacklist_router, prefix="/blacklist", tags=["Panel - רשימה שחורה"])

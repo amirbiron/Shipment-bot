@@ -17,7 +17,7 @@ from app.db.models.station_wallet import StationWallet
 from app.db.models.station_ledger import StationLedger, StationLedgerEntryType
 from app.db.models.station_blacklist import StationBlacklist
 from app.db.models.manual_charge import ManualCharge
-from app.db.models.delivery import Delivery, DeliveryStatus
+from app.db.models.delivery import Delivery, DeliveryStatus, ACTIVE_DELIVERY_STATUSES
 from app.db.models.user import User, UserRole
 from app.db.models.courier_wallet import CourierWallet
 from app.db.models.audit_log import AuditLog, AuditActionType
@@ -657,12 +657,7 @@ class StationService:
         result = await self.db.execute(
             select(Delivery).where(
                 Delivery.station_id == station_id,
-                Delivery.status.in_([
-                    DeliveryStatus.OPEN,
-                    DeliveryStatus.PENDING_APPROVAL,  # שלב 4
-                    DeliveryStatus.CAPTURED,
-                    DeliveryStatus.IN_PROGRESS,
-                ])
+                Delivery.status.in_(ACTIVE_DELIVERY_STATUSES)
             ).order_by(Delivery.created_at.desc())
         )
         return list(result.scalars().all())
@@ -1593,12 +1588,7 @@ class StationService:
                 func.count(Delivery.id),
             ).where(
                 Delivery.station_id.in_(station_ids),
-                Delivery.status.in_([
-                    DeliveryStatus.OPEN,
-                    DeliveryStatus.PENDING_APPROVAL,
-                    DeliveryStatus.CAPTURED,
-                    DeliveryStatus.IN_PROGRESS,
-                ]),
+                Delivery.status.in_(ACTIVE_DELIVERY_STATUSES),
             ).group_by(Delivery.station_id)
         )
         active_map: dict[int, int] = dict(active_counts_result.all())
@@ -1698,3 +1688,334 @@ class StationService:
             })
 
         return summaries
+
+    # ==================== ניהול שולחים (סעיף 6) ====================
+
+    async def get_station_senders(
+        self,
+        station_id: int,
+        page: int = 1,
+        page_size: int = 20,
+        search: str | None = None,
+        sort_by: str = "deliveries_count",
+        sort_order: str = "desc",
+    ) -> tuple[list[dict], int]:
+        """שליפת שולחים של התחנה עם סטטיסטיקות.
+
+        מחזיר שולחים שיצרו לפחות משלוח אחד בתחנה, כולל:
+        - מספר משלוחים כולל
+        - מספר משלוחים שנמסרו
+        - מספר משלוחים פעילים
+        - תאריך משלוח אחרון
+
+        Args:
+            station_id: מזהה התחנה
+            page: עמוד (1-based)
+            page_size: גודל עמוד
+            search: חיפוש לפי שם (אופציונלי)
+            sort_by: מיון לפי שדה (deliveries_count / last_delivery / name / total_volume)
+            sort_order: כיוון מיון (asc / desc)
+
+        Returns:
+            (רשימת שולחים עם סטטיסטיקות, סה"כ שולחים)
+        """
+        from sqlalchemy import func, case, desc, asc
+        from sqlalchemy import literal
+
+        # עמודות אגרגציה עם labels — נשמרות במשתנים כדי לא למיין לפי מחרוזות
+        deliveries_count_col = func.count(Delivery.id).label("deliveries_count")
+        delivered_count_col = func.count(
+            case(
+                (Delivery.status == DeliveryStatus.DELIVERED, Delivery.id),
+            )
+        ).label("delivered_count")
+        active_deliveries_count_col = func.count(
+            case(
+                (Delivery.status.in_(ACTIVE_DELIVERY_STATUSES), Delivery.id),
+            )
+        ).label("active_deliveries_count")
+        total_volume_col = func.sum(
+            case(
+                (Delivery.status == DeliveryStatus.DELIVERED, Delivery.fee),
+                else_=0,
+            )
+        ).label("total_volume")
+        last_delivery_at_col = func.max(Delivery.created_at).label("last_delivery_at")
+
+        # שאילתה עם אגרגציה — שולחים שיצרו משלוחים בתחנה
+        base_query = (
+            select(
+                User.id,
+                User.name,
+                User.full_name,
+                User.phone_number,
+                User.platform,
+                User.is_active,
+                User.created_at,
+                deliveries_count_col,
+                delivered_count_col,
+                active_deliveries_count_col,
+                total_volume_col,
+                last_delivery_at_col,
+            )
+            .join(Delivery, Delivery.sender_id == User.id)
+            .where(Delivery.station_id == station_id)
+            .group_by(User.id)
+        )
+
+        # סינון לפי שם
+        if search:
+            safe_search = TextSanitizer.sanitize(search)
+            base_query = base_query.where(
+                (User.name.ilike(f"%{safe_search}%"))
+                | (User.full_name.ilike(f"%{safe_search}%"))
+            )
+
+        # ספירת סה"כ שולחים (לפני pagination)
+        count_subq = base_query.subquery()
+        count_result = await self.db.execute(
+            select(func.count()).select_from(count_subq)
+        )
+        total = count_result.scalar() or 0
+
+        # מיון
+        sort_func = desc if sort_order == "desc" else asc
+        sort_columns = {
+            "deliveries_count": deliveries_count_col,
+            "last_delivery": last_delivery_at_col,
+            # שם מוצג הוא fallback ל-full_name — מיון לפי coalesce שומר עקביות עם ה-UI
+            "name": func.coalesce(User.name, User.full_name, literal("")),
+            "total_volume": total_volume_col,
+        }
+        sort_col = sort_columns.get(sort_by, deliveries_count_col)
+        base_query = base_query.order_by(sort_func(sort_col), User.id.asc())
+
+        # pagination
+        offset = (page - 1) * page_size
+        result = await self.db.execute(
+            base_query.offset(offset).limit(page_size)
+        )
+        rows = result.all()
+
+        senders = []
+        for row in rows:
+            senders.append({
+                "user_id": row.id,
+                "name": row.name or row.full_name or "לא צוין",
+                "phone_number": row.phone_number,
+                "platform": row.platform,
+                "is_active": row.is_active,
+                "created_at": row.created_at,
+                "deliveries_count": row.deliveries_count,
+                "delivered_count": row.delivered_count,
+                "active_deliveries_count": row.active_deliveries_count,
+                "total_volume": float(row.total_volume or 0),
+                "last_delivery_at": row.last_delivery_at,
+            })
+
+        logger.info(
+            "שליפת שולחים לתחנה",
+            extra_data={
+                "station_id": station_id,
+                "total_senders": total,
+                "page": page,
+            },
+        )
+
+        return senders, total
+
+    async def get_sender_details(
+        self,
+        station_id: int,
+        sender_id: int,
+    ) -> dict | None:
+        """שליפת פרטי שולח בודד עם סטטיסטיקות מפורטות.
+
+        Args:
+            station_id: מזהה התחנה
+            sender_id: מזהה השולח
+
+        Returns:
+            dict עם פרטי שולח וסטטיסטיקות, או None אם לא נמצא
+        """
+        from sqlalchemy import func, case
+
+        # שליפת פרטי שולח + סטטיסטיקות
+        result = await self.db.execute(
+            select(
+                User.id,
+                User.name,
+                User.full_name,
+                User.phone_number,
+                User.platform,
+                User.is_active,
+                User.created_at,
+                func.count(Delivery.id).label("deliveries_count"),
+                func.count(case(
+                    (Delivery.status == DeliveryStatus.DELIVERED, Delivery.id),
+                )).label("delivered_count"),
+                func.count(case(
+                    (Delivery.status == DeliveryStatus.CANCELLED, Delivery.id),
+                )).label("cancelled_count"),
+                func.count(case(
+                    (Delivery.status.in_(ACTIVE_DELIVERY_STATUSES), Delivery.id),
+                )).label("active_deliveries_count"),
+                func.sum(
+                    case(
+                        (Delivery.status == DeliveryStatus.DELIVERED, Delivery.fee),
+                        else_=0,
+                    )
+                ).label("total_volume"),
+                func.avg(
+                    case(
+                        (Delivery.status == DeliveryStatus.DELIVERED, Delivery.fee),
+                    )
+                ).label("avg_fee"),
+                func.min(Delivery.created_at).label("first_delivery_at"),
+                func.max(Delivery.created_at).label("last_delivery_at"),
+            )
+            .join(Delivery, Delivery.sender_id == User.id)
+            .where(
+                Delivery.station_id == station_id,
+                User.id == sender_id,
+            )
+            .group_by(User.id)
+        )
+        row = result.one_or_none()
+
+        if not row:
+            return None
+
+        return {
+            "user_id": row.id,
+            "name": row.name or row.full_name or "לא צוין",
+            "phone_number": row.phone_number,
+            "platform": row.platform,
+            "is_active": row.is_active,
+            "created_at": row.created_at,
+            "deliveries_count": row.deliveries_count,
+            "delivered_count": row.delivered_count,
+            "cancelled_count": row.cancelled_count,
+            "active_deliveries_count": row.active_deliveries_count,
+            "total_volume": float(row.total_volume or 0),
+            "avg_fee": float(row.avg_fee or 0),
+            "first_delivery_at": row.first_delivery_at,
+            "last_delivery_at": row.last_delivery_at,
+        }
+
+    async def get_top_senders(
+        self,
+        station_id: int,
+        limit: int = 10,
+    ) -> list[dict]:
+        """שליפת שולחים מובילים לפי מספר משלוחים שנמסרו.
+
+        Args:
+            station_id: מזהה התחנה
+            limit: מספר שולחים להחזיר (ברירת מחדל 10)
+
+        Returns:
+            רשימת שולחים מובילים עם סטטיסטיקות
+        """
+        from sqlalchemy import func, case, desc
+
+        # עמודות עם labels לשימוש בטוח ב-order_by (ללא מחרוזות)
+        deliveries_count_col = func.count(Delivery.id).label("deliveries_count")
+        delivered_count_col = func.count(
+            case(
+                (Delivery.status == DeliveryStatus.DELIVERED, Delivery.id),
+            )
+        ).label("delivered_count")
+        total_volume_col = func.sum(
+            case(
+                (Delivery.status == DeliveryStatus.DELIVERED, Delivery.fee),
+                else_=0,
+            )
+        ).label("total_volume")
+        last_delivery_at_col = func.max(Delivery.created_at).label("last_delivery_at")
+
+        result = await self.db.execute(
+            select(
+                User.id,
+                User.name,
+                User.full_name,
+                User.phone_number,
+                deliveries_count_col,
+                delivered_count_col,
+                total_volume_col,
+                last_delivery_at_col,
+            )
+            .join(Delivery, Delivery.sender_id == User.id)
+            .where(Delivery.station_id == station_id)
+            .group_by(User.id)
+            .order_by(desc(delivered_count_col), desc(last_delivery_at_col), User.id.asc())
+            .limit(limit)
+        )
+        rows = result.all()
+
+        return [
+            {
+                "user_id": row.id,
+                "name": row.name or row.full_name or "לא צוין",
+                "phone_number": row.phone_number,
+                "deliveries_count": row.deliveries_count,
+                "delivered_count": row.delivered_count,
+                "total_volume": float(row.total_volume or 0),
+                "last_delivery_at": row.last_delivery_at,
+            }
+            for row in rows
+        ]
+
+    async def get_sender_deliveries(
+        self,
+        station_id: int,
+        sender_id: int,
+        page: int = 1,
+        page_size: int = 20,
+        status_filter: DeliveryStatus | None = None,
+    ) -> tuple[list[Delivery], int]:
+        """שליפת משלוחים של שולח בתחנה.
+
+        Args:
+            station_id: מזהה התחנה
+            sender_id: מזהה השולח
+            page: עמוד (1-based)
+            page_size: גודל עמוד
+            status_filter: סינון לפי סטטוס (אופציונלי)
+
+        Returns:
+            (רשימת משלוחים, סה"כ משלוחים)
+        """
+        from sqlalchemy import func
+        from sqlalchemy.orm import joinedload
+
+        base_where = [
+            Delivery.station_id == station_id,
+            Delivery.sender_id == sender_id,
+        ]
+
+        if status_filter:
+            base_where.append(Delivery.status == status_filter)
+
+        # ספירה
+        count_result = await self.db.execute(
+            select(func.count(Delivery.id)).where(*base_where)
+        )
+        total = count_result.scalar() or 0
+
+        # שליפה
+        offset = (page - 1) * page_size
+        result = await self.db.execute(
+            select(Delivery)
+            .options(
+                # ה-route משתמש רק ב-courier, אין צורך ב-joinedload ל-sender
+                joinedload(Delivery.courier),
+            )
+            .where(*base_where)
+            .order_by(Delivery.created_at.desc())
+            .offset(offset)
+            .limit(page_size)
+        )
+        deliveries = list(result.scalars().unique().all())
+
+        return deliveries, total
