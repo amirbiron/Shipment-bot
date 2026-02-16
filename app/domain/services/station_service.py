@@ -1094,17 +1094,21 @@ class StationService:
         if not station:
             return False, "התחנה לא נמצאה."
 
-        if auto_block_enabled is not None:
-            station.auto_block_enabled = auto_block_enabled
-
+        # --- שלב 1: ולידציה — לפני כל mutation על המודל ---
         if auto_block_grace_months is not None:
             if auto_block_grace_months < 1 or auto_block_grace_months > 12:
                 return False, "תקופת חסד חייבת להיות בין 1 ל-12 חודשים."
-            station.auto_block_grace_months = auto_block_grace_months
 
         if auto_block_min_debt is not None:
             if auto_block_min_debt < 0:
                 return False, "סף חוב מינימלי לא יכול להיות שלילי."
+
+        # --- שלב 2: כל הולידציות עברו — מחילים את העדכונים ---
+        if auto_block_enabled is not None:
+            station.auto_block_enabled = auto_block_enabled
+        if auto_block_grace_months is not None:
+            station.auto_block_grace_months = auto_block_grace_months
+        if auto_block_min_debt is not None:
             station.auto_block_min_debt = auto_block_min_debt
 
         await self.db.commit()
@@ -1227,13 +1231,25 @@ class StationService:
             if await self.is_blacklisted(station_id, courier_id):
                 continue
 
-            entry = StationBlacklist(
-                station_id=station_id,
-                courier_id=courier_id,
-                reason=f"חסימה אוטומטית - אי תשלום {grace_months} חודשים רצופים",
-                consecutive_unpaid_months=grace_months,
-            )
-            self.db.add(entry)
+            # שימוש ב-savepoint + IntegrityError fallback למניעת race condition
+            # כשמשימות מקביליות מנסות לחסום אותו נהג בו-זמנית
+            try:
+                async with self.db.begin_nested():
+                    entry = StationBlacklist(
+                        station_id=station_id,
+                        courier_id=courier_id,
+                        reason=f"חסימה אוטומטית - אי תשלום {grace_months} חודשים רצופים",
+                        consecutive_unpaid_months=grace_months,
+                    )
+                    self.db.add(entry)
+                    await self.db.flush()
+            except IntegrityError:
+                # נהג כבר נחסם על ידי תהליך מקבילי — ממשיכים
+                logger.info(
+                    "נהג כבר חסום (race condition)",
+                    extra_data={"station_id": station_id, "courier_id": courier_id}
+                )
+                continue
 
             blocked_drivers.append({
                 "courier_id": courier_id,

@@ -56,15 +56,15 @@ class UpdateAutoBlockSettingsRequest(BaseModel):
 @router.get(
     "",
     response_model=AutoBlockSettingsResponse,
-    summary="הגדרות חסימה אוטומטית",
+    summary="Get auto-block settings",
     description=(
-        "מחזיר את הגדרות החסימה האוטומטית של התחנה: "
-        "האם פעילה, תקופת חסד (חודשים), וסף חוב מינימלי."
+        "Returns the station's auto-blocking configuration: "
+        "enabled flag, grace period (months), and minimum debt threshold."
     ),
     responses={
-        200: {"description": "הגדרות חסימה אוטומטית"},
-        401: {"description": "טוקן לא תקין"},
-        404: {"description": "תחנה לא נמצאה"},
+        200: {"description": "Auto-block settings returned successfully"},
+        401: {"description": "Invalid or missing token"},
+        404: {"description": "Station not found"},
     },
     tags=["Panel - חסימה אוטומטית"],
 )
@@ -92,17 +92,17 @@ async def get_auto_block_settings(
 @router.put(
     "",
     response_model=ActionResponse,
-    summary="עדכון הגדרות חסימה אוטומטית",
+    summary="Update auto-block settings",
     description=(
-        "עדכון הגדרות חסימה אוטומטית לתחנה. "
-        "רק שדות שנשלחים מתעדכנים. "
-        "תקופת חסד: 1-12 חודשים. סף חוב: 0 ומעלה."
+        "Update the station's auto-blocking configuration. "
+        "Only provided fields are updated. "
+        "Grace period: 1-12 months. Minimum debt: >= 0."
     ),
     responses={
-        200: {"description": "הגדרות עודכנו בהצלחה"},
-        400: {"description": "שגיאת ולידציה"},
-        401: {"description": "טוקן לא תקין"},
-        404: {"description": "תחנה לא נמצאה"},
+        200: {"description": "Settings updated successfully"},
+        400: {"description": "Validation error"},
+        401: {"description": "Invalid or missing token"},
+        404: {"description": "Station not found"},
     },
     tags=["Panel - חסימה אוטומטית"],
 )

@@ -345,11 +345,38 @@ async def run_migration_010(conn: AsyncConnection) -> None:
     הוספת שדות: auto_block_enabled, auto_block_grace_months, auto_block_min_debt
     לטבלת stations. מאפשר לבעלי תחנות להגדיר ספי חסימה ותקופת חסד.
     """
+    # הוספת עמודות
     await conn.execute(text("""
         ALTER TABLE stations
             ADD COLUMN IF NOT EXISTS auto_block_enabled BOOLEAN DEFAULT TRUE NOT NULL,
             ADD COLUMN IF NOT EXISTS auto_block_grace_months INTEGER DEFAULT 2 NOT NULL,
-            ADD COLUMN IF NOT EXISTS auto_block_min_debt FLOAT DEFAULT 0 NOT NULL;
+            ADD COLUMN IF NOT EXISTS auto_block_min_debt NUMERIC(10, 2) DEFAULT 0 NOT NULL;
+    """))
+
+    # check constraints — הגנה ברמת ה-DB על ערכים תקינים
+    await conn.execute(text("""
+        DO $$ BEGIN
+            ALTER TABLE stations
+                ADD CONSTRAINT chk_auto_block_grace_months
+                CHECK (auto_block_grace_months BETWEEN 1 AND 12);
+        EXCEPTION
+            WHEN duplicate_object THEN NULL;
+        END $$;
+    """))
+    await conn.execute(text("""
+        DO $$ BEGIN
+            ALTER TABLE stations
+                ADD CONSTRAINT chk_auto_block_min_debt
+                CHECK (auto_block_min_debt >= 0);
+        EXCEPTION
+            WHEN duplicate_object THEN NULL;
+        END $$;
+    """))
+
+    # אינדקס חלקי למשימת הבדיקה היומית — סינון תחנות פעילות עם חסימה מופעלת
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_stations_active_auto_block
+        ON stations(id) WHERE is_active = TRUE AND auto_block_enabled = TRUE;
     """))
 
 

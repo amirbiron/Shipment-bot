@@ -645,7 +645,6 @@ def process_billing_cycle_blocking():
             stations = list(result.scalars().all())
 
             total_blocked = 0
-            stations_skipped = 0
             for station in stations:
                 try:
                     station_service = StationService(db)
