@@ -91,8 +91,9 @@ class PhoneNumberValidator:
         if not phone:
             return False
 
-        # Remove spaces and dashes for validation
-        cleaned = re.sub(r"[\s\-]", "", phone)
+        # Remove common formatting characters for validation
+        # (spaces, dashes, parentheses, dots)
+        cleaned = re.sub(r"[\s\-\(\)\.]", "", phone)
 
         # Check Israeli format
         if ValidationPatterns.PHONE_ISRAEL.match(cleaned):
