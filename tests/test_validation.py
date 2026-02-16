@@ -27,6 +27,10 @@ class TestPhoneNumberValidator:
         # Valid landline numbers
         ("031234567", True),
         ("03-123-4567", True),
+        # Valid international numbers with formatting
+        ("+1 (555) 170-8949", True),  # US format with parentheses (Meta test number)
+        ("+1(555)1708949", True),  # US format without spaces
+        ("+44.20.7946.0958", True),  # UK format with dots
         # Invalid numbers
         ("123", False),
         ("abcdefghij", False),
@@ -47,6 +51,9 @@ class TestPhoneNumberValidator:
 
         # Already international
         assert PhoneNumberValidator.normalize("+972501234567") == "+972501234567"
+
+        # International with parentheses (Meta test number)
+        assert PhoneNumberValidator.normalize("+1 (555) 170-8949") == "+15551708949"
 
     @pytest.mark.unit
     def test_mask_phone(self):
