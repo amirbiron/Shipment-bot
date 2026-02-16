@@ -9,6 +9,11 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.db.models.delivery import Delivery, DeliveryStatus
 from app.domain.services.outbox_service import OutboxService
+from app.domain.services.alert_service import (
+    publish_delivery_created,
+    publish_delivery_delivered,
+    publish_delivery_cancelled,
+)
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -69,6 +74,24 @@ class DeliveryService:
 
         await self.db.commit()
         await self.db.refresh(delivery)
+
+        # התראה בזמן אמת לפאנל — רק למשלוחי תחנה
+        # מחוץ לזרימה העסקית כדי שכשלון התראה לא ישפיע על תוצאת הפעולה
+        if station_id:
+            try:
+                await publish_delivery_created(
+                    station_id=station_id,
+                    delivery_id=delivery.id,
+                    pickup_address=pickup_address,
+                    dropoff_address=dropoff_address,
+                    fee=fee,
+                )
+            except Exception as e:
+                logger.error(
+                    "כשלון בפרסום התראת משלוח חדש — הפעולה העסקית הצליחה",
+                    extra_data={"delivery_id": delivery.id, "error": str(e)},
+                    exc_info=True,
+                )
 
         return delivery
 
@@ -159,7 +182,6 @@ class DeliveryService:
 
             await self.db.commit()
             await self.db.refresh(delivery)
-            return delivery
 
         except SQLAlchemyError as e:
             logger.error(
@@ -170,6 +192,33 @@ class DeliveryService:
             await self.db.rollback()
             return None
 
+        # התראה בזמן אמת לפאנל — מחוץ ל-try העסקי כדי שכשלון התראה
+        # לא ישפיע על תוצאת הפעולה (הפעולה כבר committed)
+        try:
+            if delivery.station_id:
+                courier_name = ""
+                if delivery.courier_id:
+                    from app.db.models.user import User
+                    courier_result = await self.db.execute(
+                        select(User).where(User.id == delivery.courier_id)
+                    )
+                    courier = courier_result.scalar_one_or_none()
+                    if courier:
+                        courier_name = courier.full_name or courier.name or "לא צוין"
+                await publish_delivery_delivered(
+                    station_id=delivery.station_id,
+                    delivery_id=delivery.id,
+                    courier_name=courier_name,
+                )
+        except Exception as e:
+            logger.error(
+                "כשלון בפרסום התראת משלוח נמסר — הפעולה העסקית הצליחה",
+                extra_data={"delivery_id": delivery_id, "error": str(e)},
+                exc_info=True,
+            )
+
+        return delivery
+
     async def cancel_delivery(self, delivery_id: int) -> Optional[Delivery]:
         """Cancel a delivery"""
         delivery = await self.get_delivery(delivery_id)
@@ -177,4 +226,20 @@ class DeliveryService:
             delivery.status = DeliveryStatus.CANCELLED
             await self.db.commit()
             await self.db.refresh(delivery)
+
+            # התראה בזמן אמת לפאנל — רק למשלוחי תחנה
+            # מחוץ לזרימה העסקית כדי שכשלון התראה לא ישפיע על תוצאת הפעולה
+            if delivery.station_id:
+                try:
+                    await publish_delivery_cancelled(
+                        station_id=delivery.station_id,
+                        delivery_id=delivery.id,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "כשלון בפרסום התראת ביטול משלוח — הפעולה העסקית הצליחה",
+                        extra_data={"delivery_id": delivery.id, "error": str(e)},
+                        exc_info=True,
+                    )
+
         return delivery

@@ -19,6 +19,7 @@ from app.db.models.station import Station
 from app.domain.services.station_service import StationService
 from app.domain.services.capture_service import CaptureService
 from app.domain.services.outbox_service import OutboxService
+from app.domain.services.alert_service import publish_delivery_captured
 from app.core.logging import get_logger
 from app.core.validation import PhoneNumberValidator
 
@@ -222,6 +223,27 @@ class ShipmentWorkflowService:
         # commit אחד אטומי: תפיסה + חיוב + אישור + הודעות outbox
         await self.db.commit()
         await self.db.refresh(delivery)
+
+        # התראה בזמן אמת לפאנל — אחרי commit מוצלח
+        # מחוץ לזרימה העסקית כדי שכשלון התראה לא ישפיע על תוצאת הפעולה
+        if delivery.station_id and courier:
+            try:
+                courier_name = courier.full_name or courier.name or "לא צוין"
+                await publish_delivery_captured(
+                    station_id=delivery.station_id,
+                    delivery_id=delivery.id,
+                    courier_name=courier_name,
+                )
+            except Exception as e:
+                logger.error(
+                    "כשלון בפרסום התראת אישור משלוח — הפעולה העסקית הצליחה",
+                    extra_data={
+                        "delivery_id": delivery_id,
+                        "courier_id": courier_id,
+                        "error": str(e),
+                    },
+                    exc_info=True,
+                )
 
         logger.info(
             "Delivery approved by dispatcher",

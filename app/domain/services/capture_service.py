@@ -13,7 +13,12 @@ from sqlalchemy import select
 from app.db.models.delivery import Delivery, DeliveryStatus
 from app.db.models.courier_wallet import CourierWallet
 from app.db.models.wallet_ledger import WalletLedger, LedgerEntryType
+from app.db.models.user import User
 from app.domain.services.outbox_service import OutboxService
+from app.domain.services.alert_service import publish_delivery_captured
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class CaptureError(Exception):
@@ -171,13 +176,40 @@ class CaptureService:
                 # כך ש-refresh מהקורא יראה את השינויים
                 await self.db.flush()
 
-            return True, f"המשלוח נתפס בהצלחה! עמלה: {fee}₪, יתרה חדשה: {future_balance}₪", delivery
-
         except Exception as e:
             # rollback רק כש-auto_commit=True — אחרת הקורא מנהל את הטרנזקציה
             if auto_commit:
                 await self.db.rollback()
             raise CaptureError(f"שגיאה בתפיסת המשלוח: {str(e)}")
+
+        # התראה בזמן אמת לפאנל — מחוץ ל-try העסקי כדי שכשלון התראה
+        # לא ישפיע על תוצאת הפעולה (הפעולה כבר committed)
+        if auto_commit and delivery.station_id:
+            try:
+                courier_name = ""
+                courier_result = await self.db.execute(
+                    select(User).where(User.id == courier_id)
+                )
+                courier = courier_result.scalar_one_or_none()
+                if courier:
+                    courier_name = courier.full_name or courier.name or "לא צוין"
+                await publish_delivery_captured(
+                    station_id=delivery.station_id,
+                    delivery_id=delivery.id,
+                    courier_name=courier_name,
+                )
+            except Exception as e:
+                logger.error(
+                    "כשלון בפרסום התראת משלוח נתפס — הפעולה העסקית הצליחה",
+                    extra_data={
+                        "delivery_id": delivery_id,
+                        "courier_id": courier_id,
+                        "error": str(e),
+                    },
+                    exc_info=True,
+                )
+
+        return True, f"המשלוח נתפס בהצלחה! עמלה: {fee}₪, יתרה חדשה: {future_balance}₪", delivery
 
     async def release_delivery(
         self,
