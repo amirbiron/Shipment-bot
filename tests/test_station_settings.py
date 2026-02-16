@@ -409,6 +409,27 @@ class TestStationSettingsService:
         assert settings["service_areas"] == ["תל אביב"]
 
     @pytest.mark.asyncio
+    async def test_validation_failure_does_not_leave_dirty_state(self, user_factory, db_session):
+        """כשלון ולידציה בשדה מאוחר לא משנה שדות מוקדמים (אטומיות)"""
+        station, _ = await self._create_station(user_factory, db_session)
+        service = StationService(db_session)
+
+        original_name = station.name
+
+        # שם תקין + שעות לא תקינות — ולידציה צריכה להיכשל
+        # ושם לא צריך להשתנות
+        success, msg = await service.update_station_settings(
+            station_id=station.id,
+            name="שם חדש תקין",
+            operating_hours={"funday": {"open": "08:00", "close": "20:00"}},
+        )
+
+        assert success is False
+        # וידוא שהשם לא השתנה — לא נשאר dirty state
+        await db_session.refresh(station)
+        assert station.name == original_name
+
+    @pytest.mark.asyncio
     async def test_update_all_settings(self, user_factory, db_session):
         """עדכון כל ההגדרות יחד"""
         station, _ = await self._create_station(user_factory, db_session)

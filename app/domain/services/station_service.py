@@ -901,7 +901,11 @@ class StationService:
         if not station:
             return False, "התחנה לא נמצאה."
 
-        # עדכון שם
+        # --- שלב 1: ולידציה וסניטציה — לפני כל שינוי על האובייקט ---
+        # אוספים את כל העדכונים ב-dict, ומחילים רק אם הכל תקין.
+        updates: dict[str, object] = {}
+
+        # ולידציית שם
         if name is not None:
             sanitized_name = TextSanitizer.sanitize(name.strip(), max_length=200)
             if len(sanitized_name) < 2:
@@ -909,49 +913,53 @@ class StationService:
             is_safe, pattern = TextSanitizer.check_for_injection(sanitized_name)
             if not is_safe:
                 return False, "שם התחנה מכיל תוכן לא תקין."
-            station.name = sanitized_name
+            updates["name"] = sanitized_name
 
-        # עדכון תיאור
+        # ולידציית תיאור
         if description is not ...:
             if description is not None:
                 sanitized_desc = TextSanitizer.sanitize(description.strip(), max_length=500)
                 is_safe, pattern = TextSanitizer.check_for_injection(sanitized_desc)
                 if not is_safe:
                     return False, "התיאור מכיל תוכן לא תקין."
-                station.description = sanitized_desc
+                updates["description"] = sanitized_desc
             else:
-                station.description = None
+                updates["description"] = None
 
-        # עדכון שעות פעילות
+        # ולידציית שעות פעילות
         if operating_hours is not ...:
             if operating_hours is not None:
                 is_valid, error = OperatingHoursValidator.validate(operating_hours)
                 if not is_valid:
                     return False, error
-                station.operating_hours = operating_hours
+                updates["operating_hours"] = operating_hours
             else:
-                station.operating_hours = None
+                updates["operating_hours"] = None
 
-        # עדכון אזורי שירות
+        # ולידציית אזורי שירות
         if service_areas is not ...:
             if service_areas is not None:
                 is_valid, error = ServiceAreasValidator.validate(service_areas)
                 if not is_valid:
                     return False, error
-                station.service_areas = ServiceAreasValidator.sanitize(service_areas)
+                updates["service_areas"] = ServiceAreasValidator.sanitize(service_areas)
             else:
-                station.service_areas = None
+                updates["service_areas"] = None
 
-        # עדכון לוגו
+        # ולידציית לוגו
         if logo_url is not ...:
             if logo_url is not None:
                 sanitized_url = TextSanitizer.sanitize(logo_url.strip(), max_length=500)
                 is_safe, pattern = TextSanitizer.check_for_injection(sanitized_url)
                 if not is_safe:
                     return False, "קישור הלוגו מכיל תוכן לא תקין."
-                station.logo_url = sanitized_url
+                updates["logo_url"] = sanitized_url
             else:
-                station.logo_url = None
+                updates["logo_url"] = None
+
+        # --- שלב 2: כל הולידציות עברו — מחילים את העדכונים ---
+        for field, value in updates.items():
+            setattr(station, field, value)
 
         await self.db.commit()
 
