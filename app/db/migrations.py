@@ -339,6 +339,47 @@ async def run_migration_009(conn: AsyncConnection) -> None:
     """))
 
 
+async def run_migration_010(conn: AsyncConnection) -> None:
+    """מיגרציה 010 - הגדרות חסימה אוטומטית מותאמות לתחנה (סעיף 10 - Issue #210).
+
+    הוספת שדות: auto_block_enabled, auto_block_grace_months, auto_block_min_debt
+    לטבלת stations. מאפשר לבעלי תחנות להגדיר ספי חסימה ותקופת חסד.
+    """
+    # הוספת עמודות
+    await conn.execute(text("""
+        ALTER TABLE stations
+            ADD COLUMN IF NOT EXISTS auto_block_enabled BOOLEAN DEFAULT TRUE NOT NULL,
+            ADD COLUMN IF NOT EXISTS auto_block_grace_months INTEGER DEFAULT 2 NOT NULL,
+            ADD COLUMN IF NOT EXISTS auto_block_min_debt NUMERIC(10, 2) DEFAULT 0 NOT NULL;
+    """))
+
+    # check constraints — הגנה ברמת ה-DB על ערכים תקינים
+    await conn.execute(text("""
+        DO $$ BEGIN
+            ALTER TABLE stations
+                ADD CONSTRAINT chk_auto_block_grace_months
+                CHECK (auto_block_grace_months BETWEEN 1 AND 12);
+        EXCEPTION
+            WHEN duplicate_object THEN NULL;
+        END $$;
+    """))
+    await conn.execute(text("""
+        DO $$ BEGIN
+            ALTER TABLE stations
+                ADD CONSTRAINT chk_auto_block_min_debt
+                CHECK (auto_block_min_debt >= 0);
+        EXCEPTION
+            WHEN duplicate_object THEN NULL;
+        END $$;
+    """))
+
+    # אינדקס חלקי למשימת הבדיקה היומית — סינון תחנות פעילות עם חסימה מופעלת
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_stations_active_auto_block
+        ON stations(id) WHERE is_active = TRUE AND auto_block_enabled = TRUE;
+    """))
+
+
 async def run_all_migrations(conn: AsyncConnection) -> None:
     """הרצת כל המיגרציות ברצף (ללא ALTER TYPE — ראה add_enum_values)."""
     logger.info("Running migration 001...")
@@ -359,3 +400,5 @@ async def run_all_migrations(conn: AsyncConnection) -> None:
     await run_migration_008(conn)
     logger.info("Running migration 009...")
     await run_migration_009(conn)
+    logger.info("Running migration 010...")
+    await run_migration_010(conn)
