@@ -195,18 +195,23 @@ class AdminNotificationService:
             tg_selfie_status = 'נשלח למטה ⬇️' if has_tg_selfie else 'זמין בוואטסאפ' if selfie_file_id else '✗'
             tg_vehicle_status = 'נשלח למטה ⬇️' if has_tg_vehicle else 'זמין בוואטסאפ' if vehicle_photo_file_id else '✗'
 
+            # HTML escaping — מניעת 400 מטלגרם כשהשם מכיל תווי HTML
+            safe_full_name = TextSanitizer.sanitize_for_html(full_name)
+            safe_service_area = TextSanitizer.sanitize_for_html(service_area)
+            safe_vehicle_display = TextSanitizer.sanitize_for_html(vehicle_display)
+
             # קישור יצירת קשר - לינק לפרופיל בטלגרם או מספר טלפון בוואטסאפ
             if platform == "telegram":
                 contact_line = f'<a href="tg://user?id={phone_or_chat_id}">פתח צ\'אט בטלגרם</a> (ID: {phone_or_chat_id})'
             else:
-                contact_line = phone_or_chat_id
+                contact_line = TextSanitizer.sanitize_for_html(phone_or_chat_id)
 
             tg_message = f"""👤 <b>כרטיס נהג חדש #{user_id}</b>
 
 📋 <b>פרטים:</b>
-• שם: {full_name}
-• אזור: {service_area}
-• רכב: {vehicle_display}
+• שם: {safe_full_name}
+• אזור: {safe_service_area}
+• רכב: {safe_vehicle_display}
 • פלטפורמה: {platform}
 • ליצירת קשר: {contact_line}
 
@@ -311,16 +316,22 @@ class AdminNotificationService:
 
         # שליחה לקבוצת טלגרם
         if settings.TELEGRAM_ADMIN_CHAT_ID and settings.TELEGRAM_BOT_TOKEN:
+            # HTML escaping — מניעת 400 מטלגרם כשקלט המשתמש מכיל תווי HTML
+            safe_full_name = TextSanitizer.sanitize_for_html(full_name)
+            safe_service_area = TextSanitizer.sanitize_for_html(service_area)
+            safe_vehicle_display = TextSanitizer.sanitize_for_html(vehicle_display)
+            safe_decided_by = TextSanitizer.sanitize_for_html(decided_by)
+
             tg_msg = f"""{status_icon} <b>כרטיס נהג #{user_id} - {status_text}</b>
 
 📋 <b>פרטים:</b>
-• שם: {full_name}
-• אזור: {service_area}
-• רכב: {vehicle_display}
+• שם: {safe_full_name}
+• אזור: {safe_service_area}
+• רכב: {safe_vehicle_display}
 • פלטפורמה: {platform}
 
 📌 <b>סטטוס:</b> {status_text}{tg_note_line}
-👤 <b>על ידי:</b> {decided_by}"""
+👤 <b>על ידי:</b> {safe_decided_by}"""
 
             tg_success = await AdminNotificationService._send_telegram_message(
                 settings.TELEGRAM_ADMIN_CHAT_ID, tg_msg
@@ -354,11 +365,14 @@ class AdminNotificationService:
         else:
             contact_line = f"WhatsApp: {contact_identifier}"
 
+        # HTML escaping — מניעת 400 מטלגרם כשקלט המשתמש מכיל תווי HTML
+        safe_full_name = TextSanitizer.sanitize_for_html(full_name)
+
         message = f"""
 💳 <b>בקשת הפקדה חדשה!</b>
 
 📋 <b>פרטי השליח:</b>
-• שם: {full_name}
+• שם: {safe_full_name}
 • {contact_line}
 • User ID: {user_id}
 • פלטפורמה: {platform}

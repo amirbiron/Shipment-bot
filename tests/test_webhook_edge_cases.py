@@ -187,12 +187,12 @@ class TestTelegramGetOrCreateUser:
                 user, is_new = await tg_get_or_create_user(db_session, "dup99")
                 assert is_new is False
                 assert user.id == user1.id  # בוחר את הראשון
-                # וידוא שנרשם לוג error על כפילות
-                error_calls = [
-                    c for c in mock_logger.error.call_args_list
-                    if "Duplicate" in str(c)
+                # וידוא שנרשם לוג warning על כפילות (כולל השבתת כפילויות)
+                warning_calls = [
+                    c for c in mock_logger.warning.call_args_list
+                    if "כפילות" in str(c)
                 ]
-                assert len(error_calls) == 1
+                assert len(warning_calls) == 1
 
 
 # ============================================================================

@@ -56,4 +56,10 @@ celery_app.conf.beat_schedule = {
         "task": "app.workers.tasks.generate_monthly_reports",
         "schedule": crontab(day_of_month="1", hour="3", minute="0"),
     },
+    # בדיקת חיבור WhatsApp Gateway — כל 3 דקות
+    # מזהה session מנותק (למשל אחרי OOM restart) ושולח התראה למנהלים דרך Telegram
+    "check-whatsapp-connection-every-3-minutes": {
+        "task": "app.workers.tasks.check_whatsapp_connection",
+        "schedule": 180.0,  # 3 דקות
+    },
 }
