@@ -418,11 +418,19 @@ class OperatingHoursValidator:
             if "open" not in schedule or "close" not in schedule:
                 return False, f"חסרים שדות open/close עבור {day}"
 
+            # הגנת טיפוסים — ערכי open/close חייבים להיות מחרוזות
+            if not isinstance(schedule["open"], str) or not isinstance(schedule["close"], str):
+                return False, f"ערכי שעות חייבים להיות מחרוזות עבור {day}"
+
             if not cls.TIME_PATTERN.match(schedule["open"]):
                 return False, f"שעת פתיחה לא תקינה עבור {day}: {schedule['open']}"
 
             if not cls.TIME_PATTERN.match(schedule["close"]):
                 return False, f"שעת סגירה לא תקינה עבור {day}: {schedule['close']}"
+
+            # ולידציה ש-open קטן מ-close (שעות לגיטימיות)
+            if schedule["open"] >= schedule["close"]:
+                return False, f"שעת פתיחה חייבת להיות לפני שעת סגירה עבור {day}"
 
         return True, None
 

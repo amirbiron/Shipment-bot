@@ -1053,7 +1053,6 @@ class StationOwnerStateHandler:
 
         name = settings.get("name", "תחנה")
         desc = settings.get("description") or "לא הוגדר"
-        logo = settings.get("logo_url") or "לא הוגדר"
 
         # שעות פעילות
         hours = settings.get("operating_hours")
@@ -1075,8 +1074,7 @@ class StationOwnerStateHandler:
 
         text = (
             f"🏪 <b>הגדרות תחנה — {escape(name)}</b>\n\n"
-            f"📝 תיאור: {escape(desc)}\n"
-            f"🖼 לוגו: {escape(logo)}\n\n"
+            f"📝 תיאור: {escape(desc)}\n\n"
             f"🕐 <b>שעות פעילות:</b>\n{hours_text}\n"
             f"📍 <b>אזורי שירות:</b> {escape(areas_text)}\n\n"
             "בחר מה לערוך:"

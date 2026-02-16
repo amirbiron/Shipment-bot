@@ -90,6 +90,38 @@ class TestOperatingHoursValidator:
         is_valid, error = OperatingHoursValidator.validate(hours)
         assert is_valid is True
 
+    @pytest.mark.unit
+    def test_open_after_close_rejected(self):
+        """שעת פתיחה אחרי שעת סגירה — נכשל"""
+        hours = {"sunday": {"open": "20:00", "close": "08:00"}}
+        is_valid, error = OperatingHoursValidator.validate(hours)
+        assert is_valid is False
+        assert "לפני שעת סגירה" in error
+
+    @pytest.mark.unit
+    def test_open_equals_close_rejected(self):
+        """שעת פתיחה שווה לשעת סגירה — נכשל"""
+        hours = {"sunday": {"open": "08:00", "close": "08:00"}}
+        is_valid, error = OperatingHoursValidator.validate(hours)
+        assert is_valid is False
+        assert "לפני שעת סגירה" in error
+
+    @pytest.mark.unit
+    def test_non_string_time_values_rejected(self):
+        """ערכי שעות שאינם מחרוזות — נכשל"""
+        hours = {"sunday": {"open": None, "close": "20:00"}}
+        is_valid, error = OperatingHoursValidator.validate(hours)
+        assert is_valid is False
+        assert "מחרוזות" in error
+
+    @pytest.mark.unit
+    def test_numeric_time_values_rejected(self):
+        """ערכי שעות מספריים — נכשל"""
+        hours = {"sunday": {"open": 800, "close": 2000}}
+        is_valid, error = OperatingHoursValidator.validate(hours)
+        assert is_valid is False
+        assert "מחרוזות" in error
+
 
 class TestServiceAreasValidator:
     """בדיקות ולידציית אזורי שירות"""

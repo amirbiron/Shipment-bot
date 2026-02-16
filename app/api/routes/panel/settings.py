@@ -10,11 +10,7 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import TokenPayload
-from app.core.validation import (
-    TextSanitizer,
-    OperatingHoursValidator,
-    ServiceAreasValidator,
-)
+from app.core.validation import OperatingHoursValidator
 from app.api.dependencies.auth import get_current_station_owner
 from app.db.database import get_db
 from app.domain.services.station_service import StationService
@@ -50,7 +46,10 @@ class StationSettingsResponse(BaseModel):
 
 
 class UpdateStationSettingsRequest(BaseModel):
-    """עדכון הגדרות תחנה מורחבות — שדות אופציונליים, רק מה שנשלח מתעדכן"""
+    """עדכון הגדרות תחנה מורחבות — שדות אופציונליים, רק מה שנשלח מתעדכן.
+
+    ולידציית מבנה בלבד — סניטציה ובדיקות injection מתבצעות בשכבת השירות.
+    """
     name: Optional[str] = None
     description: Optional[str] = None
     operating_hours: Optional[dict[str, Optional[OperatingHoursDay]]] = None
@@ -65,60 +64,11 @@ class UpdateStationSettingsRequest(BaseModel):
     @field_validator("name")
     @classmethod
     def validate_name(cls, v: Optional[str]) -> Optional[str]:
+        """ולידציית אורך מינימלי בלבד — סניטציה בשירות"""
         if v is not None:
             v = v.strip()
             if len(v) < 2:
                 raise ValueError("שם התחנה חייב להכיל לפחות 2 תווים")
-            v = TextSanitizer.sanitize(v, max_length=200)
-            is_safe, _ = TextSanitizer.check_for_injection(v)
-            if not is_safe:
-                raise ValueError("שם התחנה מכיל תוכן לא תקין")
-        return v
-
-    @field_validator("description")
-    @classmethod
-    def validate_description(cls, v: Optional[str]) -> Optional[str]:
-        if v is not None:
-            v = TextSanitizer.sanitize(v.strip(), max_length=500)
-            is_safe, _ = TextSanitizer.check_for_injection(v)
-            if not is_safe:
-                raise ValueError("התיאור מכיל תוכן לא תקין")
-        return v
-
-    @field_validator("operating_hours")
-    @classmethod
-    def validate_hours(cls, v: Optional[dict]) -> Optional[dict]:
-        if v is not None:
-            # המרה לפורמט dict רגיל לולידציה
-            hours_dict = {}
-            for day, schedule in v.items():
-                hours_dict[day] = (
-                    {"open": schedule.open, "close": schedule.close}
-                    if schedule is not None else None
-                )
-            is_valid, error = OperatingHoursValidator.validate(hours_dict)
-            if not is_valid:
-                raise ValueError(error)
-        return v
-
-    @field_validator("service_areas")
-    @classmethod
-    def validate_areas(cls, v: Optional[list]) -> Optional[list]:
-        if v is not None:
-            is_valid, error = ServiceAreasValidator.validate(v)
-            if not is_valid:
-                raise ValueError(error)
-            v = ServiceAreasValidator.sanitize(v)
-        return v
-
-    @field_validator("logo_url")
-    @classmethod
-    def validate_logo(cls, v: Optional[str]) -> Optional[str]:
-        if v is not None:
-            v = TextSanitizer.sanitize(v.strip(), max_length=500)
-            is_safe, _ = TextSanitizer.check_for_injection(v)
-            if not is_safe:
-                raise ValueError("קישור הלוגו מכיל תוכן לא תקין")
         return v
 
 
@@ -133,6 +83,7 @@ class UpdateStationSettingsRequest(BaseModel):
     responses={
         200: {"description": "הגדרות התחנה"},
         401: {"description": "טוקן לא תקין"},
+        404: {"description": "תחנה לא נמצאה"},
     },
     tags=["Panel - הגדרות"],
 )
@@ -143,6 +94,12 @@ async def get_station_settings(
     """קבלת הגדרות מורחבות של התחנה"""
     station_service = StationService(db)
     settings = await station_service.get_station_settings(auth.station_id)
+
+    if not settings:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="התחנה לא נמצאה",
+        )
 
     return StationSettingsResponse(
         name=settings.get("name", ""),
