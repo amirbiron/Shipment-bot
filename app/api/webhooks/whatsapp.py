@@ -252,9 +252,9 @@ async def get_or_create_user(
             # ואז user פעיל ומעודכן יותר.
             .order_by(
                 (User.phone_number == sender_key).desc(),
-                User.is_active.desc(),
-                User.updated_at.desc(),
-                User.created_at.desc(),
+                User.is_active.desc().nulls_last(),
+                User.updated_at.desc().nulls_last(),
+                User.created_at.desc().nulls_last(),
             )
             .limit(2)
         )
@@ -276,9 +276,9 @@ async def get_or_create_user(
             select(User)
             .where(User.phone_number == normalized_phone)
             .order_by(
-                User.is_active.desc(),
-                User.updated_at.desc(),
-                User.created_at.desc(),
+                User.is_active.desc().nulls_last(),
+                User.updated_at.desc().nulls_last(),
+                User.created_at.desc().nulls_last(),
             )
             .limit(2)
         )

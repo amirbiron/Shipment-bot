@@ -500,7 +500,7 @@ async def get_or_create_user(
     result = await db.execute(
         select(User)
         .where(User.telegram_chat_id == telegram_chat_id)
-        .order_by(User.is_active.desc(), User.updated_at.desc(), User.created_at.desc())
+        .order_by(User.is_active.desc().nulls_last(), User.updated_at.desc().nulls_last(), User.created_at.desc().nulls_last())
         .limit(10)
     )
     users = list(result.scalars().all())
@@ -545,7 +545,7 @@ async def get_or_create_user(
             result = await db.execute(
                 select(User)
                 .where(User.telegram_chat_id == telegram_chat_id)
-                .order_by(User.is_active.desc(), User.updated_at.desc())
+                .order_by(User.is_active.desc().nulls_last(), User.updated_at.desc().nulls_last())
                 .limit(1)
             )
             user = result.scalars().first()
