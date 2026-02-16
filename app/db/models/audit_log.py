@@ -6,7 +6,7 @@ Audit Log Model — לוג ביקורת לפעולות מנהלתיות בתחנ
 """
 import enum
 from datetime import datetime
-from sqlalchemy import BigInteger, Column, DateTime, Enum as SQLEnum, ForeignKey, Integer
+from sqlalchemy import BigInteger, Column, DateTime, Enum as SQLEnum, ForeignKey, Index, Integer
 from sqlalchemy.types import JSON
 
 from app.db.database import Base
@@ -41,3 +41,10 @@ class AuditLog(Base):
     # פרטי השינוי בפורמט JSON — "מה שונה מ-X ל-Y"
     details = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        # אינדקסים מורכבים לשאילתות סינון בפאנל
+        Index("ix_audit_logs_station_action_created", "station_id", "action", created_at.desc()),
+        Index("ix_audit_logs_station_actor_created", "station_id", "actor_user_id", created_at.desc()),
+        Index("ix_audit_logs_target_user", "target_user_id", created_at.desc()),
+    )

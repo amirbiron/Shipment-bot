@@ -380,6 +380,28 @@ async def run_migration_010(conn: AsyncConnection) -> None:
     """))
 
 
+async def run_migration_011(conn: AsyncConnection) -> None:
+    """מיגרציה 011 - אינדקסים מורכבים לטבלת audit_logs לביצועי שאילתות פאנל.
+
+    אינדקסים על צירופי עמודות נפוצים בסינון:
+    - (station_id, action, created_at) — סינון לפי סוג פעולה בתחנה
+    - (station_id, actor_user_id, created_at) — סינון לפי משתמש מבצע בתחנה
+    - (target_user_id, created_at) — חיפוש לפי "על מי בוצעה הפעולה"
+    """
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS ix_audit_logs_station_action_created
+        ON audit_logs(station_id, action, created_at DESC);
+    """))
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS ix_audit_logs_station_actor_created
+        ON audit_logs(station_id, actor_user_id, created_at DESC);
+    """))
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS ix_audit_logs_target_user
+        ON audit_logs(target_user_id, created_at DESC);
+    """))
+
+
 async def run_all_migrations(conn: AsyncConnection) -> None:
     """הרצת כל המיגרציות ברצף (ללא ALTER TYPE — ראה add_enum_values)."""
     logger.info("Running migration 001...")
@@ -402,3 +424,5 @@ async def run_all_migrations(conn: AsyncConnection) -> None:
     await run_migration_009(conn)
     logger.info("Running migration 010...")
     await run_migration_010(conn)
+    logger.info("Running migration 011...")
+    await run_migration_011(conn)

@@ -58,6 +58,20 @@ class StationService:
         )
         self.db.add(entry)
 
+    async def _verify_station_owner(
+        self,
+        station_id: int,
+        actor_user_id: int | None,
+    ) -> None:
+        """בדיקת הרשאה — רק בעלים פעיל יכול לבצע פעולות מנהלתיות על הגדרות תחנה.
+
+        דילוג כש-actor_user_id=None (תאימות לאחור עם קריאות פנימיות).
+        """
+        if actor_user_id is None:
+            return
+        if not await self.is_owner_of_station(actor_user_id, station_id):
+            raise ValidationException("אין הרשאה לבצע פעולה זו — רק בעלים פעיל בתחנה.")
+
     async def get_audit_logs(
         self,
         station_id: int,
@@ -106,7 +120,7 @@ class StationService:
         result = await self.db.execute(
             select(AuditLog)
             .where(*base_where)
-            .order_by(AuditLog.created_at.desc())
+            .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
             .offset(offset)
             .limit(page_size)
         )
@@ -759,7 +773,7 @@ class StationService:
             details={
                 "driver_name": normalized_name,
                 "amount": float(amount_decimal),
-                "description": description,
+                "description": TextSanitizer.sanitize(description, max_length=500) if description else "",
             },
         )
 
@@ -826,6 +840,8 @@ class StationService:
         Returns:
             (success, message)
         """
+        await self._verify_station_owner(station_id, actor_user_id)
+
         rate = Decimal(str(new_rate))
 
         if rate < self.MIN_COMMISSION_RATE or rate > self.MAX_COMMISSION_RATE:
@@ -844,10 +860,12 @@ class StationService:
                 station_id=station_id,
                 actor_user_id=actor_user_id,
                 action=AuditActionType.COMMISSION_RATE_UPDATED,
-                details={
-                    "old_value": f"{int(old_rate * 100)}%" if old_rate is not None else None,
-                    "new_value": f"{int(rate * 100)}%",
-                },
+                details={"changes": {
+                    "commission_rate": {
+                        "old_value": f"{int(old_rate * 100)}%" if old_rate is not None else None,
+                        "new_value": f"{int(rate * 100)}%",
+                    },
+                }},
             )
 
         await self.db.commit()
@@ -961,7 +979,7 @@ class StationService:
                 target_user_id=user.id,
                 details={
                     "target_phone": PhoneNumberValidator.mask(normalized),
-                    "reason": reason,
+                    "reason": TextSanitizer.sanitize(reason, max_length=500) if reason else "",
                 },
             )
 
@@ -1081,6 +1099,8 @@ class StationService:
         Returns:
             (success, message)
         """
+        await self._verify_station_owner(station_id, actor_user_id)
+
         station = await self.get_station(station_id)
         if not station:
             return False, "התחנה לא נמצאה."
@@ -1162,7 +1182,7 @@ class StationService:
                 station_id=station_id,
                 actor_user_id=actor_user_id,
                 action=AuditActionType.STATION_SETTINGS_UPDATED,
-                details={"fields": list(updates.keys()), "changes": changes},
+                details={"changes": changes},
             )
 
         await self.db.commit()
@@ -1185,6 +1205,8 @@ class StationService:
         actor_user_id: int | None = None,
     ) -> tuple[bool, str]:
         """עדכון מזהי קבוצות של תחנה"""
+        await self._verify_station_owner(station_id, actor_user_id)
+
         station = await self.get_station(station_id)
         if not station:
             return False, "התחנה לא נמצאה."
@@ -1200,19 +1222,20 @@ class StationService:
             station.private_group_chat_id = private_group_chat_id
             station.private_group_platform = private_group_platform or "telegram"
 
-        # רישום בלוג ביקורת
+        # רישום בלוג ביקורת — רק אם בוצע שינוי בפועל
         if actor_user_id is not None:
-            details: dict[str, object] = {}
+            changes: dict[str, dict[str, object]] = {}
             if public_group_chat_id is not None:
-                details["public_group"] = {"old_value": old_public, "new_value": public_group_chat_id}
+                changes["public_group_chat_id"] = {"old_value": old_public, "new_value": public_group_chat_id}
             if private_group_chat_id is not None:
-                details["private_group"] = {"old_value": old_private, "new_value": private_group_chat_id}
-            await self._record_audit(
-                station_id=station_id,
-                actor_user_id=actor_user_id,
-                action=AuditActionType.GROUP_SETTINGS_UPDATED,
-                details=details,
-            )
+                changes["private_group_chat_id"] = {"old_value": old_private, "new_value": private_group_chat_id}
+            if changes:
+                await self._record_audit(
+                    station_id=station_id,
+                    actor_user_id=actor_user_id,
+                    action=AuditActionType.GROUP_SETTINGS_UPDATED,
+                    details={"changes": changes},
+                )
 
         await self.db.commit()
 
@@ -1311,6 +1334,8 @@ class StationService:
         Returns:
             (success, message)
         """
+        await self._verify_station_owner(station_id, actor_user_id)
+
         station = await self.get_station(station_id)
         if not station:
             return False, "התחנה לא נמצאה."
@@ -1339,21 +1364,24 @@ class StationService:
         if auto_block_min_debt is not None:
             station.auto_block_min_debt = auto_block_min_debt
 
-        # רישום בלוג ביקורת
+        # רישום בלוג ביקורת — רק אם בוצע שינוי בפועל
         if actor_user_id is not None:
-            await self._record_audit(
-                station_id=station_id,
-                actor_user_id=actor_user_id,
-                action=AuditActionType.AUTO_BLOCK_SETTINGS_UPDATED,
-                details={
-                    "old_values": old_values,
-                    "new_values": {
-                        "auto_block_enabled": station.auto_block_enabled,
-                        "auto_block_grace_months": station.auto_block_grace_months,
-                        "auto_block_min_debt": float(station.auto_block_min_debt),
-                    },
-                },
-            )
+            changes: dict[str, dict[str, object]] = {}
+            new_values = {
+                "auto_block_enabled": station.auto_block_enabled,
+                "auto_block_grace_months": station.auto_block_grace_months,
+                "auto_block_min_debt": float(station.auto_block_min_debt),
+            }
+            for field, old_val in old_values.items():
+                if new_values[field] != old_val:
+                    changes[field] = {"old_value": old_val, "new_value": new_values[field]}
+            if changes:
+                await self._record_audit(
+                    station_id=station_id,
+                    actor_user_id=actor_user_id,
+                    action=AuditActionType.AUTO_BLOCK_SETTINGS_UPDATED,
+                    details={"changes": changes},
+                )
 
         await self.db.commit()
 

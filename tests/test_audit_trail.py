@@ -273,7 +273,7 @@ class TestAuditTrailRecording(TestAuditTrailBase):
         entries, total = await service.get_audit_logs(station.id)
         assert total == 1
         assert entries[0].action == AuditActionType.COMMISSION_RATE_UPDATED
-        assert entries[0].details["new_value"] == "8%"
+        assert entries[0].details["changes"]["commission_rate"]["new_value"] == "8%"
 
     @pytest.mark.asyncio
     async def test_update_settings_creates_audit(self, user_factory, db_session):
@@ -291,7 +291,7 @@ class TestAuditTrailRecording(TestAuditTrailBase):
         entries, total = await service.get_audit_logs(station.id)
         assert total == 1
         assert entries[0].action == AuditActionType.STATION_SETTINGS_UPDATED
-        assert "name" in entries[0].details["fields"]
+        assert "name" in entries[0].details["changes"]
         assert entries[0].details["changes"]["name"]["new_value"] == "שם חדש"
 
     @pytest.mark.asyncio
@@ -310,17 +310,19 @@ class TestAuditTrailRecording(TestAuditTrailBase):
         entries, total = await service.get_audit_logs(station.id)
         assert total == 1
         assert entries[0].action == AuditActionType.GROUP_SETTINGS_UPDATED
-        assert entries[0].details["public_group"]["new_value"] == "-100123456"
+        assert entries[0].details["changes"]["public_group_chat_id"]["new_value"] == "-100123456"
 
     @pytest.mark.asyncio
     async def test_update_auto_block_creates_audit(self, user_factory, db_session):
-        """עדכון הגדרות חסימה אוטומטית — נרשם בלוג ביקורת"""
+        """עדכון הגדרות חסימה אוטומטית — נרשם בלוג ביקורת רק לשדות שהשתנו"""
         owner, station = await self._create_station_with_owner(user_factory, db_session)
         service = StationService(db_session)
 
+        # auto_block_enabled מוגדר True כברירת מחדל, auto_block_grace_months=2
+        # לכן שינוי grace_months ל-3 וכיבוי auto_block_enabled — שני שינויים אמיתיים
         success, _ = await service.update_auto_block_settings(
             station_id=station.id,
-            auto_block_enabled=True,
+            auto_block_enabled=False,
             auto_block_grace_months=3,
             actor_user_id=owner.id,
         )
@@ -329,8 +331,9 @@ class TestAuditTrailRecording(TestAuditTrailBase):
         entries, total = await service.get_audit_logs(station.id)
         assert total == 1
         assert entries[0].action == AuditActionType.AUTO_BLOCK_SETTINGS_UPDATED
-        assert entries[0].details["new_values"]["auto_block_enabled"] is True
-        assert entries[0].details["new_values"]["auto_block_grace_months"] == 3
+        assert entries[0].details["changes"]["auto_block_enabled"]["new_value"] is False
+        assert entries[0].details["changes"]["auto_block_enabled"]["old_value"] is True
+        assert entries[0].details["changes"]["auto_block_grace_months"]["new_value"] == 3
 
     @pytest.mark.asyncio
     async def test_manual_charge_creates_audit(self, user_factory, db_session):
@@ -512,3 +515,63 @@ class TestAuditTrailAtomicity(TestAuditTrailBase):
 
         entries, total = await service.get_audit_logs(station.id)
         assert total == 0
+
+    @pytest.mark.asyncio
+    async def test_no_op_groups_update_no_audit(self, user_factory, db_session):
+        """עדכון קבוצות ללא שינוי בפועל — לא נוצרת רשומת audit"""
+        owner, station = await self._create_station_with_owner(user_factory, db_session)
+        service = StationService(db_session)
+
+        # קריאה ללא שינויים — כל הפרמטרים None (ברירת מחדל)
+        success, _ = await service.update_station_groups(
+            station_id=station.id,
+            actor_user_id=owner.id,
+        )
+        assert success is True
+
+        entries, total = await service.get_audit_logs(station.id)
+        assert total == 0
+
+    @pytest.mark.asyncio
+    async def test_no_op_auto_block_update_no_audit(self, user_factory, db_session):
+        """עדכון הגדרות חסימה ללא שינוי בפועל — לא נוצרת רשומת audit"""
+        owner, station = await self._create_station_with_owner(user_factory, db_session)
+        service = StationService(db_session)
+
+        # קריאה ללא שינויים — כל הפרמטרים None (ברירת מחדל)
+        success, _ = await service.update_auto_block_settings(
+            station_id=station.id,
+            actor_user_id=owner.id,
+        )
+        assert success is True
+
+        entries, total = await service.get_audit_logs(station.id)
+        assert total == 0
+
+    @pytest.mark.asyncio
+    async def test_same_value_auto_block_no_audit(self, user_factory, db_session):
+        """עדכון הגדרות חסימה עם אותם ערכים — לא נוצרת רשומת audit"""
+        owner, station = await self._create_station_with_owner(user_factory, db_session)
+        service = StationService(db_session)
+
+        # עדכון ראשון — יוצר audit
+        await service.update_auto_block_settings(
+            station_id=station.id,
+            auto_block_enabled=True,
+            auto_block_grace_months=3,
+            actor_user_id=owner.id,
+        )
+
+        # עדכון שני עם אותם ערכים — לא אמור ליצור audit
+        await service.update_auto_block_settings(
+            station_id=station.id,
+            auto_block_enabled=True,
+            auto_block_grace_months=3,
+            actor_user_id=owner.id,
+        )
+
+        entries, total = await service.get_audit_logs(
+            station.id, action=AuditActionType.AUTO_BLOCK_SETTINGS_UPDATED,
+        )
+        # רק רשומה אחת מהעדכון הראשון
+        assert total == 1
