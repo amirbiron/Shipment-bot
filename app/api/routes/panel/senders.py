@@ -8,14 +8,11 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import TokenPayload
-from app.core.logging import get_logger
 from app.core.validation import PhoneNumberValidator
 from app.api.dependencies.auth import get_current_station_owner
 from app.db.database import get_db
 from app.db.models.delivery import DeliveryStatus
 from app.domain.services.station_service import StationService
-
-logger = get_logger(__name__)
 
 router = APIRouter()
 

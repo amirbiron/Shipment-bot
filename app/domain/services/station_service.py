@@ -1723,14 +1723,14 @@ class StationService:
             page: עמוד (1-based)
             page_size: גודל עמוד
             search: חיפוש לפי שם (אופציונלי)
-            sort_by: מיון לפי שדה (deliveries_count / last_delivery / name)
+            sort_by: מיון לפי שדה (deliveries_count / last_delivery / name / total_volume)
             sort_order: כיוון מיון (asc / desc)
 
         Returns:
             (רשימת שולחים עם סטטיסטיקות, סה"כ שולחים)
         """
         from sqlalchemy import func, case, desc, asc
-        from sqlalchemy.orm import joinedload
+        from sqlalchemy import literal
 
         active_statuses = [
             DeliveryStatus.OPEN,
@@ -1738,6 +1738,26 @@ class StationService:
             DeliveryStatus.CAPTURED,
             DeliveryStatus.IN_PROGRESS,
         ]
+
+        # עמודות אגרגציה עם labels — נשמרות במשתנים כדי לא למיין לפי מחרוזות
+        deliveries_count_col = func.count(Delivery.id).label("deliveries_count")
+        delivered_count_col = func.count(
+            case(
+                (Delivery.status == DeliveryStatus.DELIVERED, Delivery.id),
+            )
+        ).label("delivered_count")
+        active_deliveries_count_col = func.count(
+            case(
+                (Delivery.status.in_(active_statuses), Delivery.id),
+            )
+        ).label("active_deliveries_count")
+        total_volume_col = func.sum(
+            case(
+                (Delivery.status == DeliveryStatus.DELIVERED, Delivery.fee),
+                else_=0,
+            )
+        ).label("total_volume")
+        last_delivery_at_col = func.max(Delivery.created_at).label("last_delivery_at")
 
         # שאילתה עם אגרגציה — שולחים שיצרו משלוחים בתחנה
         base_query = (
@@ -1749,20 +1769,11 @@ class StationService:
                 User.platform,
                 User.is_active,
                 User.created_at,
-                func.count(Delivery.id).label("deliveries_count"),
-                func.count(case(
-                    (Delivery.status == DeliveryStatus.DELIVERED, Delivery.id),
-                )).label("delivered_count"),
-                func.count(case(
-                    (Delivery.status.in_(active_statuses), Delivery.id),
-                )).label("active_deliveries_count"),
-                func.sum(
-                    case(
-                        (Delivery.status == DeliveryStatus.DELIVERED, Delivery.fee),
-                        else_=0,
-                    )
-                ).label("total_volume"),
-                func.max(Delivery.created_at).label("last_delivery_at"),
+                deliveries_count_col,
+                delivered_count_col,
+                active_deliveries_count_col,
+                total_volume_col,
+                last_delivery_at_col,
             )
             .join(Delivery, Delivery.sender_id == User.id)
             .where(Delivery.station_id == station_id)
@@ -1787,13 +1798,14 @@ class StationService:
         # מיון
         sort_func = desc if sort_order == "desc" else asc
         sort_columns = {
-            "deliveries_count": "deliveries_count",
-            "last_delivery": "last_delivery_at",
-            "name": User.name,
-            "total_volume": "total_volume",
+            "deliveries_count": deliveries_count_col,
+            "last_delivery": last_delivery_at_col,
+            # שם מוצג הוא fallback ל-full_name — מיון לפי coalesce שומר עקביות עם ה-UI
+            "name": func.coalesce(User.name, User.full_name, literal("")),
+            "total_volume": total_volume_col,
         }
-        sort_col = sort_columns.get(sort_by, "deliveries_count")
-        base_query = base_query.order_by(sort_func(sort_col))
+        sort_col = sort_columns.get(sort_by, deliveries_count_col)
+        base_query = base_query.order_by(sort_func(sort_col), User.id.asc())
 
         # pagination
         offset = (page - 1) * page_size
@@ -1931,28 +1943,36 @@ class StationService:
         """
         from sqlalchemy import func, case, desc
 
+        # עמודות עם labels לשימוש בטוח ב-order_by (ללא מחרוזות)
+        deliveries_count_col = func.count(Delivery.id).label("deliveries_count")
+        delivered_count_col = func.count(
+            case(
+                (Delivery.status == DeliveryStatus.DELIVERED, Delivery.id),
+            )
+        ).label("delivered_count")
+        total_volume_col = func.sum(
+            case(
+                (Delivery.status == DeliveryStatus.DELIVERED, Delivery.fee),
+                else_=0,
+            )
+        ).label("total_volume")
+        last_delivery_at_col = func.max(Delivery.created_at).label("last_delivery_at")
+
         result = await self.db.execute(
             select(
                 User.id,
                 User.name,
                 User.full_name,
                 User.phone_number,
-                func.count(Delivery.id).label("deliveries_count"),
-                func.count(case(
-                    (Delivery.status == DeliveryStatus.DELIVERED, Delivery.id),
-                )).label("delivered_count"),
-                func.sum(
-                    case(
-                        (Delivery.status == DeliveryStatus.DELIVERED, Delivery.fee),
-                        else_=0,
-                    )
-                ).label("total_volume"),
-                func.max(Delivery.created_at).label("last_delivery_at"),
+                deliveries_count_col,
+                delivered_count_col,
+                total_volume_col,
+                last_delivery_at_col,
             )
             .join(Delivery, Delivery.sender_id == User.id)
             .where(Delivery.station_id == station_id)
             .group_by(User.id)
-            .order_by(desc("delivered_count"))
+            .order_by(desc(delivered_count_col), desc(last_delivery_at_col), User.id.asc())
             .limit(limit)
         )
         rows = result.all()
@@ -2012,7 +2032,7 @@ class StationService:
         result = await self.db.execute(
             select(Delivery)
             .options(
-                joinedload(Delivery.sender),
+                # ה-route משתמש רק ב-courier, אין צורך ב-joinedload ל-sender
                 joinedload(Delivery.courier),
             )
             .where(*base_where)
