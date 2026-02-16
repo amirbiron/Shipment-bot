@@ -6,14 +6,17 @@
 - מעבר מהיר בין תחנות
 - סטטיסטיקות מצטברות
 """
-from typing import List
-
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import TokenPayload
 from app.api.dependencies.auth import get_current_station_owner
+from app.api.routes.panel.schemas import (
+    MultiDashboardResponse,
+    MultiStationTotals,
+    StationSummary,
+    StationsListResponse,
+)
 from app.db.database import get_db
 from app.domain.services.station_service import StationService
 from app.core.logging import get_logger
@@ -23,52 +26,7 @@ logger = get_logger(__name__)
 router = APIRouter()
 
 
-# ==================== סכמות ====================
-
-
-class StationSummary(BaseModel):
-    """סיכום נתוני תחנה בודדת"""
-    station_id: int
-    station_name: str
-    # משלוחים
-    active_deliveries_count: int
-    today_deliveries_count: int
-    today_delivered_count: int
-    # פיננסי
-    wallet_balance: float
-    commission_rate: float
-    today_revenue: float
-    # כוח אדם
-    active_dispatchers_count: int
-    blacklisted_count: int
-
-
-class MultiStationTotals(BaseModel):
-    """סכומים מצטברים של כל התחנות"""
-    total_active_deliveries: int
-    total_today_deliveries: int
-    total_today_delivered: int
-    total_wallet_balance: float
-    total_today_revenue: float
-    total_active_dispatchers: int
-    total_blacklisted: int
-
-
-class StationsListResponse(BaseModel):
-    """תגובת רשימת תחנות עם סטטיסטיקות מסכמות"""
-    current_station_id: int
-    stations: List[StationSummary]
-    totals: MultiStationTotals
-
-
-class MultiDashboardResponse(BaseModel):
-    """תגובת דשבורד מרובה-תחנות — כולל נתונים לכל תחנה וסכומים"""
-    current_station_id: int
-    stations: List[StationSummary]
-    totals: MultiStationTotals
-
-
-# ==================== Endpoints ====================
+# ==================== Helpers ====================
 
 
 def _build_totals(summaries: list[dict]) -> MultiStationTotals:
@@ -82,6 +40,9 @@ def _build_totals(summaries: list[dict]) -> MultiStationTotals:
         total_active_dispatchers=sum(s["active_dispatchers_count"] for s in summaries),
         total_blacklisted=sum(s["blacklisted_count"] for s in summaries),
     )
+
+
+# ==================== Endpoints ====================
 
 
 @router.get(

@@ -111,6 +111,13 @@ class SwitchStationRequest(BaseModel):
     """בקשת מעבר בין תחנות"""
     station_id: int
 
+    @field_validator("station_id")
+    @classmethod
+    def validate_station_id(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("מזהה תחנה חייב להיות מספר חיובי")
+        return v
+
 
 class MeResponse(BaseModel):
     """פרטי המשתמש המחובר"""
@@ -212,7 +219,22 @@ async def request_otp(
     await db.commit()
 
     # שמירת OTP ב-Redis רק אחרי commit מוצלח — מבטיח שההודעה באמת תישלח
-    await store_otp(user.id, otp)
+    # אם Redis נופל, המשתמש יקבל הודעה אבל ההתחברות תיכשל — לוג ברור + תגובה ידידותית
+    try:
+        await store_otp(user.id, otp)
+    except Exception as e:
+        logger.error(
+            "כשלון בשמירת OTP ב-Redis — המשתמש יקבל הודעה אך לא יוכל להתחבר",
+            extra_data={
+                "user_id": user.id,
+                "error": str(e),
+            },
+            exc_info=True,
+        )
+        return ActionResponse(
+            success=False,
+            message="אירעה שגיאה בשליחת קוד הכניסה, נסה שוב בעוד דקה",
+        )
 
     logger.info(
         "OTP requested for panel login",
