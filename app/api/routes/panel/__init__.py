@@ -16,11 +16,13 @@ from app.api.routes.panel.groups import router as groups_router
 from app.api.routes.panel.owners import router as owners_router
 from app.api.routes.panel.alerts import router as alerts_router
 from app.api.routes.panel.settings import router as settings_router
+from app.api.routes.panel.stations import router as stations_router
 
 router = APIRouter()
 
 router.include_router(auth_router, prefix="/auth", tags=["Panel - אימות"])
 router.include_router(dashboard_router, prefix="/dashboard", tags=["Panel - דשבורד"])
+router.include_router(stations_router, prefix="/stations", tags=["Panel - מולטי-תחנה"])
 router.include_router(owners_router, prefix="/owners", tags=["Panel - בעלים"])
 router.include_router(dispatchers_router, prefix="/dispatchers", tags=["Panel - סדרנים"])
 router.include_router(deliveries_router, prefix="/deliveries", tags=["Panel - משלוחים"])

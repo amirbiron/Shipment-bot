@@ -1158,3 +1158,145 @@ class StationService:
             await self.db.commit()
 
         return blocked_drivers
+
+    # ==================== סעיף 9: דשבורד מולטי-תחנה ====================
+
+    async def get_multi_station_summary(
+        self,
+        owner_id: int,
+    ) -> list[dict]:
+        """קבלת סיכום נתונים לכל התחנות שבבעלות המשתמש.
+
+        מחזיר רשימת dict עם נתוני דשבורד לכל תחנה, ומסכום מצטבר.
+        שאילתות batch — ללא N+1.
+        """
+        from sqlalchemy import func
+        from app.db.models.station_ledger import StationLedgerEntryType
+        from datetime import timezone
+        from zoneinfo import ZoneInfo
+
+        stations = await self.get_stations_by_owner(owner_id)
+        if not stations:
+            return []
+
+        station_ids = [s.id for s in stations]
+
+        # חישוב תחילת היום לפי שעון ישראל
+        _ISRAEL_TZ = ZoneInfo("Asia/Jerusalem")
+        now_israel = datetime.now(_ISRAEL_TZ)
+        today_start = now_israel.replace(
+            hour=0, minute=0, second=0, microsecond=0,
+        ).astimezone(timezone.utc).replace(tzinfo=None)
+
+        # --- שאילתת batch: ספירת משלוחים פעילים לכל תחנה ---
+        active_counts_result = await self.db.execute(
+            select(
+                Delivery.station_id,
+                func.count(Delivery.id),
+            ).where(
+                Delivery.station_id.in_(station_ids),
+                Delivery.status.in_([
+                    DeliveryStatus.OPEN,
+                    DeliveryStatus.PENDING_APPROVAL,
+                    DeliveryStatus.CAPTURED,
+                    DeliveryStatus.IN_PROGRESS,
+                ]),
+            ).group_by(Delivery.station_id)
+        )
+        active_map: dict[int, int] = dict(active_counts_result.all())
+
+        # --- שאילתת batch: משלוחים שנוצרו היום לכל תחנה ---
+        today_counts_result = await self.db.execute(
+            select(
+                Delivery.station_id,
+                func.count(Delivery.id),
+            ).where(
+                Delivery.station_id.in_(station_ids),
+                Delivery.created_at >= today_start,
+            ).group_by(Delivery.station_id)
+        )
+        today_map: dict[int, int] = dict(today_counts_result.all())
+
+        # --- שאילתת batch: משלוחים שנמסרו היום לכל תחנה ---
+        delivered_counts_result = await self.db.execute(
+            select(
+                Delivery.station_id,
+                func.count(Delivery.id),
+            ).where(
+                Delivery.station_id.in_(station_ids),
+                Delivery.status == DeliveryStatus.DELIVERED,
+                Delivery.delivered_at >= today_start,
+            ).group_by(Delivery.station_id)
+        )
+        delivered_map: dict[int, int] = dict(delivered_counts_result.all())
+
+        # --- שאילתת batch: ארנקים ---
+        wallets_result = await self.db.execute(
+            select(StationWallet).where(
+                StationWallet.station_id.in_(station_ids),
+            )
+        )
+        wallets_map: dict[int, StationWallet] = {
+            w.station_id: w for w in wallets_result.scalars().all()
+        }
+
+        # --- שאילתת batch: הכנסות היום לכל תחנה ---
+        revenue_result = await self.db.execute(
+            select(
+                StationLedger.station_id,
+                func.coalesce(func.sum(StationLedger.amount), 0),
+            ).where(
+                StationLedger.station_id.in_(station_ids),
+                StationLedger.created_at >= today_start,
+                StationLedger.entry_type.in_([
+                    StationLedgerEntryType.COMMISSION_CREDIT,
+                    StationLedgerEntryType.MANUAL_CHARGE,
+                ]),
+            ).group_by(StationLedger.station_id)
+        )
+        revenue_map: dict[int, float] = {
+            row[0]: float(row[1]) for row in revenue_result.all()
+        }
+
+        # --- שאילתת batch: סדרנים פעילים לכל תחנה ---
+        dispatchers_result = await self.db.execute(
+            select(
+                StationDispatcher.station_id,
+                func.count(StationDispatcher.id),
+            ).where(
+                StationDispatcher.station_id.in_(station_ids),
+                StationDispatcher.is_active == True,  # noqa: E712
+            ).group_by(StationDispatcher.station_id)
+        )
+        dispatchers_map: dict[int, int] = dict(dispatchers_result.all())
+
+        # --- שאילתת batch: חסומים לכל תחנה ---
+        blacklisted_result = await self.db.execute(
+            select(
+                StationBlacklist.station_id,
+                func.count(StationBlacklist.id),
+            ).where(
+                StationBlacklist.station_id.in_(station_ids),
+            ).group_by(StationBlacklist.station_id)
+        )
+        blacklisted_map: dict[int, int] = dict(blacklisted_result.all())
+
+        # --- הרכבת התוצאה ---
+        summaries: list[dict] = []
+        for station in stations:
+            sid = station.id
+            wallet = wallets_map.get(sid)
+            summaries.append({
+                "station_id": sid,
+                "station_name": station.name,
+                "active_deliveries_count": active_map.get(sid, 0),
+                "today_deliveries_count": today_map.get(sid, 0),
+                "today_delivered_count": delivered_map.get(sid, 0),
+                "wallet_balance": float(wallet.balance) if wallet else 0.0,
+                "commission_rate": float(wallet.commission_rate) if wallet else 0.1,
+                "today_revenue": revenue_map.get(sid, 0.0),
+                "active_dispatchers_count": dispatchers_map.get(sid, 0),
+                "blacklisted_count": blacklisted_map.get(sid, 0),
+            })
+
+        return summaries
