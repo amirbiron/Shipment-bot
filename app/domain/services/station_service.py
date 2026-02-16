@@ -1241,7 +1241,6 @@ class StationService:
         }
 
         # --- שאילתת batch: הכנסות היום לכל תחנה ---
-        from sqlalchemy import func as sqla_func
         revenue_result = await self.db.execute(
             select(
                 StationLedger.station_id,
