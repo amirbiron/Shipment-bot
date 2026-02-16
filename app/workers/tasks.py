@@ -537,39 +537,44 @@ def check_station_alerts():
             )
             stations = list(result.scalars().all())
 
+            # חילוץ מזהים לערכי Python רגילים — מונע MissingGreenlet
+            # אחרי rollback (שעושה expire לאובייקטי ORM)
+            station_ids = [s.id for s in stations]
+
             redis = await get_redis()
             alerts_sent = 0
-            for station in stations:
+            for station_id in station_ids:
                 try:
                     # --- בדיקת סף ארנק ---
-                    threshold = await get_wallet_threshold(station.id)
+                    threshold = await get_wallet_threshold(station_id)
                     if threshold > 0:
                         wallet_result = await db.execute(
                             select(StationWallet).where(
-                                StationWallet.station_id == station.id
+                                StationWallet.station_id == station_id
                             )
                         )
                         wallet = wallet_result.scalar_one_or_none()
                         if wallet and float(wallet.balance) < threshold:
                             # dedupe — התראה אחת לשעה לכל תחנה
-                            throttle_key = f"alert_throttle:wallet:{station.id}"
+                            throttle_key = f"alert_throttle:wallet:{station_id}"
                             if await redis.set(
                                 throttle_key, "1", nx=True, ex=_ALERT_THROTTLE_SECONDS
                             ):
                                 await publish_wallet_threshold_alert(
-                                    station_id=station.id,
+                                    station_id=station_id,
                                     current_balance=float(wallet.balance),
                                     threshold=threshold,
                                 )
                                 alerts_sent += 1
 
                     # --- בדיקת משלוחים שלא נאספו ---
-                    cutoff = datetime.now(timezone.utc) - timedelta(
+                    # datetime.utcnow() — naive, תואם לעמודת created_at (DateTime ללא timezone)
+                    cutoff = datetime.utcnow() - timedelta(
                         hours=DEFAULT_UNCOLLECTED_HOURS
                     )
                     uncollected_result = await db.execute(
                         select(Delivery).where(
-                            Delivery.station_id == station.id,
+                            Delivery.station_id == station_id,
                             Delivery.status == DeliveryStatus.OPEN,
                             Delivery.created_at < cutoff,
                         )
@@ -582,13 +587,12 @@ def check_station_alerts():
                             throttle_key, "1", nx=True, ex=_ALERT_THROTTLE_SECONDS
                         ):
                             continue
+                        # שני הצדדים naive — אין צורך ב-replace
                         hours_open = (
-                            datetime.now(timezone.utc) - d.created_at.replace(
-                                tzinfo=timezone.utc
-                            )
+                            datetime.utcnow() - d.created_at
                         ).total_seconds() / 3600
                         await publish_uncollected_shipment_alert(
-                            station_id=station.id,
+                            station_id=station_id,
                             delivery_id=d.id,
                             hours_open=hours_open,
                             pickup_address=d.pickup_address,
@@ -599,7 +603,7 @@ def check_station_alerts():
                     logger.error(
                         "כשלון בבדיקת התראות לתחנה",
                         extra_data={
-                            "station_id": station.id,
+                            "station_id": station_id,
                             "error": str(e),
                         },
                         exc_info=True,
@@ -610,12 +614,12 @@ def check_station_alerts():
             logger.info(
                 "סיום בדיקת התראות תקופתית",
                 extra_data={
-                    "stations_checked": len(stations),
+                    "stations_checked": len(station_ids),
                     "alerts_sent": alerts_sent,
                 },
             )
             return {
-                "stations_checked": len(stations),
+                "stations_checked": len(station_ids),
                 "alerts_sent": alerts_sent,
             }
 
@@ -644,19 +648,23 @@ def process_billing_cycle_blocking():
             )
             stations = list(result.scalars().all())
 
+            # חילוץ מזהים לערכי Python רגילים — מונע MissingGreenlet
+            # אחרי rollback (שעושה expire לאובייקטי ORM)
+            station_ids = [s.id for s in stations]
+
             total_blocked = 0
-            for station in stations:
+            for station_id in station_ids:
                 try:
                     station_service = StationService(db)
                     blocked = await station_service.auto_block_unpaid_drivers(
-                        station.id
+                        station_id
                     )
                     total_blocked += len(blocked)
                 except Exception as e:
                     logger.error(
                         "כשלון בבדיקת חסימה אוטומטית לתחנה",
                         extra_data={
-                            "station_id": station.id,
+                            "station_id": station_id,
                             "error": str(e),
                         },
                         exc_info=True,
@@ -667,12 +675,12 @@ def process_billing_cycle_blocking():
             logger.info(
                 "סיום בדיקת חסימה אוטומטית",
                 extra_data={
-                    "stations_processed": len(stations),
+                    "stations_processed": len(station_ids),
                     "drivers_blocked": total_blocked,
                 }
             )
             return {
-                "stations_processed": len(stations),
+                "stations_processed": len(station_ids),
                 "drivers_blocked": total_blocked,
             }
 
