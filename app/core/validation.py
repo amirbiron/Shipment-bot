@@ -103,6 +103,10 @@ class PhoneNumberValidator:
         if allow_international and ValidationPatterns.PHONE_INTERNATIONAL.match(cleaned):
             return True
 
+        # מספר בינלאומי ללא + (למשל מ-WhatsApp: 15551708949)
+        if allow_international and re.match(r"^[1-9]\d{6,14}$", cleaned):
+            return True
+
         return False
 
     @staticmethod
@@ -124,6 +128,9 @@ class PhoneNumberValidator:
         if cleaned.startswith("0"):
             cleaned = "+972" + cleaned[1:]
         elif cleaned.startswith("972") and not cleaned.startswith("+"):
+            cleaned = "+" + cleaned
+        elif not cleaned.startswith("+"):
+            # מספר בינלאומי ללא + (למשל מ-WhatsApp: 15551708949)
             cleaned = "+" + cleaned
 
         return cleaned
