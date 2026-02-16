@@ -52,9 +52,17 @@ async def get_redis() -> aioredis.Redis:
 
 
 async def close_redis() -> None:
-    """סגירת חיבור Redis — לקרוא ב-app shutdown."""
+    """סגירת חיבור Redis — לקרוא ב-app shutdown או ב-Celery task cleanup."""
     global _redis_client
     if _redis_client is not None:
-        await _redis_client.aclose()
+        client = _redis_client
+        # ניקוי ה-singleton קודם — גם אם aclose נכשל, ה-client לא ישמש שוב
         _redis_client = None
+        try:
+            await client.aclose()
+        except Exception as e:
+            logger.warning(
+                "כשלון בסגירת Redis client",
+                extra_data={"error": str(e)},
+            )
         logger.info("Redis connection closed")
