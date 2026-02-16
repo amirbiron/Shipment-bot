@@ -1197,15 +1197,15 @@ class StationService:
         # קיבוץ לפי courier_id — בדיקת נוכחות בכל מחזור וחישוב סכום חוב
         courier_cycles: dict[int, set[int]] = {}
         courier_names: dict[int, str] = {}
-        courier_debts: dict[int, float] = {}
+        courier_debts: dict[int, Decimal] = {}
         for charge in charges:
             cid = charge.courier_id
             if cid not in courier_cycles:
                 courier_cycles[cid] = set()
                 courier_names[cid] = charge.driver_name
-                courier_debts[cid] = 0.0
+                courier_debts[cid] = Decimal("0")
 
-            courier_debts[cid] += float(charge.amount)
+            courier_debts[cid] += Decimal(str(charge.amount))
 
             # זיהוי לאיזה מחזור שייך החיוב
             for idx in range(len(cycle_starts)):
@@ -1262,7 +1262,7 @@ class StationService:
                     "station_id": station_id,
                     "courier_id": courier_id,
                     "grace_months": grace_months,
-                    "total_debt": courier_debts[courier_id],
+                    "total_debt": str(courier_debts[courier_id]),
                 }
             )
 
