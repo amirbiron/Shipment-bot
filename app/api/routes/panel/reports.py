@@ -507,36 +507,22 @@ async def get_monthly_summary(
 
     dt_from, dt_to, month_str = _parse_month_range(month)
 
-    # נתוני הכנסות
-    pl_data = await station_service.get_profit_loss_report(station_id, dt_from, dt_to)
-    if pl_data:
-        revenue = pl_data[0]
-    else:
-        revenue = {"commissions": 0.0, "manual_charges": 0.0, "withdrawals": 0.0, "net": 0.0}
-
-    # סטטיסטיקות משלוחים
-    delivery_stats = await station_service.get_monthly_delivery_stats(station_id, dt_from, dt_to)
-
-    # נתוני גבייה
-    collection_data = await station_service.get_collection_report_for_period(station_id, dt_from, dt_to)
-    total_debt = sum(float(item["total_debt"]) for item in collection_data)
-
-    # שם תחנה
+    summary = await station_service.get_monthly_summary_data(station_id, dt_from, dt_to)
     station_name = await _get_station_name(db, station_id)
 
     return MonthlySummaryResponse(
         month=month_str,
         station_name=station_name,
-        commissions=revenue["commissions"],
-        manual_charges=revenue["manual_charges"],
-        withdrawals=revenue["withdrawals"],
-        net=revenue["net"],
-        total_deliveries=delivery_stats["total"],
-        delivered_count=delivery_stats["delivered"],
-        cancelled_count=delivery_stats["cancelled"],
-        open_count=delivery_stats["open"],
-        total_debt=total_debt,
-        debtors_count=len(collection_data),
+        commissions=summary["revenue"]["commissions"],
+        manual_charges=summary["revenue"]["manual_charges"],
+        withdrawals=summary["revenue"]["withdrawals"],
+        net=summary["revenue"]["net"],
+        total_deliveries=summary["delivery_stats"]["total"],
+        delivered_count=summary["delivery_stats"]["delivered"],
+        cancelled_count=summary["delivery_stats"]["cancelled"],
+        open_count=summary["delivery_stats"]["open"],
+        total_debt=summary["total_debt"],
+        debtors_count=len(summary["collection_data"]),
     )
 
 
@@ -561,28 +547,16 @@ async def export_monthly_summary_xlsx(
     # פירוש חודש לתאריכים
     dt_from, dt_to, month_str = _parse_month_range(month)
 
-    # שאילתה בודדת לכל מקור נתונים — בלי כפילויות
-    pl_data = await station_service.get_profit_loss_report(station_id, dt_from, dt_to)
-    revenue = pl_data[0] if pl_data else {
-        "commissions": 0.0, "manual_charges": 0.0, "withdrawals": 0.0, "net": 0.0,
-    }
-
-    delivery_stats = await station_service.get_monthly_delivery_stats(station_id, dt_from, dt_to)
-
-    collection_data = await station_service.get_collection_report_for_period(
-        station_id, dt_from, dt_to
-    )
-    total_debt = sum(float(item["total_debt"]) for item in collection_data)
-
+    summary = await station_service.get_monthly_summary_data(station_id, dt_from, dt_to)
     station_name = await _get_station_name(db, station_id)
 
     xlsx_bytes = generate_monthly_summary_excel(
         month=month_str,
         station_name=station_name,
-        collection_items=collection_data,
-        total_debt=total_debt,
-        revenue_data=revenue,
-        delivery_stats=delivery_stats,
+        collection_items=summary["collection_data"],
+        total_debt=summary["total_debt"],
+        revenue_data=summary["revenue"],
+        delivery_stats=summary["delivery_stats"],
     )
 
     filename = f"monthly_report_{month_str}.xlsx"

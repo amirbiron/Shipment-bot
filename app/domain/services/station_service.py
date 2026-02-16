@@ -5,7 +5,7 @@ Station Service - ניהול תחנות, סדרנים, ארנק תחנה ורש�
 """
 from datetime import datetime
 from decimal import Decimal
-from typing import List, Optional
+from typing import List, Optional, TypedDict
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
@@ -27,6 +27,14 @@ from app.core.exceptions import ValidationException
 from html import escape
 
 logger = get_logger(__name__)
+
+
+class MonthlySummaryData(TypedDict):
+    """נתוני סיכום חודשי — מוחזר מ-get_monthly_summary_data"""
+    revenue: dict[str, float]
+    delivery_stats: dict[str, int]
+    collection_data: list[dict]
+    total_debt: float
 
 
 class StationService:
@@ -2126,3 +2134,36 @@ class StationService:
             "cancelled": row[2] or 0,
             "open": row[3] or 0,
         }
+
+    async def get_monthly_summary_data(
+        self,
+        station_id: int,
+        date_from: datetime,
+        date_to: datetime,
+    ) -> MonthlySummaryData:
+        """
+        שליפת כל נתוני הסיכום החודשי בפעולה אחת — הכנסות, סטטיסטיקות משלוחים וגבייה.
+
+        מרכז את הלוגיקה שהייתה כפולה ב-get_monthly_summary, export_monthly_summary_xlsx
+        ו-generate_monthly_reports (Celery task).
+        """
+        # נתוני הכנסות
+        pl_data = await self.get_profit_loss_report(station_id, date_from, date_to)
+        if pl_data:
+            revenue = pl_data[0]
+        else:
+            revenue = {"commissions": 0.0, "manual_charges": 0.0, "withdrawals": 0.0, "net": 0.0}
+
+        # סטטיסטיקות משלוחים
+        delivery_stats = await self.get_monthly_delivery_stats(station_id, date_from, date_to)
+
+        # נתוני גבייה
+        collection_data = await self.get_collection_report_for_period(station_id, date_from, date_to)
+        total_debt = sum(float(item["total_debt"]) for item in collection_data)
+
+        return MonthlySummaryData(
+            revenue=revenue,
+            delivery_stats=delivery_stats,
+            collection_data=collection_data,
+            total_debt=total_debt,
+        )
