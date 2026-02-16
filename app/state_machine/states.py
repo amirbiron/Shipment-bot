@@ -298,6 +298,13 @@ class StationOwnerState(str, Enum):
     SET_PUBLIC_GROUP = "STATION.SET_PUBLIC_GROUP"
     SET_PRIVATE_GROUP = "STATION.SET_PRIVATE_GROUP"
 
+    # סעיף 8: הגדרות תחנה מורחבות
+    STATION_SETTINGS = "STATION.SETTINGS"
+    EDIT_STATION_NAME = "STATION.EDIT_NAME"
+    EDIT_STATION_DESCRIPTION = "STATION.EDIT_DESCRIPTION"
+    EDIT_OPERATING_HOURS = "STATION.EDIT_OPERATING_HOURS"
+    EDIT_SERVICE_AREAS = "STATION.EDIT_SERVICE_AREAS"
+
 
 STATION_OWNER_TRANSITIONS = {
     # תפריט ראשי
@@ -308,6 +315,7 @@ STATION_OWNER_TRANSITIONS = {
         StationOwnerState.COLLECTION_REPORT,
         StationOwnerState.VIEW_BLACKLIST,
         StationOwnerState.GROUP_SETTINGS,
+        StationOwnerState.STATION_SETTINGS,
     ],
 
     # ניהול בעלים
@@ -402,6 +410,31 @@ STATION_OWNER_TRANSITIONS = {
     ],
     StationOwnerState.SET_PRIVATE_GROUP: [
         StationOwnerState.GROUP_SETTINGS,
+        StationOwnerState.MENU,
+    ],
+
+    # סעיף 8: הגדרות תחנה מורחבות
+    StationOwnerState.STATION_SETTINGS: [
+        StationOwnerState.EDIT_STATION_NAME,
+        StationOwnerState.EDIT_STATION_DESCRIPTION,
+        StationOwnerState.EDIT_OPERATING_HOURS,
+        StationOwnerState.EDIT_SERVICE_AREAS,
+        StationOwnerState.MENU,
+    ],
+    StationOwnerState.EDIT_STATION_NAME: [
+        StationOwnerState.STATION_SETTINGS,
+        StationOwnerState.MENU,
+    ],
+    StationOwnerState.EDIT_STATION_DESCRIPTION: [
+        StationOwnerState.STATION_SETTINGS,
+        StationOwnerState.MENU,
+    ],
+    StationOwnerState.EDIT_OPERATING_HOURS: [
+        StationOwnerState.STATION_SETTINGS,
+        StationOwnerState.MENU,
+    ],
+    StationOwnerState.EDIT_SERVICE_AREAS: [
+        StationOwnerState.STATION_SETTINGS,
         StationOwnerState.MENU,
     ],
 }

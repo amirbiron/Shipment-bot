@@ -45,6 +45,8 @@ class StationOwnerStateHandler:
         "remove_blacklist_courier_id", "remove_blacklist_name",
         # הגדרות קבוצות
         "public_group_id", "private_group_id",
+        # הגדרות תחנה מורחבות
+        "edit_hours_day",
     }
 
     def _is_multi_step_flow_state(self, state: str) -> bool:
@@ -147,6 +149,13 @@ class StationOwnerStateHandler:
             StationOwnerState.GROUP_SETTINGS.value: self._handle_group_settings,
             StationOwnerState.SET_PUBLIC_GROUP.value: self._handle_set_public_group,
             StationOwnerState.SET_PRIVATE_GROUP.value: self._handle_set_private_group,
+
+            # סעיף 8: הגדרות תחנה מורחבות
+            StationOwnerState.STATION_SETTINGS.value: self._handle_station_settings,
+            StationOwnerState.EDIT_STATION_NAME.value: self._handle_edit_name,
+            StationOwnerState.EDIT_STATION_DESCRIPTION.value: self._handle_edit_description,
+            StationOwnerState.EDIT_OPERATING_HOURS.value: self._handle_edit_operating_hours,
+            StationOwnerState.EDIT_SERVICE_AREAS.value: self._handle_edit_service_areas,
         }
         return handlers.get(state, self._handle_unknown)
 
@@ -168,6 +177,7 @@ class StationOwnerStateHandler:
                 ["👤 ניהול בעלים", "👥 ניהול סדרנים"],
                 ["💰 ארנק תחנה", "📊 דוח גבייה"],
                 ["🚫 רשימה שחורה", "⚙️ הגדרות קבוצות"],
+                ["🏪 הגדרות תחנה"],
             ],
             inline=True
         )
@@ -194,6 +204,9 @@ class StationOwnerStateHandler:
 
         if "הגדרות קבוצות" in msg or "קבוצות" in msg:
             return await self._show_group_settings(user, context)
+
+        if "הגדרות תחנה" in msg:
+            return await self._show_station_settings(user, context)
 
         return await self._show_menu(user, context)
 
@@ -1019,6 +1032,313 @@ class StationOwnerStateHandler:
             ]
         )
         return response, StationOwnerState.GROUP_SETTINGS.value, {}
+
+    # ==================== סעיף 8: הגדרות תחנה מורחבות ====================
+
+    # שמות ימים בעברית לתצוגה
+    _DAYS_HE = {
+        "sunday": "ראשון",
+        "monday": "שני",
+        "tuesday": "שלישי",
+        "wednesday": "רביעי",
+        "thursday": "חמישי",
+        "friday": "שישי",
+        "saturday": "שבת",
+    }
+    _DAYS_ORDER = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
+
+    async def _show_station_settings(self, user: User, context: dict):
+        """הצגת הגדרות תחנה מורחבות"""
+        settings = await self.station_service.get_station_settings(self.station_id)
+
+        name = settings.get("name", "תחנה")
+        desc = settings.get("description") or "לא הוגדר"
+        logo = settings.get("logo_url") or "לא הוגדר"
+
+        # שעות פעילות
+        hours = settings.get("operating_hours")
+        hours_text = ""
+        if hours:
+            for day_key in self._DAYS_ORDER:
+                day_he = self._DAYS_HE[day_key]
+                schedule = hours.get(day_key)
+                if schedule:
+                    hours_text += f"  {day_he}: {schedule['open']}-{schedule['close']}\n"
+                else:
+                    hours_text += f"  {day_he}: סגור\n"
+        else:
+            hours_text = "  לא הוגדרו\n"
+
+        # אזורי שירות
+        areas = settings.get("service_areas")
+        areas_text = ", ".join(areas) if areas else "לא הוגדרו"
+
+        text = (
+            f"🏪 <b>הגדרות תחנה — {escape(name)}</b>\n\n"
+            f"📝 תיאור: {escape(desc)}\n"
+            f"🖼 לוגו: {escape(logo)}\n\n"
+            f"🕐 <b>שעות פעילות:</b>\n{hours_text}\n"
+            f"📍 <b>אזורי שירות:</b> {escape(areas_text)}\n\n"
+            "בחר מה לערוך:"
+        )
+
+        response = MessageResponse(
+            text,
+            keyboard=[
+                ["✏️ שם תחנה", "📝 תיאור"],
+                ["🕐 שעות פעילות", "📍 אזורי שירות"],
+                ["🔙 חזרה לתפריט"],
+            ]
+        )
+        return response, StationOwnerState.STATION_SETTINGS.value, {}
+
+    async def _handle_station_settings(
+        self, user: User, message: str, context: dict
+    ):
+        """תפריט הגדרות תחנה מורחבות"""
+        if "חזרה" in message:
+            return await self._show_menu(user, context)
+
+        if "שם" in message:
+            station = await self.station_service.get_station(self.station_id)
+            current_name = station.name if station else "תחנה"
+            response = MessageResponse(
+                f"✏️ <b>עריכת שם תחנה</b>\n\n"
+                f"שם נוכחי: <b>{escape(current_name)}</b>\n\n"
+                "הזן שם חדש לתחנה:"
+            )
+            return response, StationOwnerState.EDIT_STATION_NAME.value, {}
+
+        if "תיאור" in message:
+            station = await self.station_service.get_station(self.station_id)
+            current_desc = station.description if station else None
+            response = MessageResponse(
+                f"📝 <b>עריכת תיאור תחנה</b>\n\n"
+                f"תיאור נוכחי: {escape(current_desc or 'לא הוגדר')}\n\n"
+                "הזן תיאור חדש (עד 500 תווים):\n"
+                "לביטול התיאור — שלח 'מחק'"
+            )
+            return response, StationOwnerState.EDIT_STATION_DESCRIPTION.value, {}
+
+        if "שעות" in message:
+            return await self._show_edit_operating_hours(user, context)
+
+        if "אזור" in message or "שירות" in message:
+            station = await self.station_service.get_station(self.station_id)
+            current_areas = station.service_areas if station else None
+            areas_text = ", ".join(current_areas) if current_areas else "לא הוגדרו"
+            response = MessageResponse(
+                f"📍 <b>עריכת אזורי שירות</b>\n\n"
+                f"אזורים נוכחיים: {escape(areas_text)}\n\n"
+                "הזן רשימת אזורי שירות, מופרדים בפסיקים.\n"
+                "לדוגמה: תל אביב, רמת גן, גבעתיים\n\n"
+                "לביטול — שלח 'מחק'"
+            )
+            return response, StationOwnerState.EDIT_SERVICE_AREAS.value, {}
+
+        return await self._show_station_settings(user, context)
+
+    async def _handle_edit_name(
+        self, user: User, message: str, context: dict
+    ):
+        """עריכת שם התחנה"""
+        if "חזרה" in message:
+            return await self._show_station_settings(user, context)
+
+        name = message.strip()
+        success, msg = await self.station_service.update_station_settings(
+            station_id=self.station_id,
+            name=name,
+        )
+
+        if success:
+            return await self._show_station_settings(user, context)
+
+        response = MessageResponse(
+            f"{msg}\n\nהזן שם תקין:",
+            keyboard=[["🔙 חזרה"]]
+        )
+        return response, StationOwnerState.EDIT_STATION_NAME.value, {}
+
+    async def _handle_edit_description(
+        self, user: User, message: str, context: dict
+    ):
+        """עריכת תיאור התחנה"""
+        if "חזרה" in message:
+            return await self._show_station_settings(user, context)
+
+        text = message.strip()
+
+        if text == "מחק":
+            await self.station_service.update_station_settings(
+                station_id=self.station_id,
+                description=None,
+            )
+            return await self._show_station_settings(user, context)
+
+        success, msg = await self.station_service.update_station_settings(
+            station_id=self.station_id,
+            description=text,
+        )
+
+        if success:
+            return await self._show_station_settings(user, context)
+
+        response = MessageResponse(
+            f"{msg}\n\nהזן תיאור תקין:",
+            keyboard=[["🔙 חזרה"]]
+        )
+        return response, StationOwnerState.EDIT_STATION_DESCRIPTION.value, {}
+
+    async def _show_edit_operating_hours(self, user: User, context: dict):
+        """הצגת מסך עריכת שעות פעילות"""
+        station = await self.station_service.get_station(self.station_id)
+        hours = station.operating_hours if station else None
+
+        text = "🕐 <b>עריכת שעות פעילות</b>\n\n"
+        if hours:
+            for day_key in self._DAYS_ORDER:
+                day_he = self._DAYS_HE[day_key]
+                schedule = hours.get(day_key)
+                if schedule:
+                    text += f"  {day_he}: {schedule['open']}-{schedule['close']}\n"
+                else:
+                    text += f"  {day_he}: סגור\n"
+        else:
+            text += "לא הוגדרו שעות פעילות.\n"
+
+        text += (
+            "\nשלח שעות בפורמט:\n"
+            "<code>יום HH:MM-HH:MM</code>\n"
+            "לדוגמה: <code>ראשון 08:00-20:00</code>\n"
+            "ליום סגור: <code>שבת סגור</code>\n\n"
+            "לאיפוס כל השעות — שלח 'מחק'"
+        )
+
+        response = MessageResponse(
+            text,
+            keyboard=[["🔙 חזרה"]],
+        )
+        return response, StationOwnerState.EDIT_OPERATING_HOURS.value, {}
+
+    async def _handle_edit_operating_hours(
+        self, user: User, message: str, context: dict
+    ):
+        """עריכת שעות פעילות — קבלת יום ושעות"""
+        if "חזרה" in message:
+            return await self._show_station_settings(user, context)
+
+        text = message.strip()
+
+        if text == "מחק":
+            await self.station_service.update_station_settings(
+                station_id=self.station_id,
+                operating_hours=None,
+            )
+            return await self._show_station_settings(user, context)
+
+        # ניתוח "יום HH:MM-HH:MM" או "יום סגור"
+        # מיפוי ימים בעברית לאנגלית
+        he_to_en = {v: k for k, v in self._DAYS_HE.items()}
+
+        import re
+        match = re.match(r"^(\S+)\s+(.+)$", text)
+        if not match:
+            response = MessageResponse(
+                "פורמט לא תקין.\n"
+                "שלח: <code>יום HH:MM-HH:MM</code>\n"
+                "לדוגמה: <code>ראשון 08:00-20:00</code>",
+                keyboard=[["🔙 חזרה"]],
+            )
+            return response, StationOwnerState.EDIT_OPERATING_HOURS.value, {}
+
+        day_he = match.group(1)
+        time_part = match.group(2).strip()
+
+        day_en = he_to_en.get(day_he)
+        if not day_en:
+            response = MessageResponse(
+                f"יום לא מוכר: {escape(day_he)}\n"
+                "ימים תקינים: ראשון, שני, שלישי, רביעי, חמישי, שישי, שבת",
+                keyboard=[["🔙 חזרה"]],
+            )
+            return response, StationOwnerState.EDIT_OPERATING_HOURS.value, {}
+
+        # קבלת שעות קיימות ועדכון
+        station = await self.station_service.get_station(self.station_id)
+        current_hours = dict(station.operating_hours) if station and station.operating_hours else {}
+
+        if time_part == "סגור":
+            current_hours[day_en] = None
+        else:
+            time_match = re.match(r"^(\d{2}:\d{2})-(\d{2}:\d{2})$", time_part)
+            if not time_match:
+                response = MessageResponse(
+                    "פורמט שעות לא תקין.\n"
+                    "שלח: <code>HH:MM-HH:MM</code> (לדוגמה: 08:00-20:00)\n"
+                    "או <code>סגור</code>",
+                    keyboard=[["🔙 חזרה"]],
+                )
+                return response, StationOwnerState.EDIT_OPERATING_HOURS.value, {}
+
+            open_time = time_match.group(1)
+            close_time = time_match.group(2)
+            current_hours[day_en] = {"open": open_time, "close": close_time}
+
+        success, msg = await self.station_service.update_station_settings(
+            station_id=self.station_id,
+            operating_hours=current_hours,
+        )
+
+        if success:
+            # מציג חזרה את מסך שעות הפעילות כדי לאפשר עריכת ימים נוספים
+            return await self._show_edit_operating_hours(user, context)
+
+        response = MessageResponse(
+            msg,
+            keyboard=[["🔙 חזרה"]],
+        )
+        return response, StationOwnerState.EDIT_OPERATING_HOURS.value, {}
+
+    async def _handle_edit_service_areas(
+        self, user: User, message: str, context: dict
+    ):
+        """עריכת אזורי שירות"""
+        if "חזרה" in message:
+            return await self._show_station_settings(user, context)
+
+        text = message.strip()
+
+        if text == "מחק":
+            await self.station_service.update_station_settings(
+                station_id=self.station_id,
+                service_areas=None,
+            )
+            return await self._show_station_settings(user, context)
+
+        # פיצול לפי פסיקים
+        areas = [a.strip() for a in text.split(",") if a.strip()]
+
+        if not areas:
+            response = MessageResponse(
+                "רשימה ריקה. הזן אזורי שירות מופרדים בפסיקים:",
+                keyboard=[["🔙 חזרה"]],
+            )
+            return response, StationOwnerState.EDIT_SERVICE_AREAS.value, {}
+
+        success, msg = await self.station_service.update_station_settings(
+            station_id=self.station_id,
+            service_areas=areas,
+        )
+
+        if success:
+            return await self._show_station_settings(user, context)
+
+        response = MessageResponse(
+            f"{msg}\n\nהזן רשימת אזורים תקינה:",
+            keyboard=[["🔙 חזרה"]],
+        )
+        return response, StationOwnerState.EDIT_SERVICE_AREAS.value, {}
 
     # ==================== Unknown ====================
 
