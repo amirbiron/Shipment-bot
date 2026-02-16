@@ -5,7 +5,8 @@ Station Model - תחנת משלוחים
 לכל תחנה יש בעלים (station owner) וסדרנים (dispatchers) שמנהלים את המשלוחים.
 """
 from datetime import datetime
-from sqlalchemy import Column, Integer, BigInteger, String, DateTime, Float, Boolean, ForeignKey
+from sqlalchemy import Column, Integer, BigInteger, String, DateTime, Float, Boolean, ForeignKey, JSON
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
 from app.db.database import Base
@@ -29,6 +30,13 @@ class Station(Base):
     private_group_chat_id = Column(String(100), nullable=True)  # קבוצה פרטית לכרטיסים סגורים
     public_group_platform = Column(String(20), nullable=True)  # "telegram" / "whatsapp"
     private_group_platform = Column(String(20), nullable=True)
+
+    # הגדרות מורחבות [סעיף 8]
+    # JSONB בפרודקשן (PostgreSQL), JSON ב-SQLite (בדיקות)
+    description = Column(String(500), nullable=True)  # תיאור התחנה
+    operating_hours = Column(JSON().with_variant(JSONB, "postgresql"), nullable=True)  # שעות פעילות
+    service_areas = Column(JSON().with_variant(JSONB, "postgresql"), nullable=True)  # אזורי שירות
+    logo_url = Column(String(500), nullable=True)  # קישור ללוגו או file_id
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

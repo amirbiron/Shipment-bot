@@ -114,6 +114,12 @@ STATION_OWNER_LABELS: dict[str, str] = {
     StationOwnerState.GROUP_SETTINGS.value: "הגדרות קבוצות",
     StationOwnerState.SET_PUBLIC_GROUP.value: "קבוצה ציבורית",
     StationOwnerState.SET_PRIVATE_GROUP.value: "קבוצה פרטית",
+    # סעיף 8: הגדרות תחנה מורחבות
+    StationOwnerState.STATION_SETTINGS.value: "הגדרות תחנה",
+    StationOwnerState.EDIT_STATION_NAME.value: "עריכת שם תחנה",
+    StationOwnerState.EDIT_STATION_DESCRIPTION.value: "עריכת תיאור",
+    StationOwnerState.EDIT_OPERATING_HOURS.value: "שעות פעילות",
+    StationOwnerState.EDIT_SERVICE_AREAS.value: "אזורי שירות",
 }
 
 

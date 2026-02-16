@@ -325,6 +325,20 @@ async def run_migration_008(conn: AsyncConnection) -> None:
     """))
 
 
+async def run_migration_009(conn: AsyncConnection) -> None:
+    """מיגרציה 009 - הגדרות תחנה מורחבות (סעיף 8 - Issue #210).
+
+    הוספת שדות: description, operating_hours, service_areas, logo_url לטבלת stations.
+    """
+    await conn.execute(text("""
+        ALTER TABLE stations
+            ADD COLUMN IF NOT EXISTS description VARCHAR(500),
+            ADD COLUMN IF NOT EXISTS operating_hours JSONB,
+            ADD COLUMN IF NOT EXISTS service_areas JSONB,
+            ADD COLUMN IF NOT EXISTS logo_url VARCHAR(500);
+    """))
+
+
 async def run_all_migrations(conn: AsyncConnection) -> None:
     """הרצת כל המיגרציות ברצף (ללא ALTER TYPE — ראה add_enum_values)."""
     logger.info("Running migration 001...")
@@ -343,3 +357,5 @@ async def run_all_migrations(conn: AsyncConnection) -> None:
     await run_migration_007(conn)
     logger.info("Running migration 008...")
     await run_migration_008(conn)
+    logger.info("Running migration 009...")
+    await run_migration_009(conn)

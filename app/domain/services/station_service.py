@@ -21,7 +21,7 @@ from app.db.models.delivery import Delivery, DeliveryStatus
 from app.db.models.user import User, UserRole
 from app.db.models.courier_wallet import CourierWallet
 from app.core.logging import get_logger
-from app.core.validation import PhoneNumberValidator
+from app.core.validation import PhoneNumberValidator, TextSanitizer, OperatingHoursValidator, ServiceAreasValidator
 from app.core.exceptions import ValidationException
 from html import escape
 
@@ -852,6 +852,122 @@ class StationService:
             )
         )
         return result.scalar_one_or_none() is not None
+
+    # ==================== סעיף 8: הגדרות תחנה מורחבות ====================
+
+    async def get_station_settings(
+        self,
+        station_id: int,
+    ) -> dict:
+        """קבלת הגדרות מורחבות של תחנה"""
+        station = await self.get_station(station_id)
+        if not station:
+            return {}
+
+        return {
+            "name": station.name,
+            "description": station.description,
+            "operating_hours": station.operating_hours,
+            "service_areas": station.service_areas,
+            "logo_url": station.logo_url,
+        }
+
+    async def update_station_settings(
+        self,
+        station_id: int,
+        name: str | None = None,
+        description: str | None = ...,  # sentinel — None מוחק, ... = לא שלחו
+        operating_hours: dict | None = ...,
+        service_areas: list | None = ...,
+        logo_url: str | None = ...,
+    ) -> tuple[bool, str]:
+        """עדכון הגדרות מורחבות של תחנה.
+
+        שדות עם ערך ... (sentinel) לא יעודכנו.
+        שדות עם ערך None ינוקו (יאופסו ל-null).
+
+        Args:
+            station_id: מזהה התחנה
+            name: שם התחנה (2-200 תווים)
+            description: תיאור התחנה (עד 500 תווים), None = מחיקה
+            operating_hours: שעות פעילות בפורמט JSON, None = מחיקה
+            service_areas: רשימת אזורי שירות, None = מחיקה
+            logo_url: קישור ללוגו, None = מחיקה
+
+        Returns:
+            (success, message)
+        """
+        station = await self.get_station(station_id)
+        if not station:
+            return False, "התחנה לא נמצאה."
+
+        # --- שלב 1: ולידציה וסניטציה — לפני כל שינוי על האובייקט ---
+        # אוספים את כל העדכונים ב-dict, ומחילים רק אם הכל תקין.
+        updates: dict[str, object] = {}
+
+        # ולידציית שם
+        if name is not None:
+            sanitized_name = TextSanitizer.sanitize(name.strip(), max_length=200)
+            if len(sanitized_name) < 2:
+                return False, "שם התחנה חייב להכיל לפחות 2 תווים."
+            is_safe, pattern = TextSanitizer.check_for_injection(sanitized_name)
+            if not is_safe:
+                return False, "שם התחנה מכיל תוכן לא תקין."
+            updates["name"] = sanitized_name
+
+        # ולידציית תיאור
+        if description is not ...:
+            if description is not None:
+                sanitized_desc = TextSanitizer.sanitize(description.strip(), max_length=500)
+                is_safe, pattern = TextSanitizer.check_for_injection(sanitized_desc)
+                if not is_safe:
+                    return False, "התיאור מכיל תוכן לא תקין."
+                updates["description"] = sanitized_desc
+            else:
+                updates["description"] = None
+
+        # ולידציית שעות פעילות
+        if operating_hours is not ...:
+            if operating_hours is not None:
+                is_valid, error = OperatingHoursValidator.validate(operating_hours)
+                if not is_valid:
+                    return False, error
+                updates["operating_hours"] = operating_hours
+            else:
+                updates["operating_hours"] = None
+
+        # ולידציית אזורי שירות
+        if service_areas is not ...:
+            if service_areas is not None:
+                is_valid, error = ServiceAreasValidator.validate(service_areas)
+                if not is_valid:
+                    return False, error
+                updates["service_areas"] = ServiceAreasValidator.sanitize(service_areas)
+            else:
+                updates["service_areas"] = None
+
+        # ולידציית לוגו
+        if logo_url is not ...:
+            if logo_url is not None:
+                sanitized_url = TextSanitizer.sanitize(logo_url.strip(), max_length=500)
+                is_safe, pattern = TextSanitizer.check_for_injection(sanitized_url)
+                if not is_safe:
+                    return False, "קישור הלוגו מכיל תוכן לא תקין."
+                updates["logo_url"] = sanitized_url
+            else:
+                updates["logo_url"] = None
+
+        # --- שלב 2: כל הולידציות עברו — מחילים את העדכונים ---
+        for field, value in updates.items():
+            setattr(station, field, value)
+
+        await self.db.commit()
+
+        logger.info(
+            "הגדרות תחנה עודכנו",
+            extra_data={"station_id": station_id}
+        )
+        return True, "הגדרות התחנה עודכנו בהצלחה."
 
     # ==================== שלב 4: הגדרות קבוצות ====================
 

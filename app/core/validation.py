@@ -377,6 +377,109 @@ class NameValidator:
         return True, None
 
 
+class OperatingHoursValidator:
+    """ולידציית שעות פעילות של תחנה"""
+
+    # ימי השבוע באנגלית (מפתחות ב-JSON)
+    VALID_DAYS = {"sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"}
+
+    # פורמט שעה: HH:MM (24 שעות)
+    TIME_PATTERN = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+
+    @classmethod
+    def validate(cls, hours: dict) -> tuple[bool, str | None]:
+        """
+        ולידציית מבנה שעות פעילות.
+
+        פורמט צפוי:
+        {
+            "sunday": {"open": "08:00", "close": "20:00"},
+            "monday": {"open": "08:00", "close": "20:00"},
+            ...
+        }
+        יום יכול להיות null (סגור).
+
+        Returns:
+            (is_valid, error_message)
+        """
+        if not isinstance(hours, dict):
+            return False, "שעות פעילות חייבות להיות אובייקט JSON"
+
+        for day, schedule in hours.items():
+            if day not in cls.VALID_DAYS:
+                return False, f"יום לא תקין: {day}"
+
+            if schedule is None:
+                continue  # יום סגור
+
+            if not isinstance(schedule, dict):
+                return False, f"מבנה שעות לא תקין עבור {day}"
+
+            if "open" not in schedule or "close" not in schedule:
+                return False, f"חסרים שדות open/close עבור {day}"
+
+            # הגנת טיפוסים — ערכי open/close חייבים להיות מחרוזות
+            if not isinstance(schedule["open"], str) or not isinstance(schedule["close"], str):
+                return False, f"ערכי שעות חייבים להיות מחרוזות עבור {day}"
+
+            if not cls.TIME_PATTERN.match(schedule["open"]):
+                return False, f"שעת פתיחה לא תקינה עבור {day}: {schedule['open']}"
+
+            if not cls.TIME_PATTERN.match(schedule["close"]):
+                return False, f"שעת סגירה לא תקינה עבור {day}: {schedule['close']}"
+
+            # ולידציה ש-open קטן מ-close (שעות לגיטימיות)
+            if schedule["open"] >= schedule["close"]:
+                return False, f"שעת פתיחה חייבת להיות לפני שעת סגירה עבור {day}"
+
+        return True, None
+
+
+class ServiceAreasValidator:
+    """ולידציית אזורי שירות של תחנה"""
+
+    MAX_AREAS = 50
+    MAX_AREA_LENGTH = 100
+
+    @classmethod
+    def validate(cls, areas: list) -> tuple[bool, str | None]:
+        """
+        ולידציית רשימת אזורי שירות.
+
+        פורמט צפוי: ["תל אביב", "רמת גן", ...]
+
+        Returns:
+            (is_valid, error_message)
+        """
+        if not isinstance(areas, list):
+            return False, "אזורי שירות חייבים להיות רשימה"
+
+        if len(areas) > cls.MAX_AREAS:
+            return False, f"מקסימום {cls.MAX_AREAS} אזורי שירות"
+
+        for i, area in enumerate(areas):
+            if not isinstance(area, str):
+                return False, f"אזור שירות {i + 1} חייב להיות מחרוזת"
+
+            area = area.strip()
+            if not area:
+                return False, f"אזור שירות {i + 1} ריק"
+
+            if len(area) > cls.MAX_AREA_LENGTH:
+                return False, f"אזור שירות {i + 1} ארוך מדי (מקסימום {cls.MAX_AREA_LENGTH} תווים)"
+
+            is_safe, pattern = TextSanitizer.check_for_injection(area)
+            if not is_safe:
+                return False, f"אזור שירות {i + 1} מכיל תוכן לא תקין"
+
+        return True, None
+
+    @classmethod
+    def sanitize(cls, areas: list) -> list[str]:
+        """סניטציה של רשימת אזורי שירות"""
+        return [TextSanitizer.sanitize(a.strip(), max_length=cls.MAX_AREA_LENGTH) for a in areas if a.strip()]
+
+
 class AmountValidator:
     """Monetary amount validation"""
 
