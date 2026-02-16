@@ -135,7 +135,7 @@ async def add_to_blacklist(
     """הוספה לרשימה שחורה"""
     station_service = StationService(db)
     success, message = await station_service.add_to_blacklist(
-        auth.station_id, data.phone_number, data.reason,
+        auth.station_id, data.phone_number, data.reason, actor_user_id=auth.user_id,
     )
     if not success:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message)
@@ -161,7 +161,7 @@ async def add_to_blacklist_bulk(
 
     for entry in data.entries:
         success, message = await station_service.add_to_blacklist(
-            auth.station_id, entry.phone_number, entry.reason,
+            auth.station_id, entry.phone_number, entry.reason, actor_user_id=auth.user_id,
         )
         results.append(BulkResultItem(
             phone_masked=PhoneNumberValidator.mask(entry.phone_number),
@@ -194,7 +194,7 @@ async def remove_from_blacklist(
     """הסרה מרשימה שחורה"""
     station_service = StationService(db)
     success, message = await station_service.remove_from_blacklist(
-        auth.station_id, courier_id,
+        auth.station_id, courier_id, actor_user_id=auth.user_id,
     )
     if not success:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message)

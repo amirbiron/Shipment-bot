@@ -108,7 +108,7 @@ async def add_owner(
     """הוספת בעלים — מבוסס על StationService.add_owner"""
     station_service = StationService(db)
     success, message = await station_service.add_owner(
-        auth.station_id, data.phone_number,
+        auth.station_id, data.phone_number, actor_user_id=auth.user_id,
     )
     if not success:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message)
@@ -134,7 +134,7 @@ async def remove_owner(
     """הסרת בעלים — לא ניתן להסיר את האחרון"""
     station_service = StationService(db)
     success, message = await station_service.remove_owner(
-        auth.station_id, user_id,
+        auth.station_id, user_id, actor_user_id=auth.user_id,
     )
     if not success:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message)

@@ -20,6 +20,7 @@ from app.db.models.manual_charge import ManualCharge
 from app.db.models.delivery import Delivery, DeliveryStatus
 from app.db.models.user import User, UserRole
 from app.db.models.courier_wallet import CourierWallet
+from app.db.models.audit_log import AuditLog, AuditActionType
 from app.core.logging import get_logger
 from app.core.validation import PhoneNumberValidator, TextSanitizer, OperatingHoursValidator, ServiceAreasValidator
 from app.core.exceptions import ValidationException
@@ -33,6 +34,85 @@ class StationService:
 
     def __init__(self, db: AsyncSession):
         self.db = db
+
+    # ==================== לוג ביקורת ====================
+
+    async def _record_audit(
+        self,
+        station_id: int,
+        actor_user_id: int,
+        action: AuditActionType,
+        target_user_id: int | None = None,
+        details: dict | None = None,
+    ) -> None:
+        """רישום פעולה מנהלתית בלוג ביקורת — באותה טרנזקציה עם הפעולה.
+
+        חובה לקרוא לפני commit() כדי להבטיח אטומיות.
+        """
+        entry = AuditLog(
+            station_id=station_id,
+            actor_user_id=actor_user_id,
+            action=action,
+            target_user_id=target_user_id,
+            details=details,
+        )
+        self.db.add(entry)
+
+    async def get_audit_logs(
+        self,
+        station_id: int,
+        action: AuditActionType | None = None,
+        actor_user_id: int | None = None,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> tuple[list[AuditLog], int]:
+        """קבלת לוג ביקורת עם סינון ו-pagination.
+
+        Args:
+            station_id: מזהה התחנה
+            action: סינון לפי סוג פעולה
+            actor_user_id: סינון לפי משתמש מבצע
+            date_from: מתאריך
+            date_to: עד תאריך
+            page: עמוד (1-based)
+            page_size: גודל עמוד
+
+        Returns:
+            (רשימת רשומות, סה"כ רשומות)
+        """
+        from sqlalchemy import func
+
+        base_where = [AuditLog.station_id == station_id]
+
+        if action is not None:
+            base_where.append(AuditLog.action == action)
+        if actor_user_id is not None:
+            base_where.append(AuditLog.actor_user_id == actor_user_id)
+        if date_from is not None:
+            base_where.append(AuditLog.created_at >= date_from)
+        if date_to is not None:
+            base_where.append(AuditLog.created_at <= date_to)
+
+        # ספירה
+        count_result = await self.db.execute(
+            select(func.count(AuditLog.id)).where(*base_where)
+        )
+        total = count_result.scalar() or 0
+
+        # שליפה
+        offset = (page - 1) * page_size
+        result = await self.db.execute(
+            select(AuditLog)
+            .where(*base_where)
+            .order_by(AuditLog.created_at.desc())
+            .offset(offset)
+            .limit(page_size)
+        )
+        entries = list(result.scalars().all())
+
+        return entries, total
 
     async def get_or_create_user_by_phone(
         self,
@@ -209,6 +289,7 @@ class StationService:
         self,
         station_id: int,
         phone_number: str,
+        actor_user_id: int | None = None,
     ) -> tuple[bool, str]:
         """הוספת בעלים לתחנה לפי מספר טלפון"""
         if not PhoneNumberValidator.validate(phone_number):
@@ -243,6 +324,19 @@ class StationService:
         if user.role != UserRole.STATION_OWNER:
             user.role = UserRole.STATION_OWNER
 
+        # רישום בלוג ביקורת
+        if actor_user_id is not None:
+            await self._record_audit(
+                station_id=station_id,
+                actor_user_id=actor_user_id,
+                action=AuditActionType.OWNER_ADDED,
+                target_user_id=user.id,
+                details={
+                    "target_phone": PhoneNumberValidator.mask(normalized),
+                    "target_name": user.name or user.full_name or "לא ידוע",
+                },
+            )
+
         await self.db.commit()
 
         logger.info(
@@ -259,6 +353,7 @@ class StationService:
         self,
         station_id: int,
         user_id: int,
+        actor_user_id: int | None = None,
     ) -> tuple[bool, str]:
         """הסרת בעלים מתחנה — לא ניתן להסיר את הבעלים האחרון"""
         # בדיקה שיש יותר מבעלים אחד
@@ -320,6 +415,15 @@ class StationService:
                     }
                 )
 
+        # רישום בלוג ביקורת
+        if actor_user_id is not None:
+            await self._record_audit(
+                station_id=station_id,
+                actor_user_id=actor_user_id,
+                action=AuditActionType.OWNER_REMOVED,
+                target_user_id=user_id,
+            )
+
         await self.db.commit()
 
         logger.info(
@@ -377,7 +481,8 @@ class StationService:
     async def add_dispatcher(
         self,
         station_id: int,
-        phone_number: str
+        phone_number: str,
+        actor_user_id: int | None = None,
     ) -> tuple[bool, str]:
         """
         הוספת סדרן לתחנה לפי מספר טלפון.
@@ -413,6 +518,19 @@ class StationService:
             )
             self.db.add(dispatcher)
 
+        # רישום בלוג ביקורת
+        if actor_user_id is not None:
+            await self._record_audit(
+                station_id=station_id,
+                actor_user_id=actor_user_id,
+                action=AuditActionType.DISPATCHER_ADDED,
+                target_user_id=user.id,
+                details={
+                    "target_phone": PhoneNumberValidator.mask(normalized),
+                    "target_name": user.name or "לא ידוע",
+                },
+            )
+
         await self.db.commit()
 
         logger.info(
@@ -428,7 +546,8 @@ class StationService:
     async def remove_dispatcher(
         self,
         station_id: int,
-        user_id: int
+        user_id: int,
+        actor_user_id: int | None = None,
     ) -> tuple[bool, str]:
         """הסרת סדרן מתחנה"""
         result = await self.db.execute(
@@ -443,6 +562,16 @@ class StationService:
             return False, "הסדרן לא נמצא בתחנה."
 
         dispatcher.is_active = False
+
+        # רישום בלוג ביקורת
+        if actor_user_id is not None:
+            await self._record_audit(
+                station_id=station_id,
+                actor_user_id=actor_user_id,
+                action=AuditActionType.DISPATCHER_REMOVED,
+                target_user_id=user_id,
+            )
+
         await self.db.commit()
 
         logger.info(
@@ -621,6 +750,19 @@ class StationService:
         )
         self.db.add(ledger_entry)
 
+        # רישום בלוג ביקורת — dispatcher_id הוא הפועל
+        await self._record_audit(
+            station_id=station_id,
+            actor_user_id=dispatcher_id,
+            action=AuditActionType.MANUAL_CHARGE_CREATED,
+            target_user_id=courier_id,
+            details={
+                "driver_name": normalized_name,
+                "amount": float(amount_decimal),
+                "description": description,
+            },
+        )
+
         await self.db.commit()
         await self.db.refresh(charge)
 
@@ -696,6 +838,18 @@ class StationService:
         wallet.commission_rate = rate
         wallet.updated_at = datetime.utcnow()
 
+        # רישום בלוג ביקורת
+        if actor_user_id is not None:
+            await self._record_audit(
+                station_id=station_id,
+                actor_user_id=actor_user_id,
+                action=AuditActionType.COMMISSION_RATE_UPDATED,
+                details={
+                    "old_value": f"{int(old_rate * 100)}%" if old_rate is not None else None,
+                    "new_value": f"{int(rate * 100)}%",
+                },
+            )
+
         await self.db.commit()
 
         logger.info(
@@ -763,7 +917,8 @@ class StationService:
         self,
         station_id: int,
         phone_number: str,
-        reason: str = ""
+        reason: str = "",
+        actor_user_id: int | None = None,
     ) -> tuple[bool, str]:
         """הוספת נהג לרשימה שחורה של תחנה"""
         if not PhoneNumberValidator.validate(phone_number):
@@ -796,6 +951,20 @@ class StationService:
             reason=reason,
         )
         self.db.add(entry)
+
+        # רישום בלוג ביקורת
+        if actor_user_id is not None:
+            await self._record_audit(
+                station_id=station_id,
+                actor_user_id=actor_user_id,
+                action=AuditActionType.BLACKLIST_ADDED,
+                target_user_id=user.id,
+                details={
+                    "target_phone": PhoneNumberValidator.mask(normalized),
+                    "reason": reason,
+                },
+            )
+
         await self.db.commit()
 
         logger.info(
@@ -811,7 +980,8 @@ class StationService:
     async def remove_from_blacklist(
         self,
         station_id: int,
-        courier_id: int
+        courier_id: int,
+        actor_user_id: int | None = None,
     ) -> tuple[bool, str]:
         """הסרת נהג מרשימה שחורה של תחנה"""
         result = await self.db.execute(
@@ -826,6 +996,16 @@ class StationService:
             return False, "הנהג לא נמצא ברשימה השחורה."
 
         await self.db.delete(entry)
+
+        # רישום בלוג ביקורת
+        if actor_user_id is not None:
+            await self._record_audit(
+                station_id=station_id,
+                actor_user_id=actor_user_id,
+                action=AuditActionType.BLACKLIST_REMOVED,
+                target_user_id=courier_id,
+            )
+
         await self.db.commit()
 
         return True, "הנהג הוסר מהרשימה השחורה."
@@ -883,6 +1063,7 @@ class StationService:
         operating_hours: dict | None = ...,
         service_areas: list | None = ...,
         logo_url: str | None = ...,
+        actor_user_id: int | None = None,
     ) -> tuple[bool, str]:
         """עדכון הגדרות מורחבות של תחנה.
 
@@ -960,9 +1141,29 @@ class StationService:
             else:
                 updates["logo_url"] = None
 
-        # --- שלב 2: כל הולידציות עברו — מחילים את העדכונים ---
+        # --- שלב 2: כל הולידציות עברו — שמירת ערכים ישנים ל-audit ---
+        old_values: dict[str, object] = {}
+        for field in updates:
+            old_values[field] = getattr(station, field)
+
+        # --- שלב 3: מחילים את העדכונים ---
         for field, value in updates.items():
             setattr(station, field, value)
+
+        # רישום בלוג ביקורת
+        if actor_user_id is not None and updates:
+            changes: dict[str, dict[str, object]] = {}
+            for field in updates:
+                changes[field] = {
+                    "old_value": str(old_values[field]) if old_values[field] is not None else None,
+                    "new_value": str(updates[field]) if updates[field] is not None else None,
+                }
+            await self._record_audit(
+                station_id=station_id,
+                actor_user_id=actor_user_id,
+                action=AuditActionType.STATION_SETTINGS_UPDATED,
+                details={"fields": list(updates.keys()), "changes": changes},
+            )
 
         await self.db.commit()
 
@@ -981,11 +1182,16 @@ class StationService:
         public_group_platform: str | None = None,
         private_group_chat_id: str | None = None,
         private_group_platform: str | None = None,
+        actor_user_id: int | None = None,
     ) -> tuple[bool, str]:
         """עדכון מזהי קבוצות של תחנה"""
         station = await self.get_station(station_id)
         if not station:
             return False, "התחנה לא נמצאה."
+
+        # שמירת ערכים ישנים ל-audit
+        old_public = station.public_group_chat_id
+        old_private = station.private_group_chat_id
 
         if public_group_chat_id is not None:
             station.public_group_chat_id = public_group_chat_id
@@ -993,6 +1199,20 @@ class StationService:
         if private_group_chat_id is not None:
             station.private_group_chat_id = private_group_chat_id
             station.private_group_platform = private_group_platform or "telegram"
+
+        # רישום בלוג ביקורת
+        if actor_user_id is not None:
+            details: dict[str, object] = {}
+            if public_group_chat_id is not None:
+                details["public_group"] = {"old_value": old_public, "new_value": public_group_chat_id}
+            if private_group_chat_id is not None:
+                details["private_group"] = {"old_value": old_private, "new_value": private_group_chat_id}
+            await self._record_audit(
+                station_id=station_id,
+                actor_user_id=actor_user_id,
+                action=AuditActionType.GROUP_SETTINGS_UPDATED,
+                details=details,
+            )
 
         await self.db.commit()
 
@@ -1078,6 +1298,7 @@ class StationService:
         auto_block_enabled: bool | None = None,
         auto_block_grace_months: int | None = None,
         auto_block_min_debt: float | None = None,
+        actor_user_id: int | None = None,
     ) -> tuple[bool, str]:
         """עדכון הגדרות חסימה אוטומטית של תחנה.
 
@@ -1103,13 +1324,36 @@ class StationService:
             if auto_block_min_debt < 0:
                 return False, "סף חוב מינימלי לא יכול להיות שלילי."
 
-        # --- שלב 2: כל הולידציות עברו — מחילים את העדכונים ---
+        # --- שלב 2: שמירת ערכים ישנים ל-audit ---
+        old_values = {
+            "auto_block_enabled": station.auto_block_enabled,
+            "auto_block_grace_months": station.auto_block_grace_months,
+            "auto_block_min_debt": float(station.auto_block_min_debt),
+        }
+
+        # --- שלב 3: מחילים את העדכונים ---
         if auto_block_enabled is not None:
             station.auto_block_enabled = auto_block_enabled
         if auto_block_grace_months is not None:
             station.auto_block_grace_months = auto_block_grace_months
         if auto_block_min_debt is not None:
             station.auto_block_min_debt = auto_block_min_debt
+
+        # רישום בלוג ביקורת
+        if actor_user_id is not None:
+            await self._record_audit(
+                station_id=station_id,
+                actor_user_id=actor_user_id,
+                action=AuditActionType.AUTO_BLOCK_SETTINGS_UPDATED,
+                details={
+                    "old_values": old_values,
+                    "new_values": {
+                        "auto_block_enabled": station.auto_block_enabled,
+                        "auto_block_grace_months": station.auto_block_grace_months,
+                        "auto_block_min_debt": float(station.auto_block_min_debt),
+                    },
+                },
+            )
 
         await self.db.commit()
 
