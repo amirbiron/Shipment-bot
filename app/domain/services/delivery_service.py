@@ -76,14 +76,22 @@ class DeliveryService:
         await self.db.refresh(delivery)
 
         # התראה בזמן אמת לפאנל — רק למשלוחי תחנה
+        # מחוץ לזרימה העסקית כדי שכשלון התראה לא ישפיע על תוצאת הפעולה
         if station_id:
-            await publish_delivery_created(
-                station_id=station_id,
-                delivery_id=delivery.id,
-                pickup_address=pickup_address,
-                dropoff_address=dropoff_address,
-                fee=fee,
-            )
+            try:
+                await publish_delivery_created(
+                    station_id=station_id,
+                    delivery_id=delivery.id,
+                    pickup_address=pickup_address,
+                    dropoff_address=dropoff_address,
+                    fee=fee,
+                )
+            except Exception as e:
+                logger.error(
+                    "כשלון בפרסום התראת משלוח חדש — הפעולה העסקית הצליחה",
+                    extra_data={"delivery_id": delivery.id, "error": str(e)},
+                    exc_info=True,
+                )
 
         return delivery
 
@@ -220,10 +228,18 @@ class DeliveryService:
             await self.db.refresh(delivery)
 
             # התראה בזמן אמת לפאנל — רק למשלוחי תחנה
+            # מחוץ לזרימה העסקית כדי שכשלון התראה לא ישפיע על תוצאת הפעולה
             if delivery.station_id:
-                await publish_delivery_cancelled(
-                    station_id=delivery.station_id,
-                    delivery_id=delivery.id,
-                )
+                try:
+                    await publish_delivery_cancelled(
+                        station_id=delivery.station_id,
+                        delivery_id=delivery.id,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "כשלון בפרסום התראת ביטול משלוח — הפעולה העסקית הצליחה",
+                        extra_data={"delivery_id": delivery.id, "error": str(e)},
+                        exc_info=True,
+                    )
 
         return delivery
