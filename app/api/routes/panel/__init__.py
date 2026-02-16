@@ -17,6 +17,7 @@ from app.api.routes.panel.owners import router as owners_router
 from app.api.routes.panel.alerts import router as alerts_router
 from app.api.routes.panel.settings import router as settings_router
 from app.api.routes.panel.stations import router as stations_router
+from app.api.routes.panel.auto_block import router as auto_block_router
 
 router = APIRouter()
 
@@ -32,3 +33,4 @@ router.include_router(reports_router, prefix="/reports", tags=["Panel - דוחו
 router.include_router(groups_router, prefix="/groups", tags=["Panel - קבוצות"])
 router.include_router(alerts_router, prefix="/alerts", tags=["Panel - התראות"])
 router.include_router(settings_router, prefix="/settings", tags=["Panel - הגדרות"])
+router.include_router(auto_block_router, prefix="/auto-block", tags=["Panel - חסימה אוטומטית"])

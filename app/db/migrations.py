@@ -339,6 +339,20 @@ async def run_migration_009(conn: AsyncConnection) -> None:
     """))
 
 
+async def run_migration_010(conn: AsyncConnection) -> None:
+    """מיגרציה 010 - הגדרות חסימה אוטומטית מותאמות לתחנה (סעיף 10 - Issue #210).
+
+    הוספת שדות: auto_block_enabled, auto_block_grace_months, auto_block_min_debt
+    לטבלת stations. מאפשר לבעלי תחנות להגדיר ספי חסימה ותקופת חסד.
+    """
+    await conn.execute(text("""
+        ALTER TABLE stations
+            ADD COLUMN IF NOT EXISTS auto_block_enabled BOOLEAN DEFAULT TRUE NOT NULL,
+            ADD COLUMN IF NOT EXISTS auto_block_grace_months INTEGER DEFAULT 2 NOT NULL,
+            ADD COLUMN IF NOT EXISTS auto_block_min_debt FLOAT DEFAULT 0 NOT NULL;
+    """))
+
+
 async def run_all_migrations(conn: AsyncConnection) -> None:
     """הרצת כל המיגרציות ברצף (ללא ALTER TYPE — ראה add_enum_values)."""
     logger.info("Running migration 001...")
@@ -359,3 +373,5 @@ async def run_all_migrations(conn: AsyncConnection) -> None:
     await run_migration_008(conn)
     logger.info("Running migration 009...")
     await run_migration_009(conn)
+    logger.info("Running migration 010...")
+    await run_migration_010(conn)

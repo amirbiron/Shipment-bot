@@ -38,6 +38,11 @@ class Station(Base):
     service_areas = Column(JSON().with_variant(JSONB, "postgresql"), nullable=True)  # אזורי שירות
     logo_url = Column(String(500), nullable=True)  # קישור ללוגו או file_id
 
+    # הגדרות חסימה אוטומטית [סעיף 10]
+    auto_block_enabled = Column(Boolean, default=True, nullable=False, server_default="true")
+    auto_block_grace_months = Column(Integer, default=2, nullable=False, server_default="2")  # מספר חודשים רצופים לפני חסימה
+    auto_block_min_debt = Column(Float, default=0.0, nullable=False, server_default="0")  # סף חוב מינימלי (₪)
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

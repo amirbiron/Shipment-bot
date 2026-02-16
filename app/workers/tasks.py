@@ -625,22 +625,27 @@ def check_station_alerts():
 @celery_app.task(name="app.workers.tasks.process_billing_cycle_blocking")
 def process_billing_cycle_blocking():
     """
-    שלב 5: בדיקה יומית — חסימת נהגים שלא שילמו חודשיים רצופים.
+    סעיף 10: בדיקה יומית — חסימה אוטומטית של נהגים שלא שילמו.
 
-    רץ יומית (idempotent) — בודק כל תחנה פעילה ומחסים אוטומטית
-    נהגים עם חיובים שלא שולמו ב-2 מחזורי חיוב רצופים (28 ל-28).
+    רץ יומית (idempotent) — בודק כל תחנה פעילה עם חסימה אוטומטית מופעלת.
+    מכבד הגדרות per-station: תקופת חסד (grace_months) וסף חוב מינימלי (min_debt).
     """
     from app.db.models.station import Station
     from app.domain.services.station_service import StationService
 
     async def _process():
         async with get_task_session() as db:
+            # שליפת תחנות פעילות עם חסימה אוטומטית מופעלת
             result = await db.execute(
-                select(Station).where(Station.is_active == True)  # noqa: E712
+                select(Station).where(
+                    Station.is_active == True,  # noqa: E712
+                    Station.auto_block_enabled == True,  # noqa: E712
+                )
             )
             stations = list(result.scalars().all())
 
             total_blocked = 0
+            stations_skipped = 0
             for station in stations:
                 try:
                     station_service = StationService(db)

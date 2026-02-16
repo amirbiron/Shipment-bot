@@ -870,6 +870,9 @@ class StationService:
             "operating_hours": station.operating_hours,
             "service_areas": station.service_areas,
             "logo_url": station.logo_url,
+            "auto_block_enabled": station.auto_block_enabled,
+            "auto_block_grace_months": station.auto_block_grace_months,
+            "auto_block_min_debt": float(station.auto_block_min_debt),
         }
 
     async def update_station_settings(
@@ -1067,6 +1070,56 @@ class StationService:
             if data["total_debt"] > 0
         ]
 
+    # ==================== סעיף 10: הגדרות חסימה אוטומטית ====================
+
+    async def update_auto_block_settings(
+        self,
+        station_id: int,
+        auto_block_enabled: bool | None = None,
+        auto_block_grace_months: int | None = None,
+        auto_block_min_debt: float | None = None,
+    ) -> tuple[bool, str]:
+        """עדכון הגדרות חסימה אוטומטית של תחנה.
+
+        Args:
+            station_id: מזהה התחנה
+            auto_block_enabled: האם חסימה אוטומטית פעילה
+            auto_block_grace_months: מספר חודשים רצופים לפני חסימה (1-12)
+            auto_block_min_debt: סף חוב מינימלי לחסימה (0 ומעלה)
+
+        Returns:
+            (success, message)
+        """
+        station = await self.get_station(station_id)
+        if not station:
+            return False, "התחנה לא נמצאה."
+
+        if auto_block_enabled is not None:
+            station.auto_block_enabled = auto_block_enabled
+
+        if auto_block_grace_months is not None:
+            if auto_block_grace_months < 1 or auto_block_grace_months > 12:
+                return False, "תקופת חסד חייבת להיות בין 1 ל-12 חודשים."
+            station.auto_block_grace_months = auto_block_grace_months
+
+        if auto_block_min_debt is not None:
+            if auto_block_min_debt < 0:
+                return False, "סף חוב מינימלי לא יכול להיות שלילי."
+            station.auto_block_min_debt = auto_block_min_debt
+
+        await self.db.commit()
+
+        logger.info(
+            "הגדרות חסימה אוטומטית עודכנו",
+            extra_data={
+                "station_id": station_id,
+                "auto_block_enabled": station.auto_block_enabled,
+                "auto_block_grace_months": station.auto_block_grace_months,
+                "auto_block_min_debt": station.auto_block_min_debt,
+            }
+        )
+        return True, "הגדרות חסימה אוטומטית עודכנו בהצלחה."
+
     # ==================== שלב 5: חסימה אוטומטית ====================
 
     @staticmethod
@@ -1084,24 +1137,52 @@ class StationService:
     async def auto_block_unpaid_drivers(
         self, station_id: int
     ) -> List[dict]:
-        """חסימה אוטומטית של נהגים שלא שילמו חודשיים רצופים לתחנה.
+        """חסימה אוטומטית של נהגים שלא שילמו במחזורי חיוב רצופים לתחנה.
 
-        בודק חיובים ידניים שלא שולמו ב-2 מחזורי חיוב רצופים (הנוכחי והקודם).
+        משתמש בהגדרות per-station:
+        - auto_block_enabled: האם חסימה אוטומטית פעילה
+        - auto_block_grace_months: מספר חודשים רצופים לפני חסימה (ברירת מחדל: 2)
+        - auto_block_min_debt: סף חוב מינימלי לחסימה (ברירת מחדל: 0)
+
         רק חיובים עם courier_id ידוע נלקחים בחשבון.
 
         Returns:
             רשימת נהגים שנחסמו, כל אחד כ-dict עם courier_id ו-driver_name.
         """
-        current_cycle_start = self.get_billing_cycle_start()
-        previous_cycle_start = self._get_previous_billing_cycle_start(current_cycle_start)
+        # שליפת הגדרות התחנה
+        station = await self.get_station(station_id)
+        if not station:
+            return []
 
-        # שליפת כל החיובים שלא שולמו עם courier_id ידוע ב-2 המחזורים האחרונים
+        # בדיקה אם חסימה אוטומטית מופעלת לתחנה
+        if not station.auto_block_enabled:
+            logger.info(
+                "חסימה אוטומטית מושבתת לתחנה",
+                extra_data={"station_id": station_id}
+            )
+            return []
+
+        grace_months = station.auto_block_grace_months or 2
+        min_debt = station.auto_block_min_debt or 0.0
+
+        # חישוב תחילת כל מחזורי החיוב הרלוונטיים
+        current_cycle_start = self.get_billing_cycle_start()
+        cycle_starts = [current_cycle_start]
+        for _ in range(grace_months - 1):
+            cycle_starts.append(
+                self._get_previous_billing_cycle_start(cycle_starts[-1])
+            )
+        # מיון מהמחזור הישן ביותר לנוכחי
+        cycle_starts.reverse()
+        oldest_cycle_start = cycle_starts[0]
+
+        # שליפת כל החיובים שלא שולמו עם courier_id ידוע מתחילת המחזור הישן ביותר
         result = await self.db.execute(
             select(ManualCharge).where(
                 ManualCharge.station_id == station_id,
                 ManualCharge.courier_id.isnot(None),
                 ManualCharge.is_paid == False,  # noqa: E712
-                ManualCharge.created_at >= previous_cycle_start,
+                ManualCharge.created_at >= oldest_cycle_start,
             )
         )
         charges = list(result.scalars().all())
@@ -1109,25 +1190,38 @@ class StationService:
         if not charges:
             return []
 
-        # קיבוץ לפי courier_id ובדיקת נוכחות ב-2 מחזורים
-        courier_cycles: dict[int, set[str]] = {}
+        # קיבוץ לפי courier_id — בדיקת נוכחות בכל מחזור וחישוב סכום חוב
+        courier_cycles: dict[int, set[int]] = {}
         courier_names: dict[int, str] = {}
+        courier_debts: dict[int, float] = {}
         for charge in charges:
             cid = charge.courier_id
             if cid not in courier_cycles:
                 courier_cycles[cid] = set()
                 courier_names[cid] = charge.driver_name
+                courier_debts[cid] = 0.0
 
-            if charge.created_at >= current_cycle_start:
-                courier_cycles[cid].add("current")
-            else:
-                courier_cycles[cid].add("previous")
+            courier_debts[cid] += float(charge.amount)
 
-        # חסימת נהגים שמופיעים ב-2 מחזורים רצופים
+            # זיהוי לאיזה מחזור שייך החיוב
+            for idx in range(len(cycle_starts)):
+                cycle_end = cycle_starts[idx + 1] if idx + 1 < len(cycle_starts) else None
+                if cycle_end is None:
+                    # מחזור נוכחי — כל מה שאחרי cycle_starts[-1]
+                    if charge.created_at >= cycle_starts[idx]:
+                        courier_cycles[cid].add(idx)
+                elif cycle_starts[idx] <= charge.created_at < cycle_end:
+                    courier_cycles[cid].add(idx)
+
+        # חסימת נהגים שמופיעים בכל grace_months מחזורים רצופים
         blocked_drivers: List[dict] = []
         for courier_id, cycles in courier_cycles.items():
-            if len(cycles) < 2:
-                continue  # חוב רק במחזור אחד - לא חוסמים
+            if len(cycles) < grace_months:
+                continue  # לא מספיק מחזורים עם חוב
+
+            # בדיקת סף חוב מינימלי
+            if min_debt > 0 and courier_debts[courier_id] < min_debt:
+                continue
 
             # בדיקה אם כבר חסום בתחנה
             if await self.is_blacklisted(station_id, courier_id):
@@ -1136,8 +1230,8 @@ class StationService:
             entry = StationBlacklist(
                 station_id=station_id,
                 courier_id=courier_id,
-                reason="חסימה אוטומטית - אי תשלום חודשיים רצופים",
-                consecutive_unpaid_months=2,
+                reason=f"חסימה אוטומטית - אי תשלום {grace_months} חודשים רצופים",
+                consecutive_unpaid_months=grace_months,
             )
             self.db.add(entry)
 
@@ -1151,6 +1245,8 @@ class StationService:
                 extra_data={
                     "station_id": station_id,
                     "courier_id": courier_id,
+                    "grace_months": grace_months,
+                    "total_debt": courier_debts[courier_id],
                 }
             )
 
