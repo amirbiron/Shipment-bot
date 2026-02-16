@@ -107,6 +107,11 @@ class RefreshRequest(BaseModel):
         return v
 
 
+class SwitchStationRequest(BaseModel):
+    """בקשת מעבר בין תחנות"""
+    station_id: int
+
+
 class MeResponse(BaseModel):
     """פרטי המשתמש המחובר"""
     user_id: int
@@ -424,6 +429,83 @@ async def refresh_access_token(
     logger.info(
         "Token refreshed",
         extra_data={"user_id": user.id, "station_id": station.id},
+    )
+
+    return TokenResponse(
+        access_token=new_access,
+        refresh_token=new_refresh,
+        station_id=station.id,
+        station_name=station.name,
+    )
+
+
+@router.post(
+    "/switch-station",
+    response_model=TokenResponse,
+    summary="מעבר מהיר בין תחנות",
+    description=(
+        "מעבר לתחנה אחרת שבבעלות המשתמש ללא צורך ב-OTP חדש. "
+        "מנפיק JWT ו-refresh token חדשים עבור התחנה המבוקשת."
+    ),
+    responses={
+        200: {"description": "טוקנים חדשים לתחנה המבוקשת"},
+        403: {"description": "אין הרשאה לתחנה המבוקשת"},
+    },
+    tags=["Panel - אימות"],
+)
+async def switch_station(
+    data: SwitchStationRequest,
+    auth: TokenPayload = Depends(get_current_station_owner),
+    db: AsyncSession = Depends(get_db),
+) -> TokenResponse:
+    """מעבר מהיר בין תחנות — מנפיק טוקנים חדשים לתחנה המבוקשת"""
+    station_service = StationService(db)
+
+    # ולידציה: המשתמש הוא בעלים של התחנה המבוקשת
+    is_owner = await station_service.is_owner_of_station(
+        auth.user_id, data.station_id
+    )
+    if not is_owner:
+        logger.warning(
+            "ניסיון מעבר לתחנה ללא הרשאה",
+            extra_data={
+                "user_id": auth.user_id,
+                "requested_station_id": data.station_id,
+                "current_station_id": auth.station_id,
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="אין הרשאה לתחנה המבוקשת",
+        )
+
+    # ולידציה: התחנה פעילה
+    station = await station_service.get_station(data.station_id)
+    if not station:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="התחנה לא פעילה",
+        )
+
+    # הנפקת טוקנים חדשים
+    new_access = create_access_token(
+        user_id=auth.user_id,
+        station_id=station.id,
+        role=auth.role,
+    )
+    new_refresh = await create_refresh_token(
+        user_id=auth.user_id,
+        station_id=station.id,
+        role=auth.role,
+    )
+
+    logger.info(
+        "מעבר בין תחנות",
+        extra_data={
+            "user_id": auth.user_id,
+            "from_station_id": auth.station_id,
+            "to_station_id": station.id,
+        },
     )
 
     return TokenResponse(
