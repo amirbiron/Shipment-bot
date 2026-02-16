@@ -62,15 +62,16 @@ class StationService:
         self,
         station_id: int,
         actor_user_id: int | None,
-    ) -> None:
+    ) -> tuple[bool, str]:
         """בדיקת הרשאה — רק בעלים פעיל יכול לבצע פעולות מנהלתיות על הגדרות תחנה.
 
         דילוג כש-actor_user_id=None (תאימות לאחור עם קריאות פנימיות).
         """
         if actor_user_id is None:
-            return
+            return True, ""
         if not await self.is_owner_of_station(actor_user_id, station_id):
-            raise ValidationException("אין הרשאה לבצע פעולה זו — רק בעלים פעיל בתחנה.")
+            return False, "אין הרשאה לבצע פעולה זו — רק בעלים פעיל בתחנה."
+        return True, ""
 
     async def get_audit_logs(
         self,
@@ -840,7 +841,9 @@ class StationService:
         Returns:
             (success, message)
         """
-        await self._verify_station_owner(station_id, actor_user_id)
+        is_allowed, error_message = await self._verify_station_owner(station_id, actor_user_id)
+        if not is_allowed:
+            return False, error_message
 
         rate = Decimal(str(new_rate))
 
@@ -1099,7 +1102,9 @@ class StationService:
         Returns:
             (success, message)
         """
-        await self._verify_station_owner(station_id, actor_user_id)
+        is_allowed, error_message = await self._verify_station_owner(station_id, actor_user_id)
+        if not is_allowed:
+            return False, error_message
 
         station = await self.get_station(station_id)
         if not station:
@@ -1174,16 +1179,21 @@ class StationService:
         if actor_user_id is not None and updates:
             changes: dict[str, dict[str, object]] = {}
             for field in updates:
+                old_val = old_values[field]
+                new_val = updates[field]
+                if new_val == old_val:
+                    continue
                 changes[field] = {
-                    "old_value": str(old_values[field]) if old_values[field] is not None else None,
-                    "new_value": str(updates[field]) if updates[field] is not None else None,
+                    "old_value": old_val,
+                    "new_value": new_val,
                 }
-            await self._record_audit(
-                station_id=station_id,
-                actor_user_id=actor_user_id,
-                action=AuditActionType.STATION_SETTINGS_UPDATED,
-                details={"changes": changes},
-            )
+            if changes:
+                await self._record_audit(
+                    station_id=station_id,
+                    actor_user_id=actor_user_id,
+                    action=AuditActionType.STATION_SETTINGS_UPDATED,
+                    details={"changes": changes},
+                )
 
         await self.db.commit()
 
@@ -1205,7 +1215,9 @@ class StationService:
         actor_user_id: int | None = None,
     ) -> tuple[bool, str]:
         """עדכון מזהי קבוצות של תחנה"""
-        await self._verify_station_owner(station_id, actor_user_id)
+        is_allowed, error_message = await self._verify_station_owner(station_id, actor_user_id)
+        if not is_allowed:
+            return False, error_message
 
         station = await self.get_station(station_id)
         if not station:
@@ -1334,7 +1346,9 @@ class StationService:
         Returns:
             (success, message)
         """
-        await self._verify_station_owner(station_id, actor_user_id)
+        is_allowed, error_message = await self._verify_station_owner(station_id, actor_user_id)
+        if not is_allowed:
+            return False, error_message
 
         station = await self.get_station(station_id)
         if not station:

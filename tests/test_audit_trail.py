@@ -295,6 +295,47 @@ class TestAuditTrailRecording(TestAuditTrailBase):
         assert entries[0].details["changes"]["name"]["new_value"] == "שם חדש"
 
     @pytest.mark.asyncio
+    async def test_update_settings_does_not_log_unchanged_fields(self, user_factory, db_session):
+        """עדכון הגדרות תחנה עם ערך זהה — לא נרשם לוג ביקורת 'X ל-X'."""
+        owner, station = await self._create_station_with_owner(user_factory, db_session)
+        service = StationService(db_session)
+
+        success, _ = await service.update_station_settings(
+            station_id=station.id,
+            name=station.name,  # זהה לערך הקיים
+            actor_user_id=owner.id,
+        )
+        assert success is True
+
+        entries, total = await service.get_audit_logs(station.id)
+        assert total == 0
+        assert entries == []
+
+    @pytest.mark.asyncio
+    async def test_owner_verification_returns_tuple_not_exception(self, user_factory, db_session):
+        """אימות בעלות לא זורק חריגה — מחזיר (False, הודעה) כדי לא לשבור handlers."""
+        owner, station = await self._create_station_with_owner(user_factory, db_session)
+        service = StationService(db_session)
+
+        not_owner = await user_factory(
+            phone_number="+972501111111",
+            name="לא בעלים",
+            role=UserRole.SENDER,
+        )
+
+        success, msg = await service.update_commission_rate(
+            station.id, 0.08, actor_user_id=not_owner.id,
+        )
+        assert success is False
+        assert "אין הרשאה" in msg
+
+        entries, total = await service.get_audit_logs(station.id)
+        assert total == 0
+
+        wallet = await service.get_station_wallet(station.id)
+        assert wallet.commission_rate == Decimal("0.10")
+
+    @pytest.mark.asyncio
     async def test_update_groups_creates_audit(self, user_factory, db_session):
         """עדכון הגדרות קבוצות — נרשם בלוג ביקורת"""
         owner, station = await self._create_station_with_owner(user_factory, db_session)
