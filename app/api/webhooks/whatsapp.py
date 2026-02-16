@@ -17,7 +17,7 @@ from app.db.database import get_db
 from app.db.models.user import User, UserRole, ApprovalStatus
 from app.db.models.webhook_event import WebhookEvent
 from app.state_machine.handlers import SenderStateHandler, CourierStateHandler
-from app.state_machine.states import CourierState, DispatcherState, StationOwnerState
+from app.state_machine.states import CourierState, DispatcherState, SenderState, StationOwnerState
 from app.state_machine.dispatcher_handler import DispatcherStateHandler
 from app.state_machine.station_owner_handler import StationOwnerStateHandler
 from app.state_machine.manager import StateManager
@@ -728,8 +728,6 @@ async def _sender_fallback_wa(
     state_manager: StateManager,
 ) -> tuple:
     """fallback לתפריט שולח — גרסת WhatsApp"""
-    from app.state_machine.states import SenderState
-
     await state_manager.force_state(
         user.id, "whatsapp", SenderState.MENU.value, context={}
     )
@@ -873,7 +871,7 @@ async def _handle_courier_post_processing(
 async def send_welcome_message(phone_number: str):
     """הודעת ברוכים הבאים ותפריט ראשי [שלב 1]"""
     welcome_text = (
-        "ברוכים הבאים ל*משלוח בצ'יק* 🚚\n"
+        "ברוכים הבאים למשלוח בצ'יק 🚚\n"
         "המערכת החכמה לשיתוף משלוחים.\n\n"
         "איך נוכל לעזור היום?\n\n"
         "בכל שלב תוכלו לחזור לתפריט הראשי על ידי הקשה של #"
@@ -1141,8 +1139,6 @@ async def whatsapp_webhook(
                 # אדמין (לפי WHATSAPP_ADMIN_NUMBERS): מאפשרים יציאה "קשיחה" מכל זרימה וחזרה לתפריט הראשי
                 # של כל אפשרויות הרישום.
                 if is_admin_sender:
-                    from app.state_machine.states import SenderState
-    
                     # שחזור תפקיד לשולח כדי שהודעות הבאות לא יגיעו ל-CourierStateHandler
                     if user.role == UserRole.COURIER:
                         user.role = UserRole.SENDER
@@ -1194,8 +1190,6 @@ async def whatsapp_webhook(
                         )
                         user.role = UserRole.SENDER
                         await db.commit()
-                        from app.state_machine.states import SenderState
-    
                         await state_manager.force_state(
                             user.id, "whatsapp", SenderState.MENU.value, context={}
                         )
@@ -1247,7 +1241,14 @@ async def whatsapp_webhook(
             )
             _is_in_multi_step_flow = _is_courier_in_registration or (
                 isinstance(_current_state_value, str)
-                and _current_state_value.startswith(("DISPATCHER.", "STATION."))
+                and (
+                    _current_state_value.startswith(("DISPATCHER.", "STATION."))
+                    # הגנה על זרימות שולח: מונע "תחנה" וכו' מלתפוס כתובות כמו "תחנה מרכזית"
+                    or (
+                        _current_state_value.startswith("SENDER.")
+                        and _current_state_value != SenderState.MENU.value
+                    )
+                )
             )
             _context = await state_manager.get_context(user.id, "whatsapp")
             _admin_root_menu = bool(_context.get("admin_root_menu")) and is_admin_sender
@@ -1292,13 +1293,13 @@ async def whatsapp_webhook(
                     # קישור חיצוני לקבוצת WhatsApp
                     if settings.WHATSAPP_GROUP_LINK:
                         msg_text = (
-                            "📦 *העלאת משלוח מהיר*\n\n"
+                            "📦 העלאת משלוח מהיר\n\n"
                             "להעלאת משלוח מהיר, הצטרפו לקבוצת WhatsApp שלנו:\n"
                             f"{settings.WHATSAPP_GROUP_LINK}"
                         )
                     else:
                         msg_text = (
-                            "📦 *העלאת משלוח מהיר*\n\n"
+                            "📦 העלאת משלוח מהיר\n\n"
                             "להעלאת משלוח מהיר, פנו להנהלה לקבלת קישור לקבוצת WhatsApp."
                         )
                     background_tasks.add_task(send_whatsapp_message, reply_to, msg_text)
@@ -1312,7 +1313,7 @@ async def whatsapp_webhook(
                 ):
                     # הודעה שיווקית עבור תחנות
                     station_text = (
-                        "🏪 *הצטרפות כתחנה*\n\n"
+                        "🏪 הצטרפות כתחנה\n\n"
                         "המערכת של ShipShare מסדרת לך את התחנה!\n\n"
                         "✅ ניהול נהגים אוטומטי\n"
                         "✅ גבייה מסודרת\n"
@@ -1335,11 +1336,11 @@ async def whatsapp_webhook(
                     if settings.ADMIN_WHATSAPP_NUMBER:
                         admin_link = f"https://wa.me/{settings.ADMIN_WHATSAPP_NUMBER}"
                         admin_text = (
-                            "📞 *פנייה לניהול*\n\n" f"ליצירת קשר עם המנהל:\n{admin_link}"
+                            "📞 פנייה לניהול\n\n" f"ליצירת קשר עם המנהל:\n{admin_link}"
                         )
                     else:
                         admin_text = (
-                            "📞 *פנייה לניהול*\n\n"
+                            "📞 פנייה לניהול\n\n"
                             "ליצירת קשר עם המנהל, שלחו הודעה כאן ונחזור אליכם בהקדם."
                         )
                     background_tasks.add_task(send_whatsapp_message, reply_to, admin_text)

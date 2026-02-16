@@ -467,6 +467,95 @@ async def _route_message_to_handler(
     state_manager = StateManager(db)
     current_state = await state_manager.get_current_state(user.id, "whatsapp")
 
+    # guard: לא ליירט כפתורי תפריט בזמן זרימה רב-שלבית
+    _is_courier_in_registration = (
+        user.role == UserRole.COURIER
+        and current_state in {
+            CourierState.REGISTER_COLLECT_NAME.value,
+            CourierState.REGISTER_COLLECT_DOCUMENT.value,
+            CourierState.REGISTER_COLLECT_SELFIE.value,
+            CourierState.REGISTER_COLLECT_VEHICLE_CATEGORY.value,
+            CourierState.REGISTER_COLLECT_VEHICLE_PHOTO.value,
+            CourierState.REGISTER_TERMS.value,
+        }
+    )
+    _is_in_multi_step_flow = _is_courier_in_registration or (
+        isinstance(current_state, str)
+        and (
+            current_state.startswith(("DISPATCHER.", "STATION."))
+            or (current_state.startswith("SENDER.") and current_state != "SENDER.MENU")
+        )
+    )
+
+    # כפתורי תפריט ראשי — רק לשולחים/אדמינים שאינם באמצע זרימה
+    if text and not _is_in_multi_step_flow and user.role in (UserRole.SENDER, UserRole.ADMIN):
+        # הצטרפות כשליח
+        if "הצטרפות למנוי" in text or "שליח" in text:
+            user.role = UserRole.COURIER
+            await db.commit()
+            await state_manager.force_state(
+                user.id, "whatsapp", CourierState.INITIAL.value, context={}
+            )
+            handler = CourierStateHandler(db, platform="whatsapp")
+            response, new_state = await handler.handle_message(user, text, photo_file_id)
+            background_tasks.add_task(
+                send_whatsapp_message, reply_to, response.text, response.keyboard
+            )
+            return response.text, new_state
+
+        # העלאת משלוח מהיר
+        if "העלאת משלוח מהיר" in text or "משלוח מהיר" in text:
+            if settings.WHATSAPP_GROUP_LINK:
+                msg_text = (
+                    "📦 העלאת משלוח מהיר\n\n"
+                    "להעלאת משלוח מהיר, הצטרפו לקבוצת WhatsApp שלנו:\n"
+                    f"{settings.WHATSAPP_GROUP_LINK}"
+                )
+            else:
+                msg_text = (
+                    "📦 העלאת משלוח מהיר\n\n"
+                    "להעלאת משלוח מהיר, פנו להנהלה לקבלת קישור לקבוצת WhatsApp."
+                )
+            background_tasks.add_task(send_whatsapp_message, reply_to, msg_text)
+            return msg_text, None
+
+        # הצטרפות כתחנה
+        if "הצטרפות כתחנה" in text or "תחנה" in text:
+            station_text = (
+                "🏪 הצטרפות כתחנה\n\n"
+                "המערכת של ShipShare מסדרת לך את התחנה!\n\n"
+                "✅ ניהול נהגים אוטומטי\n"
+                "✅ גבייה מסודרת\n"
+                "✅ תיעוד משלוחים מלא\n"
+                "✅ סדר בבלגן\n\n"
+                "לפרטים נוספים, פנו להנהלה."
+            )
+            background_tasks.add_task(
+                send_whatsapp_message, reply_to, station_text, [["📞 פנייה לניהול"]]
+            )
+            return station_text, None
+
+        # פנייה לניהול
+        if "פנייה לניהול" in text:
+            if settings.ADMIN_WHATSAPP_NUMBER:
+                admin_link = f"https://wa.me/{settings.ADMIN_WHATSAPP_NUMBER}"
+                admin_text = (
+                    "📞 פנייה לניהול\n\n"
+                    f"ליצירת קשר עם המנהל:\n{admin_link}"
+                )
+            else:
+                admin_text = (
+                    "📞 פנייה לניהול\n\n"
+                    "ליצירת קשר עם המנהל, שלחו הודעה כאן ונחזור אליכם בהקדם."
+                )
+            background_tasks.add_task(send_whatsapp_message, reply_to, admin_text)
+            return admin_text, None
+
+        # חזרה לתפריט
+        if "חזרה לתפריט" in text:
+            background_tasks.add_task(send_welcome_message, reply_to)
+            return "welcome", None
+
     # בעל תחנה
     if user.role == UserRole.STATION_OWNER:
         station_service = StationService(db)
