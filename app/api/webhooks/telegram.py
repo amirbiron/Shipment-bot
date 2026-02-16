@@ -125,13 +125,13 @@ def _queue_response_send(
     chat_id: str,
     response: MessageResponse,
 ) -> None:
-    """שולח תגובה למשתמש דרך background task"""
+    """שולח תגובה למשתמש דרך background task — כפתורים תמיד inline"""
     background_tasks.add_task(
         send_telegram_message,
         chat_id,
         response.text,
         response.keyboard,
-        getattr(response, "inline", False),
+        True,
     )
 
 
@@ -534,7 +534,7 @@ async def send_telegram_message(
     chat_id: str,
     text: str,
     keyboard: Optional[list] = None,
-    inline: bool = False
+    inline: bool = True
 ) -> None:
     """Send message via Telegram Bot API with circuit breaker protection"""
     import httpx
