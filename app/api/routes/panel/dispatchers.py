@@ -128,7 +128,7 @@ async def add_dispatcher(
     """הוספת סדרן — מבוסס על StationService.add_dispatcher"""
     station_service = StationService(db)
     success, message = await station_service.add_dispatcher(
-        auth.station_id, data.phone_number,
+        auth.station_id, data.phone_number, actor_user_id=auth.user_id,
     )
     if not success:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message)
@@ -163,7 +163,7 @@ async def add_dispatchers_bulk(
 
         normalized = PhoneNumberValidator.normalize(phone)
         success, message = await station_service.add_dispatcher(
-            auth.station_id, normalized,
+            auth.station_id, normalized, actor_user_id=auth.user_id,
         )
         results.append(BulkResultItem(
             phone_masked=PhoneNumberValidator.mask(normalized),
@@ -199,7 +199,7 @@ async def remove_dispatcher(
     """הסרת סדרן — מבוסס על StationService.remove_dispatcher"""
     station_service = StationService(db)
     success, message = await station_service.remove_dispatcher(
-        auth.station_id, user_id,
+        auth.station_id, user_id, actor_user_id=auth.user_id,
     )
     if not success:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message)

@@ -159,6 +159,7 @@ async def update_station_settings(
         operating_hours=hours_value,
         service_areas=areas_value,
         logo_url=None if data.clear_logo_url else (data.logo_url if data.logo_url is not None else ...),
+        actor_user_id=auth.user_id,
     )
 
     if not success:

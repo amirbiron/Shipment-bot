@@ -15,6 +15,7 @@ from app.db.models.station_ledger import StationLedger
 from app.db.models.manual_charge import ManualCharge
 from app.db.models.station_blacklist import StationBlacklist
 from app.db.models.webhook_event import WebhookEvent
+from app.db.models.audit_log import AuditLog
 
 __all__ = [
     "Delivery",
@@ -31,4 +32,5 @@ __all__ = [
     "ManualCharge",
     "StationBlacklist",
     "WebhookEvent",
+    "AuditLog",
 ]

@@ -118,6 +118,7 @@ async def update_auto_block_settings(
         auto_block_enabled=data.auto_block_enabled,
         auto_block_grace_months=data.auto_block_grace_months,
         auto_block_min_debt=data.auto_block_min_debt,
+        actor_user_id=auth.user_id,
     )
 
     if not success:

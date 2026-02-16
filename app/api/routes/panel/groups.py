@@ -96,6 +96,7 @@ async def update_group_settings(
         public_group_platform=data.public_group_platform,
         private_group_chat_id=data.private_group_chat_id,
         private_group_platform=data.private_group_platform,
+        actor_user_id=auth.user_id,
     )
     if not success:
         raise HTTPException(
