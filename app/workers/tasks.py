@@ -693,9 +693,10 @@ def generate_monthly_reports():
     סעיף 7: הפקת דוחות חודשיים אוטומטית.
 
     רץ ב-1 לכל חודש — מייצר דוח חודשי Excel לכל תחנה פעילה
-    ושומר אותו כקובץ בינארי ב-Redis לתקופה של 30 יום.
+    ושומר אותו מקודד ב-base64 ב-Redis לתקופה של 30 יום.
     בעל התחנה יכול להוריד את הדוח דרך endpoint ייעודי.
     """
+    import base64
     import calendar
     from app.db.models.station import Station
     from app.domain.services.station_service import StationService
@@ -767,8 +768,11 @@ def generate_monthly_reports():
                     )
 
                     # שמירה ב-Redis למשך 30 יום
+                    # הקידוד ל-base64 נדרש כי ה-Redis client מוגדר עם decode_responses=True
+                    # ולכן לא יכול לאחסן/לשלוף bytes ישירות
                     cache_key = f"monthly_report:{station_id}:{month_str}"
-                    await redis.set(cache_key, xlsx_bytes, ex=30 * 86400)
+                    encoded = base64.b64encode(xlsx_bytes).decode("ascii")
+                    await redis.set(cache_key, encoded, ex=30 * 86400)
 
                     reports_generated += 1
                     logger.info(

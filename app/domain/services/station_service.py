@@ -1292,32 +1292,35 @@ class StationService:
 
         מחזיר רשימה עם driver_name, total_debt, charge_count.
         אם cycle_end לא סופק — ללא גבול עליון.
+        מקבץ ב-SQL (GROUP BY) לביצועים טובים יותר.
         """
-        query = select(ManualCharge).where(
+        from sqlalchemy import func
+
+        where_clauses = [
             ManualCharge.station_id == station_id,
             ManualCharge.created_at >= cycle_start,
             ManualCharge.is_paid == False,  # noqa: E712 — שלב 5: סינון חיובים ששולמו
-        )
+        ]
         if cycle_end is not None:
-            query = query.where(ManualCharge.created_at < cycle_end)
-        query = query.order_by(ManualCharge.created_at.desc())
+            where_clauses.append(ManualCharge.created_at < cycle_end)
+
+        query = (
+            select(
+                ManualCharge.driver_name,
+                func.coalesce(func.sum(ManualCharge.amount), 0).label("total_debt"),
+                func.count(ManualCharge.id).label("charge_count"),
+            )
+            .where(*where_clauses)
+            .group_by(ManualCharge.driver_name)
+            .having(func.sum(ManualCharge.amount) > 0)
+        )
 
         result = await self.db.execute(query)
-        charges = list(result.scalars().all())
-
-        # קיבוץ לפי שם נהג
-        report: dict[str, dict] = {}
-        for charge in charges:
-            name = charge.driver_name
-            if name not in report:
-                report[name] = {"total_debt": Decimal("0"), "charge_count": 0}
-            report[name]["total_debt"] += charge.amount
-            report[name]["charge_count"] += 1
+        rows = result.all()
 
         return [
-            {"driver_name": name, "total_debt": data["total_debt"], "charge_count": data["charge_count"]}
-            for name, data in report.items()
-            if data["total_debt"] > 0
+            {"driver_name": row[0], "total_debt": row[1], "charge_count": row[2]}
+            for row in rows
         ]
 
     # ==================== סעיף 10: הגדרות חסימה אוטומטית ====================
@@ -2033,11 +2036,14 @@ class StationService:
 
         מחזיר רשימת חודשים עם commissions, manual_charges, withdrawals, net.
         """
-        from sqlalchemy import func, extract
+        from sqlalchemy import func
+        from app.db.compat import year_month
+
+        month_expr = year_month(StationLedger.created_at)
 
         result = await self.db.execute(
             select(
-                func.strftime('%Y-%m', StationLedger.created_at).label("month"),
+                month_expr.label("month"),
                 StationLedger.entry_type,
                 func.coalesce(func.sum(StationLedger.amount), 0).label("total"),
             )
@@ -2046,8 +2052,8 @@ class StationService:
                 StationLedger.created_at >= date_from,
                 StationLedger.created_at <= date_to,
             )
-            .group_by("month", StationLedger.entry_type)
-            .order_by("month")
+            .group_by(month_expr, StationLedger.entry_type)
+            .order_by(month_expr)
         )
         rows = result.all()
 

@@ -96,6 +96,20 @@ def _format_currency_cell(cell: Any) -> None:
     cell.alignment = _NUMBER_ALIGN
 
 
+# תווים מסוכנים — Excel מפרש אותם כנוסחה (Formula Injection / CSV Injection)
+_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _sanitize_text(value: str) -> str:
+    """ניטרול ערכי טקסט שעלולים להתפרש כנוסחה ב-Excel (Formula Injection).
+
+    מוסיף גרש בודד (') כ-prefix — Excel יציג את הטקסט כרגיל בלי לפרש כנוסחה.
+    """
+    if isinstance(value, str) and value and value[0] in _FORMULA_PREFIXES:
+        return f"'{value}"
+    return value
+
+
 # ==================== דוח גבייה — Excel ====================
 
 
@@ -127,7 +141,7 @@ def generate_collection_report_excel(
     # כותרת
     title = "דוח גבייה"
     if station_name:
-        title += f" — {station_name}"
+        title += f" — {_sanitize_text(station_name)}"
     subtitle = f"מחזור: {cycle_start} עד {cycle_end} | הופק: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
     data_row = _write_title(ws, title, subtitle)
 
@@ -141,7 +155,7 @@ def generate_collection_report_excel(
     # נתונים
     for i, item in enumerate(items):
         row = data_row + 1 + i
-        ws.cell(row=row, column=1, value=item["driver_name"])
+        ws.cell(row=row, column=1, value=_sanitize_text(item["driver_name"]))
         debt_cell = ws.cell(row=row, column=2, value=float(item["total_debt"]))
         _format_currency_cell(debt_cell)
         ws.cell(row=row, column=3, value=item["charge_count"])
@@ -197,7 +211,7 @@ def generate_revenue_report_excel(
 
     title = "דוח הכנסות"
     if station_name:
-        title += f" — {station_name}"
+        title += f" — {_sanitize_text(station_name)}"
     subtitle = f"תקופה: {date_from} עד {date_to} | הופק: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
     data_row = _write_title(ws, title, subtitle)
 
@@ -269,7 +283,7 @@ def generate_profit_loss_excel(
 
     title = "דוח רווח והפסד"
     if station_name:
-        title += f" — {station_name}"
+        title += f" — {_sanitize_text(station_name)}"
     subtitle = f"תקופה: {date_from} עד {date_to} | הופק: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
     data_row = _write_title(ws, title, subtitle)
 
@@ -343,7 +357,7 @@ def generate_monthly_summary_excel(
     ws_summary.sheet_view.rightToLeft = True
 
     subtitle = f"חודש: {month} | הופק: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-    data_row = _write_title(ws_summary, f"דוח חודשי — {station_name}", subtitle)
+    data_row = _write_title(ws_summary, f"דוח חודשי — {_sanitize_text(station_name)}", subtitle)
 
     # סטטיסטיקות משלוחים
     ws_summary.cell(row=data_row, column=1, value="סטטיסטיקות משלוחים").font = _TOTAL_FONT

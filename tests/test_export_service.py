@@ -6,11 +6,56 @@ from openpyxl import load_workbook
 import io
 
 from app.domain.services.export_service import (
+    _sanitize_text,
     generate_collection_report_excel,
     generate_revenue_report_excel,
     generate_profit_loss_excel,
     generate_monthly_summary_excel,
 )
+
+
+class TestSanitizeText:
+    """בדיקות הגנה מ-Formula Injection"""
+
+    @pytest.mark.unit
+    def test_sanitize_formula_equals(self):
+        """ערך שמתחיל ב-= מקבל גרש כ-prefix"""
+        assert _sanitize_text("=SUM(A1:A10)") == "'=SUM(A1:A10)"
+
+    @pytest.mark.unit
+    def test_sanitize_formula_plus(self):
+        """ערך שמתחיל ב-+ מקבל גרש"""
+        assert _sanitize_text("+cmd|'/C calc'!A0") == "'+cmd|'/C calc'!A0"
+
+    @pytest.mark.unit
+    def test_sanitize_formula_minus(self):
+        """ערך שמתחיל ב-- מקבל גרש"""
+        assert _sanitize_text("-1+1") == "'-1+1"
+
+    @pytest.mark.unit
+    def test_sanitize_formula_at(self):
+        """ערך שמתחיל ב-@ מקבל גרש"""
+        assert _sanitize_text("@SUM(A1)") == "'@SUM(A1)"
+
+    @pytest.mark.unit
+    def test_sanitize_formula_tab(self):
+        """ערך שמתחיל ב-tab מקבל גרש"""
+        assert _sanitize_text("\t=cmd") == "'\t=cmd"
+
+    @pytest.mark.unit
+    def test_sanitize_safe_text_unchanged(self):
+        """טקסט רגיל לא משתנה"""
+        assert _sanitize_text("משה כהן") == "משה כהן"
+
+    @pytest.mark.unit
+    def test_sanitize_empty_string(self):
+        """מחרוזת ריקה לא משתנה"""
+        assert _sanitize_text("") == ""
+
+    @pytest.mark.unit
+    def test_sanitize_non_string(self):
+        """ערך שאינו מחרוזת מוחזר כמו שהוא"""
+        assert _sanitize_text(123) == 123  # type: ignore[arg-type]
 
 
 class TestCollectionReportExcel:
@@ -80,6 +125,24 @@ class TestCollectionReportExcel:
         assert isinstance(result, bytes)
         wb = load_workbook(io.BytesIO(result))
         assert wb.active is not None
+
+    @pytest.mark.unit
+    def test_formula_injection_in_driver_name(self):
+        """שם נהג שמתחיל ב-= עובר סניטציה בקובץ"""
+        items = [
+            {"driver_name": "=SUM(A1:A10)", "total_debt": 100.0, "charge_count": 1},
+        ]
+        result = generate_collection_report_excel(
+            items=items, total_debt=100.0,
+            cycle_start="2026-01-01", cycle_end="2026-02-01",
+        )
+        wb = load_workbook(io.BytesIO(result))
+        ws = wb.active
+
+        # וידוא שהערך בתא מתחיל בגרש ולא כנוסחה
+        for row in ws.iter_rows(values_only=True):
+            if row[0] and "SUM" in str(row[0]):
+                assert str(row[0]).startswith("'"), "שם נהג עם = לא עבר סניטציה"
 
 
 class TestRevenueReportExcel:
