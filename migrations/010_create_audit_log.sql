@@ -4,9 +4,9 @@
 CREATE TABLE IF NOT EXISTS audit_logs (
     id SERIAL PRIMARY KEY,
     station_id INTEGER NOT NULL REFERENCES stations(id),
-    actor_user_id INTEGER NOT NULL REFERENCES users(id),
+    actor_user_id BIGINT NOT NULL REFERENCES users(id),
     action VARCHAR(50) NOT NULL,
-    target_user_id INTEGER REFERENCES users(id),
+    target_user_id BIGINT REFERENCES users(id),
     details JSONB,
     created_at TIMESTAMP DEFAULT NOW()
 );

@@ -12,7 +12,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import TokenPayload
 from app.core.logging import get_logger
-from app.core.validation import PhoneNumberValidator
 from app.api.dependencies.auth import get_current_station_owner
 from app.api.routes.panel.schemas import parse_date_param
 from app.db.database import get_db
@@ -145,19 +144,35 @@ async def get_audit_log(
     items: list[AuditLogItemResponse] = []
     for entry in entries:
         actor = users_by_id.get(entry.actor_user_id)
-        target = users_by_id.get(entry.target_user_id) if entry.target_user_id else None
+        target = (
+            users_by_id.get(entry.target_user_id)
+            if entry.target_user_id is not None
+            else None
+        )
+
+        action_value = (
+            entry.action.value
+            if isinstance(entry.action, AuditActionType)
+            else entry.action
+        )
+        actor_name = (actor.name or actor.full_name or "לא צוין") if actor else "לא צוין"
+        target_name = (
+            None
+            if entry.target_user_id is None
+            else ((target.name or target.full_name or "לא צוין") if target else "לא צוין")
+        )
 
         items.append(AuditLogItemResponse(
             id=entry.id,
-            action=entry.action.value if isinstance(entry.action, AuditActionType) else entry.action,
+            action=action_value,
             action_label=ACTION_LABELS.get(
-                entry.action.value if isinstance(entry.action, AuditActionType) else entry.action,
+                action_value,
                 "פעולה לא ידועה",
             ),
             actor_user_id=entry.actor_user_id,
-            actor_name=actor.name or actor.full_name or "לא צוין" if actor else "לא צוין",
+            actor_name=actor_name,
             target_user_id=entry.target_user_id,
-            target_name=target.name or target.full_name or "לא צוין" if target else None,
+            target_name=target_name,
             details=entry.details,
             created_at=entry.created_at.isoformat() if entry.created_at else "",
         ))
