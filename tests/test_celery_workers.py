@@ -9,6 +9,7 @@
 - ניקוי הודעות ישנות (cleanup)
 - ניקוי אירועי webhook ישנים
 - חסימה אוטומטית יומית (billing cycle blocking)
+- התראות תחנה (station alerts — סף ארנק ומשלוחים לא נאספו)
 - ניהול event loop ב-Celery
 - שליחת WhatsApp ו-Telegram עם circuit breaker
 """
@@ -1173,8 +1174,9 @@ class TestProcessBillingCycleBlocking:
             return []  # תחנה שנייה — ללא חסימות
 
         # מוק ברמת המחלקה — מוסיף self
-        # rollback מבוטל בסביבת test — מונע expire של station objects
-        # שגורם ל-MissingGreenlet בגישה ל-station.id מ-thread אחר
+        # rollback מבוטל בסביבת test — מונע side effects על סשן הבדיקה.
+        # בקוד הייצור, station_ids מחולצים כערכים רגילים לפני הלולאה
+        # ולכן rollback לא גורם ל-MissingGreenlet.
         with _patch_run_async_for_test():
             with patch("app.workers.tasks.get_task_session") as mock_session_ctx:
                 mock_session_ctx.return_value.__aenter__ = AsyncMock(
@@ -1191,6 +1193,159 @@ class TestProcessBillingCycleBlocking:
 
         # שתי התחנות עובדו — הראשונה נכשלה אבל לא עצרה את השנייה
         assert result["stations_processed"] == 2
+        assert call_count == 2
+
+
+# ============================================================================
+# בדיקות check_station_alerts
+# ============================================================================
+
+
+class TestCheckStationAlerts:
+    """בדיקות לטאסק check_station_alerts — סף ארנק ומשלוחים לא נאספו"""
+
+    @pytest.mark.asyncio
+    async def test_no_active_stations_returns_zero(
+        self, db_session: AsyncSession
+    ) -> None:
+        """כשאין תחנות פעילות — הטאסק מחזיר 0 התראות"""
+        from app.workers.tasks import check_station_alerts
+
+        with _patch_run_async_for_test():
+            with patch("app.workers.tasks.get_task_session") as mock_session_ctx:
+                mock_session_ctx.return_value.__aenter__ = AsyncMock(
+                    return_value=db_session
+                )
+                mock_session_ctx.return_value.__aexit__ = AsyncMock(return_value=None)
+
+                with patch("app.core.redis_client.get_redis", new_callable=AsyncMock) as mock_redis:
+                    mock_redis.return_value = AsyncMock()
+                    result = check_station_alerts()
+
+        assert result["stations_checked"] == 0
+        assert result["alerts_sent"] == 0
+
+    @pytest.mark.asyncio
+    async def test_uncollected_delivery_naive_datetime(
+        self, db_session: AsyncSession, user_factory
+    ) -> None:
+        """שאילתת משלוחים לא נאספו משתמשת ב-naive datetime — תואם לעמודת DB"""
+        from app.db.models.delivery import Delivery, DeliveryStatus
+        from app.workers.tasks import check_station_alerts
+
+        owner = await user_factory(
+            phone_number="+972501111111",
+            role=UserRole.STATION_OWNER,
+            platform="telegram",
+            telegram_chat_id="owner_alert1",
+        )
+        sender = await user_factory(
+            phone_number="+972502222222",
+            role=UserRole.SENDER,
+            platform="telegram",
+            telegram_chat_id="sender_alert1",
+        )
+
+        station = Station(name="תחנה בדיקה", owner_id=owner.id, is_active=True)
+        db_session.add(station)
+        await db_session.flush()
+
+        # משלוח ישן — naive datetime (3 שעות אחורה)
+        old_delivery = Delivery(
+            sender_id=sender.id,
+            station_id=station.id,
+            pickup_address="רחוב הרצל 1, תל אביב",
+            dropoff_address="רחוב ויצמן 5, רמת גן",
+            status=DeliveryStatus.OPEN,
+            created_at=datetime.utcnow() - timedelta(hours=3),
+        )
+        db_session.add(old_delivery)
+        await db_session.commit()
+
+        mock_redis = AsyncMock()
+        # set NX מחזיר True — ההתראה לא נשלחה קודם
+        mock_redis.set = AsyncMock(return_value=True)
+
+        with _patch_run_async_for_test():
+            with patch("app.workers.tasks.get_task_session") as mock_session_ctx:
+                mock_session_ctx.return_value.__aenter__ = AsyncMock(
+                    return_value=db_session
+                )
+                mock_session_ctx.return_value.__aexit__ = AsyncMock(return_value=None)
+
+                with patch("app.core.redis_client.get_redis", new_callable=AsyncMock) as mock_get_redis:
+                    mock_get_redis.return_value = mock_redis
+
+                    with patch(
+                        "app.domain.services.alert_service.get_wallet_threshold",
+                        new_callable=AsyncMock,
+                        return_value=0,
+                    ):
+                        with patch(
+                            "app.domain.services.alert_service.publish_uncollected_shipment_alert",
+                            new_callable=AsyncMock,
+                        ) as mock_publish:
+                            result = check_station_alerts()
+
+        # הטאסק הצליח (לא נפל על timezone mismatch) ושלח התראה
+        assert result["stations_checked"] == 1
+        assert result["alerts_sent"] == 1
+        mock_publish.assert_called_once()
+        call_kwargs = mock_publish.call_args
+        # hours_open חייב להיות מספר חיובי (לא NaN ולא שגיאה)
+        assert call_kwargs.kwargs.get("hours_open", call_kwargs[1].get("hours_open", 0)) > 0
+
+    @pytest.mark.asyncio
+    async def test_station_error_does_not_stop_processing(
+        self, db_session: AsyncSession, user_factory
+    ) -> None:
+        """שגיאה בתחנה אחת לא עוצרת בדיקת תחנות אחרות"""
+        from app.workers.tasks import check_station_alerts
+
+        owner = await user_factory(
+            phone_number="+972501111111",
+            role=UserRole.STATION_OWNER,
+            platform="telegram",
+            telegram_chat_id="owner_alert2",
+        )
+
+        station1 = Station(name="תחנה 1", owner_id=owner.id, is_active=True)
+        station2 = Station(name="תחנה 2", owner_id=owner.id, is_active=True)
+        db_session.add_all([station1, station2])
+        await db_session.commit()
+
+        call_count = 0
+
+        async def _mock_get_threshold(station_id: int) -> float:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("Redis error")
+            return 0
+
+        mock_redis = AsyncMock()
+        mock_redis.set = AsyncMock(return_value=True)
+
+        # rollback מבוטל בסביבת test — מונע side effects על סשן הבדיקה
+        with _patch_run_async_for_test():
+            with patch("app.workers.tasks.get_task_session") as mock_session_ctx:
+                mock_session_ctx.return_value.__aenter__ = AsyncMock(
+                    return_value=db_session
+                )
+                mock_session_ctx.return_value.__aexit__ = AsyncMock(return_value=None)
+
+                with patch("app.core.redis_client.get_redis", new_callable=AsyncMock) as mock_get_redis:
+                    mock_get_redis.return_value = mock_redis
+
+                    with patch.object(db_session, "rollback", new_callable=AsyncMock):
+                        with patch(
+                            "app.domain.services.alert_service.get_wallet_threshold",
+                            side_effect=_mock_get_threshold,
+                        ):
+                            result = check_station_alerts()
+
+        # שתי התחנות נבדקו — הראשונה נכשלה אבל לא עצרה את השנייה
+        assert result["stations_checked"] == 2
         assert call_count == 2
 
 
