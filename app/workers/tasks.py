@@ -42,6 +42,16 @@ def get_event_loop():
         yield loop
     finally:
         try:
+            # סגירת Redis singleton לפני סגירת ה-loop — מונע שימוש חוזר
+            # ב-client שמחובר ל-event loop סגור בהרצה הבאה
+            from app.core.redis_client import close_redis
+            loop.run_until_complete(close_redis())
+        except Exception as e:
+            logger.warning(
+                "כשלון בסגירת Redis בסיום task",
+                extra_data={"error": str(e)},
+            )
+        try:
             # Cancel all pending tasks
             pending = asyncio.all_tasks(loop)
             for task in pending:
