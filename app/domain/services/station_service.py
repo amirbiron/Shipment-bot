@@ -1166,8 +1166,8 @@ class StationService:
             )
             return []
 
-        grace_months = station.auto_block_grace_months or 2
-        min_debt = station.auto_block_min_debt or 0.0
+        grace_months = station.auto_block_grace_months
+        min_debt = station.auto_block_min_debt
 
         # חישוב תחילת כל מחזורי החיוב הרלוונטיים
         current_cycle_start = self.get_billing_cycle_start()

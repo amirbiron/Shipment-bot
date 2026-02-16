@@ -121,9 +121,12 @@ async def update_auto_block_settings(
     )
 
     if not success:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=message,
+        # "התחנה לא נמצאה" → 404, שאר שגיאות ולידציה → 400
+        status_code = (
+            status.HTTP_404_NOT_FOUND
+            if "לא נמצאה" in message
+            else status.HTTP_400_BAD_REQUEST
         )
+        raise HTTPException(status_code=status_code, detail=message)
 
     return ActionResponse(success=True, message=message)
