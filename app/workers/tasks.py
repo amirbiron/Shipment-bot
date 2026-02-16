@@ -685,3 +685,123 @@ def process_billing_cycle_blocking():
             }
 
     return run_async(_process())
+
+
+@celery_app.task(name="app.workers.tasks.generate_monthly_reports")
+def generate_monthly_reports():
+    """
+    סעיף 7: הפקת דוחות חודשיים אוטומטית.
+
+    רץ ב-1 לכל חודש — מייצר דוח חודשי Excel לכל תחנה פעילה
+    ושומר אותו כקובץ בינארי ב-Redis לתקופה של 30 יום.
+    בעל התחנה יכול להוריד את הדוח דרך endpoint ייעודי.
+    """
+    import calendar
+    from app.db.models.station import Station
+    from app.domain.services.station_service import StationService
+    from app.domain.services.export_service import generate_monthly_summary_excel
+    from app.core.redis_client import get_redis
+
+    async def _generate():
+        async with get_task_session() as db:
+            # חישוב חודש קודם
+            now = datetime.utcnow()
+            if now.month == 1:
+                report_year, report_month = now.year - 1, 12
+            else:
+                report_year, report_month = now.year, now.month - 1
+
+            dt_from = datetime(report_year, report_month, 1)
+            last_day = calendar.monthrange(report_year, report_month)[1]
+            dt_to = datetime(report_year, report_month, last_day, 23, 59, 59, 999999)
+            month_str = f"{report_year}-{report_month:02d}"
+
+            # שליפת כל התחנות הפעילות
+            result = await db.execute(
+                select(Station).where(Station.is_active == True)  # noqa: E712
+            )
+            stations = list(result.scalars().all())
+            # חילוץ נתונים לערכי Python — מונע MissingGreenlet
+            station_data = [(s.id, s.name) for s in stations]
+
+            reports_generated = 0
+            redis = await get_redis()
+
+            for station_id, station_name in station_data:
+                try:
+                    station_service = StationService(db)
+
+                    # נתוני הכנסות
+                    pl_data = await station_service.get_profit_loss_report(
+                        station_id, dt_from, dt_to
+                    )
+                    if pl_data:
+                        revenue = pl_data[0]
+                    else:
+                        revenue = {
+                            "commissions": 0.0,
+                            "manual_charges": 0.0,
+                            "withdrawals": 0.0,
+                            "net": 0.0,
+                        }
+
+                    # סטטיסטיקות משלוחים
+                    delivery_stats = await station_service.get_monthly_delivery_stats(
+                        station_id, dt_from, dt_to
+                    )
+
+                    # נתוני גבייה
+                    collection_data = await station_service.get_collection_report_for_period(
+                        station_id, dt_from, dt_to
+                    )
+                    total_debt = sum(float(item["total_debt"]) for item in collection_data)
+
+                    # יצירת Excel
+                    xlsx_bytes = generate_monthly_summary_excel(
+                        month=month_str,
+                        station_name=station_name,
+                        collection_items=collection_data,
+                        total_debt=total_debt,
+                        revenue_data=revenue,
+                        delivery_stats=delivery_stats,
+                    )
+
+                    # שמירה ב-Redis למשך 30 יום
+                    cache_key = f"monthly_report:{station_id}:{month_str}"
+                    await redis.set(cache_key, xlsx_bytes, ex=30 * 86400)
+
+                    reports_generated += 1
+                    logger.info(
+                        "דוח חודשי הופק בהצלחה",
+                        extra_data={
+                            "station_id": station_id,
+                            "month": month_str,
+                        },
+                    )
+                except Exception as e:
+                    logger.error(
+                        "כשלון בהפקת דוח חודשי לתחנה",
+                        extra_data={
+                            "station_id": station_id,
+                            "month": month_str,
+                            "error": str(e),
+                        },
+                        exc_info=True,
+                    )
+                    await db.rollback()
+
+            logger.info(
+                "סיום הפקת דוחות חודשיים",
+                extra_data={
+                    "month": month_str,
+                    "stations_total": len(station_data),
+                    "reports_generated": reports_generated,
+                },
+            )
+            return {
+                "month": month_str,
+                "stations_total": len(station_data),
+                "reports_generated": reports_generated,
+            }
+
+    return run_async(_generate())

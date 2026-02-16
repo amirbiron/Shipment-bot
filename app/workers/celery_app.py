@@ -2,6 +2,7 @@
 Celery Application Configuration
 """
 from celery import Celery
+from celery.schedules import crontab
 
 from app.core.config import settings
 
@@ -49,5 +50,10 @@ celery_app.conf.beat_schedule = {
     "check-station-alerts-every-5-minutes": {
         "task": "app.workers.tasks.check_station_alerts",
         "schedule": 300.0,  # 5 דקות
+    },
+    # סעיף 7: הפקת דוחות חודשיים אוטומטית — ב-1 לכל חודש בשעה 03:00
+    "generate-monthly-reports": {
+        "task": "app.workers.tasks.generate_monthly_reports",
+        "schedule": crontab(day_of_month="1", hour="3", minute="0"),
     },
 }

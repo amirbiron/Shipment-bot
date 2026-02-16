@@ -1,5 +1,5 @@
 """
-דוחות — דוח גבייה, דוח הכנסות, ייצוא CSV
+דוחות — דוח גבייה, דוח הכנסות, ייצוא CSV/Excel, דוח רווח/הפסד, דוח חודשי
 """
 import calendar
 import csv
@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,9 +17,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import TokenPayload
 from app.api.dependencies.auth import get_current_station_owner
 from app.db.database import get_db
+from app.db.models.station import Station
 from app.db.models.station_ledger import StationLedger, StationLedgerEntryType
 from app.domain.services.station_service import StationService
+from app.domain.services.export_service import (
+    generate_collection_report_excel,
+    generate_revenue_report_excel,
+    generate_profit_loss_excel,
+    generate_monthly_summary_excel,
+)
 from app.api.routes.panel.schemas import parse_date_param
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter()
 
@@ -52,6 +62,74 @@ class RevenueReportResponse(BaseModel):
     date_to: str
 
 
+class ProfitLossMonthItem(BaseModel):
+    """שורת חודש בדוח רווח/הפסד"""
+    month: str
+    commissions: float
+    manual_charges: float
+    withdrawals: float
+    net: float
+
+
+class ProfitLossResponse(BaseModel):
+    """דוח רווח/הפסד"""
+    months: List[ProfitLossMonthItem]
+    total_commissions: float
+    total_manual_charges: float
+    total_withdrawals: float
+    total_net: float
+    date_from: str
+    date_to: str
+
+
+class MonthlySummaryResponse(BaseModel):
+    """דוח חודשי מסכם"""
+    month: str
+    station_name: str
+    # פיננסי
+    commissions: float
+    manual_charges: float
+    withdrawals: float
+    net: float
+    # משלוחים
+    total_deliveries: int
+    delivered_count: int
+    cancelled_count: int
+    open_count: int
+    # גבייה
+    total_debt: float
+    debtors_count: int
+
+
+# ==================== פונקציות עזר ====================
+
+
+def _compute_cycle_dates(
+    cycle_start_str: Optional[str],
+) -> tuple[datetime, datetime]:
+    """חישוב תחילת וסוף מחזור חיוב"""
+    cs = parse_date_param(cycle_start_str, "cycle_start")
+    if not cs:
+        cs = StationService.get_billing_cycle_start()
+
+    if cs.month == 12:
+        next_month, next_year = 1, cs.year + 1
+    else:
+        next_month, next_year = cs.month + 1, cs.year
+    max_day = calendar.monthrange(next_year, next_month)[1]
+    ce = cs.replace(year=next_year, month=next_month, day=min(cs.day, max_day))
+    return cs, ce
+
+
+async def _get_station_name(db: AsyncSession, station_id: int) -> str:
+    """שליפת שם התחנה"""
+    result = await db.execute(
+        select(Station.name).where(Station.id == station_id)
+    )
+    name = result.scalar_one_or_none()
+    return name or ""
+
+
 # ==================== Endpoints ====================
 
 
@@ -71,18 +149,7 @@ async def get_collection_report(
     station_id = auth.station_id
     station_service = StationService(db)
 
-    # חישוב תחילת מחזור
-    cs = parse_date_param(cycle_start, "cycle_start")
-    if not cs:
-        cs = StationService.get_billing_cycle_start()
-
-    # סוף מחזור — תחילת החודש הבא (מותאם ליום האחרון בחודש)
-    if cs.month == 12:
-        next_month, next_year = 1, cs.year + 1
-    else:
-        next_month, next_year = cs.month + 1, cs.year
-    max_day = calendar.monthrange(next_year, next_month)[1]
-    ce = cs.replace(year=next_year, month=next_month, day=min(cs.day, max_day))
+    cs, ce = _compute_cycle_dates(cycle_start)
 
     # שליפת דוח מה-service
     report_data = await station_service.get_collection_report_for_period(station_id, cs, ce)
@@ -152,6 +219,49 @@ async def export_collection_report(
 
 
 @router.get(
+    "/collection/export-xlsx",
+    summary="ייצוא דוח גבייה ל-Excel",
+    description="מייצא את דוח הגבייה כקובץ Excel מעוצב עם כותרות, סיכומים ותמיכה בעברית.",
+    responses={
+        200: {"description": "קובץ Excel", "content": {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {}}},
+    },
+    tags=["Panel - דוחות"],
+)
+async def export_collection_report_xlsx(
+    auth: TokenPayload = Depends(get_current_station_owner),
+    db: AsyncSession = Depends(get_db),
+    cycle_start: Optional[str] = Query(None, description="תחילת מחזור (YYYY-MM-DD)"),
+) -> Response:
+    """ייצוא דוח גבייה כ-Excel מעוצב"""
+    report_data = await get_collection_report(auth=auth, db=db, cycle_start=cycle_start)
+    station_name = await _get_station_name(db, auth.station_id)
+
+    items = [
+        {"driver_name": i.driver_name, "total_debt": i.total_debt, "charge_count": i.charge_count}
+        for i in report_data.items
+    ]
+
+    xlsx_bytes = generate_collection_report_excel(
+        items=items,
+        total_debt=report_data.total_debt,
+        cycle_start=report_data.cycle_start,
+        cycle_end=report_data.cycle_end,
+        station_name=station_name,
+    )
+
+    filename = f"collection_report_{report_data.cycle_start}.xlsx"
+    logger.info(
+        "ייצוא דוח גבייה ל-Excel",
+        extra_data={"station_id": auth.station_id, "items_count": len(items)},
+    )
+    return Response(
+        content=xlsx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@router.get(
     "/revenue",
     response_model=RevenueReportResponse,
     summary="דוח הכנסות",
@@ -203,4 +313,283 @@ async def get_revenue_report(
         net_total=commissions + manual - withdrawals,
         date_from=dt_from.strftime("%Y-%m-%d"),
         date_to=dt_to.strftime("%Y-%m-%d"),
+    )
+
+
+@router.get(
+    "/revenue/export-xlsx",
+    summary="ייצוא דוח הכנסות ל-Excel",
+    description="מייצא את דוח ההכנסות כקובץ Excel מעוצב.",
+    responses={
+        200: {"description": "קובץ Excel", "content": {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {}}},
+    },
+    tags=["Panel - דוחות"],
+)
+async def export_revenue_report_xlsx(
+    auth: TokenPayload = Depends(get_current_station_owner),
+    db: AsyncSession = Depends(get_db),
+    date_from: Optional[str] = Query(None, description="מתאריך (YYYY-MM-DD)"),
+    date_to: Optional[str] = Query(None, description="עד תאריך (YYYY-MM-DD)"),
+) -> Response:
+    """ייצוא דוח הכנסות כ-Excel מעוצב"""
+    report_data = await get_revenue_report(auth=auth, db=db, date_from=date_from, date_to=date_to)
+    station_name = await _get_station_name(db, auth.station_id)
+
+    xlsx_bytes = generate_revenue_report_excel(
+        total_commissions=report_data.total_commissions,
+        total_manual_charges=report_data.total_manual_charges,
+        total_withdrawals=report_data.total_withdrawals,
+        net_total=report_data.net_total,
+        date_from=report_data.date_from,
+        date_to=report_data.date_to,
+        station_name=station_name,
+    )
+
+    filename = f"revenue_report_{report_data.date_from}_{report_data.date_to}.xlsx"
+    logger.info(
+        "ייצוא דוח הכנסות ל-Excel",
+        extra_data={"station_id": auth.station_id},
+    )
+    return Response(
+        content=xlsx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+# ==================== דוח רווח/הפסד ====================
+
+
+@router.get(
+    "/profit-loss",
+    response_model=ProfitLossResponse,
+    summary="דוח רווח/הפסד",
+    description="דוח רווח/הפסד חודשי — פירוט הכנסות והוצאות לכל חודש בטווח תאריכים.",
+    tags=["Panel - דוחות"],
+)
+async def get_profit_loss_report(
+    auth: TokenPayload = Depends(get_current_station_owner),
+    db: AsyncSession = Depends(get_db),
+    date_from: Optional[str] = Query(None, description="מתאריך (YYYY-MM-DD). ברירת מחדל: 6 חודשים אחורה"),
+    date_to: Optional[str] = Query(None, description="עד תאריך (YYYY-MM-DD). ברירת מחדל: היום"),
+) -> ProfitLossResponse:
+    """דוח רווח/הפסד — פירוט חודשי"""
+    station_id = auth.station_id
+    station_service = StationService(db)
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    dt_from = parse_date_param(date_from, "date_from")
+    if not dt_from:
+        # ברירת מחדל — 6 חודשים אחורה
+        month = now.month - 6
+        year = now.year
+        if month <= 0:
+            month += 12
+            year -= 1
+        dt_from = now.replace(year=year, month=month, day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    dt_to = parse_date_param(date_to, "date_to", end_of_day=True)
+    if not dt_to:
+        dt_to = now
+
+    months_data = await station_service.get_profit_loss_report(station_id, dt_from, dt_to)
+
+    month_items = [ProfitLossMonthItem(**m) for m in months_data]
+
+    # סיכומים
+    total_commissions = sum(m.commissions for m in month_items)
+    total_manual_charges = sum(m.manual_charges for m in month_items)
+    total_withdrawals = sum(m.withdrawals for m in month_items)
+
+    return ProfitLossResponse(
+        months=month_items,
+        total_commissions=total_commissions,
+        total_manual_charges=total_manual_charges,
+        total_withdrawals=total_withdrawals,
+        total_net=total_commissions + total_manual_charges - total_withdrawals,
+        date_from=dt_from.strftime("%Y-%m-%d"),
+        date_to=dt_to.strftime("%Y-%m-%d"),
+    )
+
+
+@router.get(
+    "/profit-loss/export-xlsx",
+    summary="ייצוא דוח רווח/הפסד ל-Excel",
+    description="מייצא את דוח הרווח/הפסד כקובץ Excel מעוצב עם פירוט חודשי.",
+    responses={
+        200: {"description": "קובץ Excel", "content": {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {}}},
+    },
+    tags=["Panel - דוחות"],
+)
+async def export_profit_loss_xlsx(
+    auth: TokenPayload = Depends(get_current_station_owner),
+    db: AsyncSession = Depends(get_db),
+    date_from: Optional[str] = Query(None, description="מתאריך (YYYY-MM-DD)"),
+    date_to: Optional[str] = Query(None, description="עד תאריך (YYYY-MM-DD)"),
+) -> Response:
+    """ייצוא דוח רווח/הפסד כ-Excel מעוצב"""
+    report_data = await get_profit_loss_report(auth=auth, db=db, date_from=date_from, date_to=date_to)
+    station_name = await _get_station_name(db, auth.station_id)
+
+    revenue_by_month = [
+        {
+            "month": m.month,
+            "commissions": m.commissions,
+            "manual_charges": m.manual_charges,
+            "withdrawals": m.withdrawals,
+            "net": m.net,
+        }
+        for m in report_data.months
+    ]
+
+    xlsx_bytes = generate_profit_loss_excel(
+        revenue_by_month=revenue_by_month,
+        date_from=report_data.date_from,
+        date_to=report_data.date_to,
+        station_name=station_name,
+    )
+
+    filename = f"profit_loss_{report_data.date_from}_{report_data.date_to}.xlsx"
+    logger.info(
+        "ייצוא דוח רווח/הפסד ל-Excel",
+        extra_data={"station_id": auth.station_id, "months_count": len(report_data.months)},
+    )
+    return Response(
+        content=xlsx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+# ==================== דוח חודשי מסכם ====================
+
+
+@router.get(
+    "/monthly-summary",
+    response_model=MonthlySummaryResponse,
+    summary="דוח חודשי מסכם",
+    description="דוח חודשי מסכם — סטטיסטיקות משלוחים, הכנסות וגבייה לחודש ספציפי.",
+    tags=["Panel - דוחות"],
+)
+async def get_monthly_summary(
+    auth: TokenPayload = Depends(get_current_station_owner),
+    db: AsyncSession = Depends(get_db),
+    month: Optional[str] = Query(None, description="חודש (YYYY-MM). ברירת מחדל: חודש קודם"),
+) -> MonthlySummaryResponse:
+    """דוח חודשי מסכם — כל הנתונים לחודש אחד"""
+    station_id = auth.station_id
+    station_service = StationService(db)
+
+    # פירוש חודש
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    if month:
+        try:
+            dt_from = datetime.strptime(month, "%Y-%m")
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="פורמט חודש לא תקין. יש להשתמש ב-YYYY-MM",
+            )
+    else:
+        # ברירת מחדל — חודש קודם
+        if now.month == 1:
+            dt_from = now.replace(year=now.year - 1, month=12, day=1, hour=0, minute=0, second=0, microsecond=0)
+        else:
+            dt_from = now.replace(month=now.month - 1, day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    # סוף חודש
+    last_day = calendar.monthrange(dt_from.year, dt_from.month)[1]
+    dt_to = dt_from.replace(day=last_day, hour=23, minute=59, second=59, microsecond=999999)
+    month_str = dt_from.strftime("%Y-%m")
+
+    # נתוני הכנסות
+    pl_data = await station_service.get_profit_loss_report(station_id, dt_from, dt_to)
+    if pl_data:
+        revenue = pl_data[0]
+    else:
+        revenue = {"commissions": 0.0, "manual_charges": 0.0, "withdrawals": 0.0, "net": 0.0}
+
+    # סטטיסטיקות משלוחים
+    delivery_stats = await station_service.get_monthly_delivery_stats(station_id, dt_from, dt_to)
+
+    # נתוני גבייה
+    collection_data = await station_service.get_collection_report_for_period(station_id, dt_from, dt_to)
+    total_debt = sum(float(item["total_debt"]) for item in collection_data)
+
+    # שם תחנה
+    station_name = await _get_station_name(db, station_id)
+
+    return MonthlySummaryResponse(
+        month=month_str,
+        station_name=station_name,
+        commissions=revenue["commissions"],
+        manual_charges=revenue["manual_charges"],
+        withdrawals=revenue["withdrawals"],
+        net=revenue["net"],
+        total_deliveries=delivery_stats["total"],
+        delivered_count=delivery_stats["delivered"],
+        cancelled_count=delivery_stats["cancelled"],
+        open_count=delivery_stats["open"],
+        total_debt=total_debt,
+        debtors_count=len(collection_data),
+    )
+
+
+@router.get(
+    "/monthly-summary/export-xlsx",
+    summary="ייצוא דוח חודשי ל-Excel",
+    description="מייצא את הדוח החודשי כקובץ Excel מעוצב עם מספר גליונות (סיכום + גבייה).",
+    responses={
+        200: {"description": "קובץ Excel", "content": {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {}}},
+    },
+    tags=["Panel - דוחות"],
+)
+async def export_monthly_summary_xlsx(
+    auth: TokenPayload = Depends(get_current_station_owner),
+    db: AsyncSession = Depends(get_db),
+    month: Optional[str] = Query(None, description="חודש (YYYY-MM). ברירת מחדל: חודש קודם"),
+) -> Response:
+    """ייצוא דוח חודשי כ-Excel מעוצב עם מספר גליונות"""
+    summary = await get_monthly_summary(auth=auth, db=db, month=month)
+
+    station_service = StationService(db)
+
+    # פירוש חודש לתאריכים
+    dt_from = datetime.strptime(summary.month, "%Y-%m")
+    last_day = calendar.monthrange(dt_from.year, dt_from.month)[1]
+    dt_to = dt_from.replace(day=last_day, hour=23, minute=59, second=59, microsecond=999999)
+
+    # נתוני גבייה מפורטים לגליון הגבייה
+    collection_data = await station_service.get_collection_report_for_period(
+        auth.station_id, dt_from, dt_to
+    )
+
+    xlsx_bytes = generate_monthly_summary_excel(
+        month=summary.month,
+        station_name=summary.station_name,
+        collection_items=collection_data,
+        total_debt=summary.total_debt,
+        revenue_data={
+            "commissions": summary.commissions,
+            "manual_charges": summary.manual_charges,
+            "withdrawals": summary.withdrawals,
+            "net": summary.net,
+        },
+        delivery_stats={
+            "total": summary.total_deliveries,
+            "delivered": summary.delivered_count,
+            "cancelled": summary.cancelled_count,
+            "open": summary.open_count,
+        },
+    )
+
+    filename = f"monthly_report_{summary.month}.xlsx"
+    logger.info(
+        "ייצוא דוח חודשי ל-Excel",
+        extra_data={"station_id": auth.station_id, "month": summary.month},
+    )
+    return Response(
+        content=xlsx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
     )

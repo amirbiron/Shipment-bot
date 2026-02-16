@@ -2019,3 +2019,104 @@ class StationService:
         deliveries = list(result.scalars().unique().all())
 
         return deliveries, total
+
+    # ==================== סעיף 7: דוחות מורחבים ====================
+
+    async def get_profit_loss_report(
+        self,
+        station_id: int,
+        date_from: datetime,
+        date_to: datetime,
+    ) -> list[dict]:
+        """
+        דוח רווח/הפסד — פירוט חודשי של הכנסות והוצאות.
+
+        מחזיר רשימת חודשים עם commissions, manual_charges, withdrawals, net.
+        """
+        from sqlalchemy import func, extract
+
+        result = await self.db.execute(
+            select(
+                func.strftime('%Y-%m', StationLedger.created_at).label("month"),
+                StationLedger.entry_type,
+                func.coalesce(func.sum(StationLedger.amount), 0).label("total"),
+            )
+            .where(
+                StationLedger.station_id == station_id,
+                StationLedger.created_at >= date_from,
+                StationLedger.created_at <= date_to,
+            )
+            .group_by("month", StationLedger.entry_type)
+            .order_by("month")
+        )
+        rows = result.all()
+
+        # קיבוץ לפי חודש
+        months: dict[str, dict[str, Decimal]] = {}
+        for row in rows:
+            month_key = row[0]
+            entry_type = row[1]
+            total = row[2]
+
+            if month_key not in months:
+                months[month_key] = {
+                    "commissions": Decimal("0"),
+                    "manual_charges": Decimal("0"),
+                    "withdrawals": Decimal("0"),
+                }
+
+            if entry_type == StationLedgerEntryType.COMMISSION_CREDIT:
+                months[month_key]["commissions"] = total
+            elif entry_type == StationLedgerEntryType.MANUAL_CHARGE:
+                months[month_key]["manual_charges"] = total
+            elif entry_type == StationLedgerEntryType.WITHDRAWAL:
+                months[month_key]["withdrawals"] = total
+
+        return [
+            {
+                "month": month,
+                "commissions": float(data["commissions"]),
+                "manual_charges": float(data["manual_charges"]),
+                "withdrawals": float(data["withdrawals"]),
+                "net": float(data["commissions"] + data["manual_charges"] - data["withdrawals"]),
+            }
+            for month, data in sorted(months.items())
+        ]
+
+    async def get_monthly_delivery_stats(
+        self,
+        station_id: int,
+        date_from: datetime,
+        date_to: datetime,
+    ) -> dict[str, int]:
+        """
+        סטטיסטיקות משלוחים לתקופה — total, delivered, cancelled, open.
+        """
+        from sqlalchemy import func, case
+
+        result = await self.db.execute(
+            select(
+                func.count(Delivery.id).label("total"),
+                func.count(case(
+                    (Delivery.status == DeliveryStatus.DELIVERED, 1),
+                )).label("delivered"),
+                func.count(case(
+                    (Delivery.status == DeliveryStatus.CANCELLED, 1),
+                )).label("cancelled"),
+                func.count(case(
+                    (Delivery.status.in_(ACTIVE_DELIVERY_STATUSES), 1),
+                )).label("open"),
+            )
+            .where(
+                Delivery.station_id == station_id,
+                Delivery.created_at >= date_from,
+                Delivery.created_at <= date_to,
+            )
+        )
+        row = result.one()
+        return {
+            "total": row[0] or 0,
+            "delivered": row[1] or 0,
+            "cancelled": row[2] or 0,
+            "open": row[3] or 0,
+        }
