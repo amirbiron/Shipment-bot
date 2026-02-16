@@ -809,3 +809,135 @@ def generate_monthly_reports():
             }
 
     return run_async(_generate())
+
+
+@celery_app.task(name="app.workers.tasks.check_whatsapp_connection")
+def check_whatsapp_connection() -> dict:
+    """
+    בדיקת חיבור WhatsApp Gateway תקופתית.
+
+    רצה כל 3 דקות. בודק שה-gateway פעיל ושה-session מחובר.
+    אם ה-session מנותק (למשל אחרי OOM restart) — שולח התראה
+    למנהלים דרך Telegram (כי WhatsApp לא זמין).
+    משתמש ב-Redis throttling למניעת הצפת התראות (פעם ב-15 דקות).
+    """
+    import httpx
+    from app.core.config import settings
+    from app.core.redis_client import get_redis
+
+    # throttle — התראה אחת ל-15 דקות
+    _THROTTLE_KEY = "alert_throttle:whatsapp_disconnected"
+    _THROTTLE_SECONDS = 900
+
+    async def _check() -> dict:
+        status = "unknown"
+        alert_sent = False
+
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(
+                    f"{settings.WHATSAPP_GATEWAY_URL}/health"
+                )
+
+            if response.status_code != 200:
+                status = "gateway_error"
+                logger.error(
+                    "WhatsApp Gateway לא זמין — סטטוס HTTP לא תקין",
+                    extra_data={"status_code": response.status_code},
+                )
+            else:
+                data = response.json()
+                if data.get("connected"):
+                    status = "connected"
+                    # אם מחובר — ננקה את ה-throttle key כדי שהתראה הבאה תשלח מיד
+                    try:
+                        redis = await get_redis()
+                        await redis.delete(_THROTTLE_KEY)
+                    except Exception:
+                        pass
+                    logger.debug("WhatsApp Gateway מחובר ותקין")
+                    return {"status": status, "alert_sent": False}
+                else:
+                    status = "disconnected"
+                    logger.error(
+                        "WhatsApp Gateway פעיל אך ה-session מנותק!",
+                        extra_data={"response": data},
+                    )
+        except httpx.TimeoutException:
+            status = "timeout"
+            logger.error("WhatsApp Gateway — timeout בבדיקת חיבור")
+        except httpx.RequestError as exc:
+            status = "unreachable"
+            logger.error(
+                "WhatsApp Gateway — לא ניתן להתחבר",
+                extra_data={"error": str(exc)},
+            )
+        except Exception as exc:
+            status = "error"
+            logger.error(
+                "WhatsApp Gateway — שגיאה לא צפויה בבדיקת חיבור",
+                extra_data={"error": str(exc)},
+                exc_info=True,
+            )
+
+        # ── שליחת התראה למנהלים דרך Telegram ──
+        try:
+            redis = await get_redis()
+            # throttle — אם כבר שלחנו התראה ב-15 הדקות האחרונות, לא שולחים שוב
+            was_set = await redis.set(
+                _THROTTLE_KEY, "1", nx=True, ex=_THROTTLE_SECONDS
+            )
+            if not was_set:
+                logger.info(
+                    "WhatsApp disconnected alert throttled",
+                    extra_data={"status": status},
+                )
+                return {"status": status, "alert_sent": False}
+        except Exception as exc:
+            logger.warning(
+                "כשלון בבדיקת throttle ב-Redis — ממשיך לשלוח התראה",
+                extra_data={"error": str(exc)},
+            )
+
+        # שליחה דרך Telegram בלבד (WhatsApp לא זמין)
+        alert_message = (
+            f"🔴 <b>התראת WhatsApp Gateway</b>\n\n"
+            f"סטטוס: <code>{status}</code>\n"
+            f"Gateway URL: <code>{settings.WHATSAPP_GATEWAY_URL}</code>\n\n"
+            f"ה-WhatsApp Gateway לא מחובר.\n"
+            f"הודעות WhatsApp לא נשלחות!\n\n"
+            f"יש לבדוק את ה-service ולעשות restart אם צריך."
+        )
+
+        # שליחה לכל מנהלי Telegram (פרטי + קבוצה)
+        from app.domain.services.admin_notification_service import (
+            AdminNotificationService,
+            _parse_csv_setting,
+        )
+
+        tg_targets: list[str] = []
+        tg_admin_ids = _parse_csv_setting(settings.TELEGRAM_ADMIN_CHAT_IDS)
+        tg_targets.extend(tg_admin_ids)
+        if settings.TELEGRAM_ADMIN_CHAT_ID and settings.TELEGRAM_ADMIN_CHAT_ID not in tg_targets:
+            tg_targets.append(settings.TELEGRAM_ADMIN_CHAT_ID)
+
+        for target in tg_targets:
+            sent = await AdminNotificationService._send_telegram_message(
+                target, alert_message
+            )
+            if sent:
+                alert_sent = True
+                logger.info(
+                    "התראת WhatsApp disconnected נשלחה למנהל",
+                    extra_data={"target": target, "status": status},
+                )
+
+        if not alert_sent and tg_targets:
+            logger.error(
+                "כשלון בשליחת התראת WhatsApp disconnected לכל המנהלים",
+                extra_data={"status": status, "targets_count": len(tg_targets)},
+            )
+
+        return {"status": status, "alert_sent": alert_sent}
+
+    return run_async(_check())
