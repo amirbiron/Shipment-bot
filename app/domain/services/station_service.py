@@ -1292,32 +1292,35 @@ class StationService:
 
         מחזיר רשימה עם driver_name, total_debt, charge_count.
         אם cycle_end לא סופק — ללא גבול עליון.
+        מקבץ ב-SQL (GROUP BY) לביצועים טובים יותר.
         """
-        query = select(ManualCharge).where(
+        from sqlalchemy import func
+
+        where_clauses = [
             ManualCharge.station_id == station_id,
             ManualCharge.created_at >= cycle_start,
             ManualCharge.is_paid == False,  # noqa: E712 — שלב 5: סינון חיובים ששולמו
-        )
+        ]
         if cycle_end is not None:
-            query = query.where(ManualCharge.created_at < cycle_end)
-        query = query.order_by(ManualCharge.created_at.desc())
+            where_clauses.append(ManualCharge.created_at < cycle_end)
+
+        query = (
+            select(
+                ManualCharge.driver_name,
+                func.coalesce(func.sum(ManualCharge.amount), 0).label("total_debt"),
+                func.count(ManualCharge.id).label("charge_count"),
+            )
+            .where(*where_clauses)
+            .group_by(ManualCharge.driver_name)
+            .having(func.sum(ManualCharge.amount) > 0)
+        )
 
         result = await self.db.execute(query)
-        charges = list(result.scalars().all())
-
-        # קיבוץ לפי שם נהג
-        report: dict[str, dict] = {}
-        for charge in charges:
-            name = charge.driver_name
-            if name not in report:
-                report[name] = {"total_debt": Decimal("0"), "charge_count": 0}
-            report[name]["total_debt"] += charge.amount
-            report[name]["charge_count"] += 1
+        rows = result.all()
 
         return [
-            {"driver_name": name, "total_debt": data["total_debt"], "charge_count": data["charge_count"]}
-            for name, data in report.items()
-            if data["total_debt"] > 0
+            {"driver_name": row[0], "total_debt": row[1], "charge_count": row[2]}
+            for row in rows
         ]
 
     # ==================== סעיף 10: הגדרות חסימה אוטומטית ====================
@@ -2019,3 +2022,107 @@ class StationService:
         deliveries = list(result.scalars().unique().all())
 
         return deliveries, total
+
+    # ==================== סעיף 7: דוחות מורחבים ====================
+
+    async def get_profit_loss_report(
+        self,
+        station_id: int,
+        date_from: datetime,
+        date_to: datetime,
+    ) -> list[dict]:
+        """
+        דוח רווח/הפסד — פירוט חודשי של הכנסות והוצאות.
+
+        מחזיר רשימת חודשים עם commissions, manual_charges, withdrawals, net.
+        """
+        from sqlalchemy import func
+        from app.db.compat import year_month
+
+        month_expr = year_month(StationLedger.created_at)
+
+        result = await self.db.execute(
+            select(
+                month_expr.label("month"),
+                StationLedger.entry_type,
+                func.coalesce(func.sum(StationLedger.amount), 0).label("total"),
+            )
+            .where(
+                StationLedger.station_id == station_id,
+                StationLedger.created_at >= date_from,
+                StationLedger.created_at <= date_to,
+            )
+            .group_by(month_expr, StationLedger.entry_type)
+            .order_by(month_expr)
+        )
+        rows = result.all()
+
+        # קיבוץ לפי חודש
+        months: dict[str, dict[str, Decimal]] = {}
+        for row in rows:
+            month_key = row[0]
+            entry_type = row[1]
+            total = row[2]
+
+            if month_key not in months:
+                months[month_key] = {
+                    "commissions": Decimal("0"),
+                    "manual_charges": Decimal("0"),
+                    "withdrawals": Decimal("0"),
+                }
+
+            if entry_type == StationLedgerEntryType.COMMISSION_CREDIT:
+                months[month_key]["commissions"] = total
+            elif entry_type == StationLedgerEntryType.MANUAL_CHARGE:
+                months[month_key]["manual_charges"] = total
+            elif entry_type == StationLedgerEntryType.WITHDRAWAL:
+                months[month_key]["withdrawals"] = total
+
+        return [
+            {
+                "month": month,
+                "commissions": float(data["commissions"]),
+                "manual_charges": float(data["manual_charges"]),
+                "withdrawals": float(data["withdrawals"]),
+                "net": float(data["commissions"] + data["manual_charges"] - data["withdrawals"]),
+            }
+            for month, data in sorted(months.items())
+        ]
+
+    async def get_monthly_delivery_stats(
+        self,
+        station_id: int,
+        date_from: datetime,
+        date_to: datetime,
+    ) -> dict[str, int]:
+        """
+        סטטיסטיקות משלוחים לתקופה — total, delivered, cancelled, open.
+        """
+        from sqlalchemy import func, case
+
+        result = await self.db.execute(
+            select(
+                func.count(Delivery.id).label("total"),
+                func.count(case(
+                    (Delivery.status == DeliveryStatus.DELIVERED, 1),
+                )).label("delivered"),
+                func.count(case(
+                    (Delivery.status == DeliveryStatus.CANCELLED, 1),
+                )).label("cancelled"),
+                func.count(case(
+                    (Delivery.status.in_(ACTIVE_DELIVERY_STATUSES), 1),
+                )).label("open"),
+            )
+            .where(
+                Delivery.station_id == station_id,
+                Delivery.created_at >= date_from,
+                Delivery.created_at <= date_to,
+            )
+        )
+        row = result.one()
+        return {
+            "total": row[0] or 0,
+            "delivered": row[1] or 0,
+            "cancelled": row[2] or 0,
+            "open": row[3] or 0,
+        }
