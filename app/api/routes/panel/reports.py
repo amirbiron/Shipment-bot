@@ -121,6 +121,31 @@ def _compute_cycle_dates(
     return cs, ce
 
 
+def _parse_month_range(
+    month: Optional[str],
+) -> tuple[datetime, datetime, str]:
+    """פירוש חודש (YYYY-MM) לטווח תאריכים (dt_from, dt_to, month_str)"""
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    if month:
+        try:
+            dt_from = datetime.strptime(month, "%Y-%m")
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="פורמט חודש לא תקין. יש להשתמש ב-YYYY-MM",
+            )
+    else:
+        if now.month == 1:
+            dt_from = now.replace(year=now.year - 1, month=12, day=1, hour=0, minute=0, second=0, microsecond=0)
+        else:
+            dt_from = now.replace(month=now.month - 1, day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    last_day = calendar.monthrange(dt_from.year, dt_from.month)[1]
+    dt_to = dt_from.replace(day=last_day, hour=23, minute=59, second=59, microsecond=999999)
+    month_str = dt_from.strftime("%Y-%m")
+    return dt_from, dt_to, month_str
+
+
 async def _get_station_name(db: AsyncSession, station_id: int) -> str:
     """שליפת שם התחנה"""
     result = await db.execute(
@@ -480,27 +505,7 @@ async def get_monthly_summary(
     station_id = auth.station_id
     station_service = StationService(db)
 
-    # פירוש חודש
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-    if month:
-        try:
-            dt_from = datetime.strptime(month, "%Y-%m")
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="פורמט חודש לא תקין. יש להשתמש ב-YYYY-MM",
-            )
-    else:
-        # ברירת מחדל — חודש קודם
-        if now.month == 1:
-            dt_from = now.replace(year=now.year - 1, month=12, day=1, hour=0, minute=0, second=0, microsecond=0)
-        else:
-            dt_from = now.replace(month=now.month - 1, day=1, hour=0, minute=0, second=0, microsecond=0)
-
-    # סוף חודש
-    last_day = calendar.monthrange(dt_from.year, dt_from.month)[1]
-    dt_to = dt_from.replace(day=last_day, hour=23, minute=59, second=59, microsecond=999999)
-    month_str = dt_from.strftime("%Y-%m")
+    dt_from, dt_to, month_str = _parse_month_range(month)
 
     # נתוני הכנסות
     pl_data = await station_service.get_profit_loss_report(station_id, dt_from, dt_to)
@@ -550,43 +555,89 @@ async def export_monthly_summary_xlsx(
     month: Optional[str] = Query(None, description="חודש (YYYY-MM). ברירת מחדל: חודש קודם"),
 ) -> Response:
     """ייצוא דוח חודשי כ-Excel מעוצב עם מספר גליונות"""
-    summary = await get_monthly_summary(auth=auth, db=db, month=month)
-
+    station_id = auth.station_id
     station_service = StationService(db)
 
     # פירוש חודש לתאריכים
-    dt_from = datetime.strptime(summary.month, "%Y-%m")
-    last_day = calendar.monthrange(dt_from.year, dt_from.month)[1]
-    dt_to = dt_from.replace(day=last_day, hour=23, minute=59, second=59, microsecond=999999)
+    dt_from, dt_to, month_str = _parse_month_range(month)
 
-    # נתוני גבייה מפורטים לגליון הגבייה
+    # שאילתה בודדת לכל מקור נתונים — בלי כפילויות
+    pl_data = await station_service.get_profit_loss_report(station_id, dt_from, dt_to)
+    revenue = pl_data[0] if pl_data else {
+        "commissions": 0.0, "manual_charges": 0.0, "withdrawals": 0.0, "net": 0.0,
+    }
+
+    delivery_stats = await station_service.get_monthly_delivery_stats(station_id, dt_from, dt_to)
+
     collection_data = await station_service.get_collection_report_for_period(
-        auth.station_id, dt_from, dt_to
+        station_id, dt_from, dt_to
     )
+    total_debt = sum(float(item["total_debt"]) for item in collection_data)
+
+    station_name = await _get_station_name(db, station_id)
 
     xlsx_bytes = generate_monthly_summary_excel(
-        month=summary.month,
-        station_name=summary.station_name,
+        month=month_str,
+        station_name=station_name,
         collection_items=collection_data,
-        total_debt=summary.total_debt,
-        revenue_data={
-            "commissions": summary.commissions,
-            "manual_charges": summary.manual_charges,
-            "withdrawals": summary.withdrawals,
-            "net": summary.net,
-        },
-        delivery_stats={
-            "total": summary.total_deliveries,
-            "delivered": summary.delivered_count,
-            "cancelled": summary.cancelled_count,
-            "open": summary.open_count,
-        },
+        total_debt=total_debt,
+        revenue_data=revenue,
+        delivery_stats=delivery_stats,
     )
 
-    filename = f"monthly_report_{summary.month}.xlsx"
+    filename = f"monthly_report_{month_str}.xlsx"
     logger.info(
         "ייצוא דוח חודשי ל-Excel",
-        extra_data={"station_id": auth.station_id, "month": summary.month},
+        extra_data={"station_id": station_id, "month": month_str},
+    )
+    return Response(
+        content=xlsx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@router.get(
+    "/monthly-summary/cached-xlsx",
+    summary="הורדת דוח חודשי מוכן מהמטמון",
+    description=(
+        "מחזיר דוח חודשי Excel שהופק אוטומטית על ידי המשימה התקופתית (1 לכל חודש). "
+        "אם הדוח לא קיים במטמון, מחזיר 404."
+    ),
+    responses={
+        200: {
+            "description": "קובץ Excel",
+            "content": {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {}},
+        },
+        404: {"description": "דוח לא נמצא במטמון"},
+    },
+    tags=["Panel - דוחות"],
+)
+async def get_cached_monthly_report(
+    auth: TokenPayload = Depends(get_current_station_owner),
+    month: Optional[str] = Query(None, description="חודש (YYYY-MM). ברירת מחדל: חודש קודם"),
+) -> Response:
+    """הורדת דוח חודשי שהופק אוטומטית — נשמר ב-Redis למשך 30 יום"""
+    import base64
+    from app.core.redis_client import get_redis
+
+    _, _, month_str = _parse_month_range(month)
+
+    redis = await get_redis()
+    cache_key = f"monthly_report:{auth.station_id}:{month_str}"
+    encoded = await redis.get(cache_key)
+
+    if not encoded:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"דוח חודשי לחודש {month_str} לא נמצא במטמון. הדוח מופק אוטומטית ב-1 לכל חודש.",
+        )
+
+    xlsx_bytes = base64.b64decode(encoded)
+    filename = f"monthly_report_{month_str}.xlsx"
+    logger.info(
+        "הורדת דוח חודשי מהמטמון",
+        extra_data={"station_id": auth.station_id, "month": month_str},
     )
     return Response(
         content=xlsx_bytes,

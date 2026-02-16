@@ -421,7 +421,7 @@ def generate_monthly_summary_excel(
 
     for i, item in enumerate(collection_items):
         row = coll_row + 1 + i
-        ws_collection.cell(row=row, column=1, value=item["driver_name"])
+        ws_collection.cell(row=row, column=1, value=_sanitize_text(item["driver_name"]))
         debt_cell = ws_collection.cell(row=row, column=2, value=float(item["total_debt"]))
         _format_currency_cell(debt_cell)
         ws_collection.cell(row=row, column=3, value=item["charge_count"])
