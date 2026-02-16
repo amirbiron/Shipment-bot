@@ -1168,10 +1168,19 @@ class StationOwnerStateHandler:
         text = message.strip()
 
         if text == "מחק":
-            await self.station_service.update_station_settings(
+            success, msg = await self.station_service.update_station_settings(
                 station_id=self.station_id,
                 description=None,
             )
+            if not success:
+                logger.error("כשלון במחיקת תיאור תחנה", extra_data={
+                    "station_id": self.station_id, "error": msg,
+                })
+                response = MessageResponse(
+                    f"{msg}\n\nנסה שוב או לחץ חזרה:",
+                    keyboard=[["🔙 חזרה"]],
+                )
+                return response, StationOwnerState.EDIT_STATION_DESCRIPTION.value, {}
             return await self._show_station_settings(user, context)
 
         success, msg = await self.station_service.update_station_settings(
@@ -1229,10 +1238,19 @@ class StationOwnerStateHandler:
         text = message.strip()
 
         if text == "מחק":
-            await self.station_service.update_station_settings(
+            success, msg = await self.station_service.update_station_settings(
                 station_id=self.station_id,
                 operating_hours=None,
             )
+            if not success:
+                logger.error("כשלון במחיקת שעות פעילות", extra_data={
+                    "station_id": self.station_id, "error": msg,
+                })
+                response = MessageResponse(
+                    f"{msg}\n\nנסה שוב או לחץ חזרה:",
+                    keyboard=[["🔙 חזרה"]],
+                )
+                return response, StationOwnerState.EDIT_OPERATING_HOURS.value, {}
             return await self._show_station_settings(user, context)
 
         # ניתוח "יום HH:MM-HH:MM" או "יום סגור"
@@ -1308,10 +1326,19 @@ class StationOwnerStateHandler:
         text = message.strip()
 
         if text == "מחק":
-            await self.station_service.update_station_settings(
+            success, msg = await self.station_service.update_station_settings(
                 station_id=self.station_id,
                 service_areas=None,
             )
+            if not success:
+                logger.error("כשלון במחיקת אזורי שירות", extra_data={
+                    "station_id": self.station_id, "error": msg,
+                })
+                response = MessageResponse(
+                    f"{msg}\n\nנסה שוב או לחץ חזרה:",
+                    keyboard=[["🔙 חזרה"]],
+                )
+                return response, StationOwnerState.EDIT_SERVICE_AREAS.value, {}
             return await self._show_station_settings(user, context)
 
         # פיצול לפי פסיקים

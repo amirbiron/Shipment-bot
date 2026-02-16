@@ -9,14 +9,22 @@
 בדיקות ולידטורים:
 - OperatingHoursValidator
 - ServiceAreasValidator
+
+בדיקות handler:
+- כשלון מחיקה מחזיר שגיאה למשתמש (לא בולע בשקט)
 """
 import pytest
+from unittest.mock import AsyncMock, patch
 
 from app.core.validation import OperatingHoursValidator, ServiceAreasValidator
 from app.db.models.user import UserRole
 from app.db.models.station import Station
+from app.db.models.station_owner import StationOwner
 from app.db.models.station_wallet import StationWallet
 from app.domain.services.station_service import StationService
+from app.state_machine.states import StationOwnerState
+from app.state_machine.station_owner_handler import StationOwnerStateHandler
+from app.state_machine.manager import StateManager
 
 
 # ============================================================================
@@ -360,7 +368,7 @@ class TestStationSettingsService:
 
         assert success is True
         settings = await service.get_station_settings(station.id)
-        assert settings["logo_url"] == "https://example.com/logo.png"
+        assert settings["logo_url"] == "https://example.com/logo.png"  # noqa: E501
 
     @pytest.mark.asyncio
     async def test_update_nonexistent_station(self, db_session):
@@ -429,3 +437,90 @@ class TestStationSettingsService:
         assert settings["operating_hours"]["saturday"] is None
         assert "תל אביב" in settings["service_areas"]
         assert settings["logo_url"] == "https://example.com/logo.png"
+
+
+# ============================================================================
+# בדיקות handler — כשלון מחיקה מחזיר שגיאה למשתמש
+# ============================================================================
+
+
+class TestDeleteActionsHandleFailure:
+    """בדיקות שכשלון מחיקה (מחק) ב-handler לא נבלע בשקט"""
+
+    async def _setup_station(self, user_factory, db_session):
+        """יצירת תחנה עם בעלים"""
+        owner = await user_factory(
+            phone_number="+972501234567",
+            name="בעלים",
+            role=UserRole.STATION_OWNER,
+        )
+        station = Station(name="תחנת בדיקה", owner_id=owner.id)
+        db_session.add(station)
+        await db_session.flush()
+        db_session.add(StationWallet(station_id=station.id))
+        db_session.add(StationOwner(station_id=station.id, user_id=owner.id))
+        await db_session.commit()
+        return owner, station
+
+    @pytest.mark.asyncio
+    async def test_delete_description_failure_shows_error(self, user_factory, db_session):
+        """כשלון מחיקת תיאור — מציג שגיאה למשתמש ונשאר באותו state"""
+        owner, station = await self._setup_station(user_factory, db_session)
+        state_mgr = StateManager(db_session)
+        await state_mgr.force_state(
+            owner.id, "telegram",
+            StationOwnerState.EDIT_STATION_DESCRIPTION.value, {},
+        )
+
+        handler = StationOwnerStateHandler(db_session, station.id)
+
+        with patch.object(
+            handler.station_service, "update_station_settings",
+            new_callable=AsyncMock, return_value=(False, "שגיאת מסד נתונים"),
+        ):
+            response, new_state = await handler.handle_message(owner, "מחק", None)
+
+        assert "שגיאת מסד נתונים" in response.text
+        assert new_state == StationOwnerState.EDIT_STATION_DESCRIPTION.value
+
+    @pytest.mark.asyncio
+    async def test_delete_operating_hours_failure_shows_error(self, user_factory, db_session):
+        """כשלון מחיקת שעות פעילות — מציג שגיאה למשתמש ונשאר באותו state"""
+        owner, station = await self._setup_station(user_factory, db_session)
+        state_mgr = StateManager(db_session)
+        await state_mgr.force_state(
+            owner.id, "telegram",
+            StationOwnerState.EDIT_OPERATING_HOURS.value, {},
+        )
+
+        handler = StationOwnerStateHandler(db_session, station.id)
+
+        with patch.object(
+            handler.station_service, "update_station_settings",
+            new_callable=AsyncMock, return_value=(False, "התחנה לא נמצאה."),
+        ):
+            response, new_state = await handler.handle_message(owner, "מחק", None)
+
+        assert "התחנה לא נמצאה" in response.text
+        assert new_state == StationOwnerState.EDIT_OPERATING_HOURS.value
+
+    @pytest.mark.asyncio
+    async def test_delete_service_areas_failure_shows_error(self, user_factory, db_session):
+        """כשלון מחיקת אזורי שירות — מציג שגיאה למשתמש ונשאר באותו state"""
+        owner, station = await self._setup_station(user_factory, db_session)
+        state_mgr = StateManager(db_session)
+        await state_mgr.force_state(
+            owner.id, "telegram",
+            StationOwnerState.EDIT_SERVICE_AREAS.value, {},
+        )
+
+        handler = StationOwnerStateHandler(db_session, station.id)
+
+        with patch.object(
+            handler.station_service, "update_station_settings",
+            new_callable=AsyncMock, return_value=(False, "שגיאה לא צפויה"),
+        ):
+            response, new_state = await handler.handle_message(owner, "מחק", None)
+
+        assert "שגיאה לא צפויה" in response.text
+        assert new_state == StationOwnerState.EDIT_SERVICE_AREAS.value
