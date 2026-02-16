@@ -11,7 +11,7 @@ from app.core.auth import TokenPayload
 from app.core.validation import PhoneNumberValidator
 from app.api.dependencies.auth import get_current_station_owner
 from app.db.database import get_db
-from app.db.models.delivery import Delivery, DeliveryStatus
+from app.db.models.delivery import Delivery, DeliveryStatus, ACTIVE_DELIVERY_STATUSES
 from app.db.queries import delivery_with_relations
 from app.api.routes.panel.schemas import parse_date_param
 
@@ -84,18 +84,12 @@ async def list_active_deliveries(
 ) -> PaginatedDeliveriesResponse:
     """משלוחים פעילים עם pagination"""
     station_id = auth.station_id
-    active_statuses = [
-        DeliveryStatus.OPEN,
-        DeliveryStatus.PENDING_APPROVAL,
-        DeliveryStatus.CAPTURED,
-        DeliveryStatus.IN_PROGRESS,
-    ]
 
     # ספירה כוללת
     count_result = await db.execute(
         select(func.count(Delivery.id)).where(
             Delivery.station_id == station_id,
-            Delivery.status.in_(active_statuses),
+            Delivery.status.in_(ACTIVE_DELIVERY_STATUSES),
         )
     )
     total = count_result.scalar() or 0
@@ -107,7 +101,7 @@ async def list_active_deliveries(
         .options(*delivery_with_relations())
         .where(
             Delivery.station_id == station_id,
-            Delivery.status.in_(active_statuses),
+            Delivery.status.in_(ACTIVE_DELIVERY_STATUSES),
         )
         .order_by(Delivery.created_at.desc())
         .offset(offset)

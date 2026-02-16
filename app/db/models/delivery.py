@@ -25,6 +25,16 @@ class DeliveryStatus(str, enum.Enum):
     CANCELLED = "cancelled"
 
 
+# סטטוסים שנחשבים "פעילים" במערכת (לצורכי דוחות, דשבורד ופאנל)
+# מקור אמת יחיד — כדי למנוע חוסר עקביות בין שירותים/ראוטרים שונים.
+ACTIVE_DELIVERY_STATUSES: tuple[DeliveryStatus, ...] = (
+    DeliveryStatus.OPEN,
+    DeliveryStatus.PENDING_APPROVAL,
+    DeliveryStatus.CAPTURED,
+    DeliveryStatus.IN_PROGRESS,
+)
+
+
 class Delivery(Base):
     """Delivery/Shipment record"""
 

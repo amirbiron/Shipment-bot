@@ -17,7 +17,7 @@ from app.db.models.station_wallet import StationWallet
 from app.db.models.station_ledger import StationLedger, StationLedgerEntryType
 from app.db.models.station_blacklist import StationBlacklist
 from app.db.models.manual_charge import ManualCharge
-from app.db.models.delivery import Delivery, DeliveryStatus
+from app.db.models.delivery import Delivery, DeliveryStatus, ACTIVE_DELIVERY_STATUSES
 from app.db.models.user import User, UserRole
 from app.db.models.courier_wallet import CourierWallet
 from app.db.models.audit_log import AuditLog, AuditActionType
@@ -657,12 +657,7 @@ class StationService:
         result = await self.db.execute(
             select(Delivery).where(
                 Delivery.station_id == station_id,
-                Delivery.status.in_([
-                    DeliveryStatus.OPEN,
-                    DeliveryStatus.PENDING_APPROVAL,  # שלב 4
-                    DeliveryStatus.CAPTURED,
-                    DeliveryStatus.IN_PROGRESS,
-                ])
+                Delivery.status.in_(ACTIVE_DELIVERY_STATUSES)
             ).order_by(Delivery.created_at.desc())
         )
         return list(result.scalars().all())
@@ -1593,12 +1588,7 @@ class StationService:
                 func.count(Delivery.id),
             ).where(
                 Delivery.station_id.in_(station_ids),
-                Delivery.status.in_([
-                    DeliveryStatus.OPEN,
-                    DeliveryStatus.PENDING_APPROVAL,
-                    DeliveryStatus.CAPTURED,
-                    DeliveryStatus.IN_PROGRESS,
-                ]),
+                Delivery.status.in_(ACTIVE_DELIVERY_STATUSES),
             ).group_by(Delivery.station_id)
         )
         active_map: dict[int, int] = dict(active_counts_result.all())
@@ -1732,13 +1722,6 @@ class StationService:
         from sqlalchemy import func, case, desc, asc
         from sqlalchemy import literal
 
-        active_statuses = [
-            DeliveryStatus.OPEN,
-            DeliveryStatus.PENDING_APPROVAL,
-            DeliveryStatus.CAPTURED,
-            DeliveryStatus.IN_PROGRESS,
-        ]
-
         # עמודות אגרגציה עם labels — נשמרות במשתנים כדי לא למיין לפי מחרוזות
         deliveries_count_col = func.count(Delivery.id).label("deliveries_count")
         delivered_count_col = func.count(
@@ -1748,7 +1731,7 @@ class StationService:
         ).label("delivered_count")
         active_deliveries_count_col = func.count(
             case(
-                (Delivery.status.in_(active_statuses), Delivery.id),
+                (Delivery.status.in_(ACTIVE_DELIVERY_STATUSES), Delivery.id),
             )
         ).label("active_deliveries_count")
         total_volume_col = func.sum(
@@ -1857,13 +1840,6 @@ class StationService:
         """
         from sqlalchemy import func, case
 
-        active_statuses = [
-            DeliveryStatus.OPEN,
-            DeliveryStatus.PENDING_APPROVAL,
-            DeliveryStatus.CAPTURED,
-            DeliveryStatus.IN_PROGRESS,
-        ]
-
         # שליפת פרטי שולח + סטטיסטיקות
         result = await self.db.execute(
             select(
@@ -1882,7 +1858,7 @@ class StationService:
                     (Delivery.status == DeliveryStatus.CANCELLED, Delivery.id),
                 )).label("cancelled_count"),
                 func.count(case(
-                    (Delivery.status.in_(active_statuses), Delivery.id),
+                    (Delivery.status.in_(ACTIVE_DELIVERY_STATUSES), Delivery.id),
                 )).label("active_deliveries_count"),
                 func.sum(
                     case(
