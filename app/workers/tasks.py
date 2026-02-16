@@ -732,39 +732,18 @@ def generate_monthly_reports():
                 try:
                     station_service = StationService(db)
 
-                    # נתוני הכנסות
-                    pl_data = await station_service.get_profit_loss_report(
+                    summary = await station_service.get_monthly_summary_data(
                         station_id, dt_from, dt_to
                     )
-                    if pl_data:
-                        revenue = pl_data[0]
-                    else:
-                        revenue = {
-                            "commissions": 0.0,
-                            "manual_charges": 0.0,
-                            "withdrawals": 0.0,
-                            "net": 0.0,
-                        }
-
-                    # סטטיסטיקות משלוחים
-                    delivery_stats = await station_service.get_monthly_delivery_stats(
-                        station_id, dt_from, dt_to
-                    )
-
-                    # נתוני גבייה
-                    collection_data = await station_service.get_collection_report_for_period(
-                        station_id, dt_from, dt_to
-                    )
-                    total_debt = sum(float(item["total_debt"]) for item in collection_data)
 
                     # יצירת Excel
                     xlsx_bytes = generate_monthly_summary_excel(
                         month=month_str,
                         station_name=station_name,
-                        collection_items=collection_data,
-                        total_debt=total_debt,
-                        revenue_data=revenue,
-                        delivery_stats=delivery_stats,
+                        collection_items=summary["collection_data"],
+                        total_debt=summary["total_debt"],
+                        revenue_data=summary["revenue"],
+                        delivery_stats=summary["delivery_stats"],
                     )
 
                     # שמירה ב-Redis למשך 30 יום
