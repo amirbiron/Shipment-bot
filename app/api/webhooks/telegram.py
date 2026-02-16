@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, List, TypeAlias
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.db.database import get_db
 from app.db.models.user import User, UserRole, ApprovalStatus
@@ -491,27 +492,36 @@ async def get_or_create_user(
     Get existing user or create new one. Returns (user, is_new).
 
     הגנה לפרודקשן:
-    בחלק מהסביבות היסטורית, מסד הנתונים לא כלל UNIQUE אמיתי על telegram_chat_id,
-    ולכן עלולות להיות כפילויות. במצב כזה scalar_one_or_none() יזרוק MultipleResultsFound
-    ויפיל את ה-webhook. כאן אנחנו בוחרים משתמש דטרמיניסטית וממשיכים.
+    1. כפילויות היסטוריות — אם נמצאו מספר רשומות עם אותו telegram_chat_id,
+       בוחרים את הפעילה/עדכנית ביותר ומשביתים את השאר.
+    2. race condition — אם שתי בקשות מקבילות מנסות ליצור משתמש חדש
+       באותו telegram_chat_id, IntegrityError נתפס ונעשית שאילתה מחדש.
     """
     result = await db.execute(
         select(User)
         .where(User.telegram_chat_id == telegram_chat_id)
         .order_by(User.is_active.desc(), User.updated_at.desc(), User.created_at.desc())
-        .limit(2)
+        .limit(10)
     )
     users = list(result.scalars().all())
     user = users[0] if users else None
 
     if len(users) > 1:
-        logger.error(
-            "Duplicate telegram_chat_id detected; using first match to avoid webhook crash",
+        # ניקוי כפילויות — השבתת רשומות כפולות כדי למנוע לוגים חוזרים
+        duplicate_ids = [u.id for u in users[1:]]
+        logger.warning(
+            "כפילות telegram_chat_id — משבית רשומות כפולות",
             extra_data={
                 "telegram_chat_id": telegram_chat_id,
-                "user_ids": [u.id for u in users],
+                "kept_user_id": user.id,
+                "deactivated_user_ids": duplicate_ids,
             },
         )
+        for dup in users[1:]:
+            dup.is_active = False
+            dup.telegram_chat_id = None
+        await db.commit()
+        await db.refresh(user)
 
     if not user:
         user = User(
@@ -523,7 +533,30 @@ async def get_or_create_user(
             role=UserRole.SENDER
         )
         db.add(user)
-        await db.commit()
+        try:
+            await db.commit()
+        except IntegrityError:
+            # race condition — בקשה מקבילית יצרה את המשתמש לפנינו
+            await db.rollback()
+            logger.info(
+                "IntegrityError ביצירת משתמש — שאילתה מחדש",
+                extra_data={"telegram_chat_id": telegram_chat_id},
+            )
+            result = await db.execute(
+                select(User)
+                .where(User.telegram_chat_id == telegram_chat_id)
+                .order_by(User.is_active.desc(), User.updated_at.desc())
+                .limit(1)
+            )
+            user = result.scalars().first()
+            if user is None:
+                # מצב בלתי צפוי — IntegrityError אך אין רשומה תואמת
+                logger.error(
+                    "IntegrityError אך לא נמצא משתמש לאחר rollback",
+                    extra_data={"telegram_chat_id": telegram_chat_id},
+                )
+                raise
+            return user, False
         await db.refresh(user)
         return user, True  # New user
 
