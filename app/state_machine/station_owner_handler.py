@@ -7,6 +7,7 @@ Station Owner State Handler - פאנל ניהול תחנה [שלב 3.3]
 - דוח גבייה (ה-28 לחודש)
 - רשימה שחורה (נהגים שלא שילמו חודשיים רצופים)
 """
+
 from decimal import Decimal
 from typing import Tuple
 from html import escape
@@ -37,30 +38,31 @@ class StationOwnerStateHandler:
     # מפתחות קונטקסט של ניהול סדרנים ורשימה שחורה — מנוקים בחזרה ל-MENU
     _MANAGEMENT_CONTEXT_KEYS = {
         # ניהול בעלים
-        "owner_map", "remove_owner_id", "remove_owner_name",
+        "owner_map",
+        "remove_owner_id",
+        "remove_owner_name",
         # ניהול סדרנים
-        "dispatcher_map", "remove_dispatcher_id", "remove_dispatcher_name",
+        "dispatcher_map",
+        "remove_dispatcher_id",
+        "remove_dispatcher_name",
         # רשימה שחורה
-        "blacklist_phone", "blacklist_map",
-        "remove_blacklist_courier_id", "remove_blacklist_name",
+        "blacklist_phone",
+        "blacklist_map",
+        "remove_blacklist_courier_id",
+        "remove_blacklist_name",
         # הגדרות קבוצות
-        "public_group_id", "private_group_id",
+        "public_group_id",
+        "private_group_id",
         # הגדרות תחנה מורחבות
         "edit_hours_day",
     }
 
     def _is_multi_step_flow_state(self, state: str) -> bool:
         """בודק אם המצב שייך לזרימה רב-שלבית (לא MENU)"""
-        return (
-            state.startswith("STATION.")
-            and state != StationOwnerState.MENU.value
-        )
+        return state.startswith("STATION.") and state != StationOwnerState.MENU.value
 
     async def handle_message(
-        self,
-        user: User,
-        message: str,
-        photo_file_id: str = None
+        self, user: User, message: str, photo_file_id: str = None
     ) -> Tuple[MessageResponse, str]:
         """עיבוד הודעה נכנסת מבעל תחנה"""
         platform = self.platform or user.platform
@@ -76,7 +78,8 @@ class StationOwnerStateHandler:
             and self._is_multi_step_flow_state(current_state)
         ):
             clean_context = {
-                k: v for k, v in context.items()
+                k: v
+                for k, v in context.items()
                 if k not in self._MANAGEMENT_CONTEXT_KEYS
             }
             if context_update:
@@ -101,12 +104,14 @@ class StationOwnerStateHandler:
                         "user_id": user.id,
                         "platform": platform,
                         "current_state": current_state,
-                        "new_state": new_state
-                    }
+                        "new_state": new_state,
+                    },
                 )
                 await self.state_manager.force_state(
-                    user.id, platform, new_state,
-                    {**context, **context_update} if context_update else context
+                    user.id,
+                    platform,
+                    new_state,
+                    {**context, **context_update} if context_update else context,
                 )
         elif context_update:
             for key, value in context_update.items():
@@ -118,38 +123,31 @@ class StationOwnerStateHandler:
         """ניתוב ל-handler המתאים"""
         handlers = {
             StationOwnerState.MENU.value: self._handle_menu,
-
             # ניהול בעלים
             StationOwnerState.MANAGE_OWNERS.value: self._handle_manage_owners,
             StationOwnerState.ADD_OWNER_PHONE.value: self._handle_add_owner,
             StationOwnerState.REMOVE_OWNER_SELECT.value: self._handle_remove_owner_select,
             StationOwnerState.CONFIRM_REMOVE_OWNER.value: self._handle_confirm_remove_owner,
-
             # ניהול סדרנים
             StationOwnerState.MANAGE_DISPATCHERS.value: self._handle_manage_dispatchers,
             StationOwnerState.ADD_DISPATCHER_PHONE.value: self._handle_add_dispatcher,
             StationOwnerState.REMOVE_DISPATCHER_SELECT.value: self._handle_remove_dispatcher_select,
             StationOwnerState.CONFIRM_REMOVE_DISPATCHER.value: self._handle_confirm_remove_dispatcher,
-
             # ארנק תחנה
             StationOwnerState.VIEW_WALLET.value: self._handle_view_wallet,
             StationOwnerState.SET_COMMISSION_RATE.value: self._handle_set_commission_rate,
-
             # דוח גבייה
             StationOwnerState.COLLECTION_REPORT.value: self._handle_collection_report,
-
             # רשימה שחורה
             StationOwnerState.VIEW_BLACKLIST.value: self._handle_view_blacklist,
             StationOwnerState.ADD_BLACKLIST_PHONE.value: self._handle_add_blacklist_phone,
             StationOwnerState.ADD_BLACKLIST_REASON.value: self._handle_add_blacklist_reason,
             StationOwnerState.REMOVE_BLACKLIST_SELECT.value: self._handle_remove_blacklist_select,
             StationOwnerState.CONFIRM_REMOVE_BLACKLIST.value: self._handle_confirm_remove_blacklist,
-
             # שלב 4: הגדרות קבוצות
             StationOwnerState.GROUP_SETTINGS.value: self._handle_group_settings,
             StationOwnerState.SET_PUBLIC_GROUP.value: self._handle_set_public_group,
             StationOwnerState.SET_PRIVATE_GROUP.value: self._handle_set_private_group,
-
             # סעיף 8: הגדרות תחנה מורחבות
             StationOwnerState.STATION_SETTINGS.value: self._handle_station_settings,
             StationOwnerState.EDIT_STATION_NAME.value: self._handle_edit_name,
@@ -220,13 +218,13 @@ class StationOwnerStateHandler:
         text = "👤 <b>ניהול בעלים</b>\n\n"
         if owners:
             for i, o in enumerate(owners, 1):
-                result = await self.db.execute(
-                    select(User).where(User.id == o.user_id)
-                )
+                result = await self.db.execute(select(User).where(User.id == o.user_id))
                 owner_user = result.scalar_one_or_none()
                 name = (
-                    owner_user.full_name or owner_user.name or "לא ידוע"
-                ) if owner_user else "לא ידוע"
+                    (owner_user.full_name or owner_user.name or "לא ידוע")
+                    if owner_user
+                    else "לא ידוע"
+                )
                 is_self = " (אתה)" if o.user_id == user.id else ""
                 text += f"{i}. {escape(name)}{is_self}\n"
         else:
@@ -239,21 +237,18 @@ class StationOwnerStateHandler:
             keyboard=[
                 ["➕ הוספת בעלים", "➖ הסרת בעלים"],
                 ["🔙 חזרה לתפריט"],
-            ]
+            ],
         )
         return response, StationOwnerState.MANAGE_OWNERS.value, {}
 
-    async def _handle_manage_owners(
-        self, user: User, message: str, context: dict
-    ):
+    async def _handle_manage_owners(self, user: User, message: str, context: dict):
         """תפריט ניהול בעלים"""
         if "חזרה" in message:
             return await self._show_menu(user, context)
 
         if "הוספת" in message or "הוספה" in message:
             response = MessageResponse(
-                "👤 <b>הוספת בעלים</b>\n\n"
-                "הזן את מספר הטלפון של הבעלים החדש:"
+                "👤 <b>הוספת בעלים</b>\n\n" "הזן את מספר הטלפון של הבעלים החדש:"
             )
             return response, StationOwnerState.ADD_OWNER_PHONE.value, {}
 
@@ -262,37 +257,31 @@ class StationOwnerStateHandler:
 
         return await self._show_manage_owners(user, context)
 
-    async def _handle_add_owner(
-        self, user: User, message: str, context: dict
-    ):
+    async def _handle_add_owner(self, user: User, message: str, context: dict):
         """הוספת בעלים לפי מספר טלפון"""
         if "חזרה" in message:
             return await self._show_manage_owners(user, context)
 
         phone = message.strip()
-        success, msg = await self.station_service.add_owner(
-            self.station_id, phone
-        )
+        success, msg = await self.station_service.add_owner(self.station_id, phone)
 
         response = MessageResponse(
             msg,
             keyboard=[
                 ["➕ הוספת בעלים", "➖ הסרת בעלים"],
                 ["🔙 חזרה לתפריט"],
-            ]
+            ],
         )
         return response, StationOwnerState.MANAGE_OWNERS.value, {}
 
-    async def _show_owner_list_for_removal(
-        self, user: User, context: dict
-    ):
+    async def _show_owner_list_for_removal(self, user: User, context: dict):
         """הצגת רשימת בעלים להסרה"""
         owners = await self.station_service.get_owners(self.station_id)
 
         if len(owners) <= 1:
             response = MessageResponse(
                 "לא ניתן להסיר בעלים — חייב להישאר לפחות בעלים אחד בתחנה.",
-                keyboard=[["🔙 חזרה לתפריט"]]
+                keyboard=[["🔙 חזרה לתפריט"]],
             )
             return response, StationOwnerState.MANAGE_OWNERS.value, {}
 
@@ -301,13 +290,13 @@ class StationOwnerStateHandler:
         owner_map = {}
 
         for i, o in enumerate(owners, 1):
-            result = await self.db.execute(
-                select(User).where(User.id == o.user_id)
-            )
+            result = await self.db.execute(select(User).where(User.id == o.user_id))
             owner_user = result.scalar_one_or_none()
             name = (
-                owner_user.full_name or owner_user.name or "לא ידוע"
-            ) if owner_user else "לא ידוע"
+                (owner_user.full_name or owner_user.name or "לא ידוע")
+                if owner_user
+                else "לא ידוע"
+            )
             is_self = " (אתה)" if o.user_id == user.id else ""
             text += f"{i}. {escape(name)}{is_self}\n"
             keyboard_items.append([f"הסר {i}"])
@@ -316,9 +305,11 @@ class StationOwnerStateHandler:
         keyboard_items.append(["🔙 חזרה"])
 
         response = MessageResponse(text, keyboard=keyboard_items)
-        return response, StationOwnerState.REMOVE_OWNER_SELECT.value, {
-            "owner_map": owner_map
-        }
+        return (
+            response,
+            StationOwnerState.REMOVE_OWNER_SELECT.value,
+            {"owner_map": owner_map},
+        )
 
     async def _handle_remove_owner_select(
         self, user: User, message: str, context: dict
@@ -328,30 +319,35 @@ class StationOwnerStateHandler:
             return await self._show_manage_owners(user, context)
 
         import re
-        numbers = re.findall(r'\d+', message)
+
+        numbers = re.findall(r"\d+", message)
         owner_map = context.get("owner_map", {})
 
         if numbers and numbers[0] in owner_map:
             owner_user_id = owner_map[numbers[0]]
             # שליפת שם הבעלים להצגה בהודעת האישור
-            result = await self.db.execute(
-                select(User).where(User.id == owner_user_id)
-            )
+            result = await self.db.execute(select(User).where(User.id == owner_user_id))
             owner_user = result.scalar_one_or_none()
             name = (
-                owner_user.full_name or owner_user.name or "לא ידוע"
-            ) if owner_user else "לא ידוע"
+                (owner_user.full_name or owner_user.name or "לא ידוע")
+                if owner_user
+                else "לא ידוע"
+            )
 
             response = MessageResponse(
                 f"⚠️ <b>אישור הסרת בעלים</b>\n\n"
                 f"האם אתה בטוח שברצונך להסיר את <b>{escape(name)}</b> מרשימת הבעלים?",
                 keyboard=[["✅ כן, הסר", "❌ ביטול"]],
-                inline=True
+                inline=True,
             )
-            return response, StationOwnerState.CONFIRM_REMOVE_OWNER.value, {
-                "remove_owner_id": owner_user_id,
-                "remove_owner_name": name,
-            }
+            return (
+                response,
+                StationOwnerState.CONFIRM_REMOVE_OWNER.value,
+                {
+                    "remove_owner_id": owner_user_id,
+                    "remove_owner_name": name,
+                },
+            )
 
         # בחירה לא תקינה — מציגים מחדש את רשימת הבעלים עם הכפתורים
         return await self._show_owner_list_for_removal(user, context)
@@ -376,14 +372,14 @@ class StationOwnerStateHandler:
                 keyboard=[
                     ["➕ הוספת בעלים", "➖ הסרת בעלים"],
                     ["🔙 חזרה לתפריט"],
-                ]
+                ],
             )
             return response, StationOwnerState.MANAGE_OWNERS.value, {}
 
         response = MessageResponse(
             "אנא בחר:\n✅ כן, הסר\n❌ ביטול",
             keyboard=[["✅ כן, הסר", "❌ ביטול"]],
-            inline=True
+            inline=True,
         )
         return response, StationOwnerState.CONFIRM_REMOVE_OWNER.value, {}
 
@@ -396,13 +392,13 @@ class StationOwnerStateHandler:
         text = "👥 <b>ניהול סדרנים</b>\n\n"
         if dispatchers:
             for i, d in enumerate(dispatchers, 1):
-                result = await self.db.execute(
-                    select(User).where(User.id == d.user_id)
-                )
+                result = await self.db.execute(select(User).where(User.id == d.user_id))
                 dispatcher_user = result.scalar_one_or_none()
                 name = (
-                    dispatcher_user.full_name or dispatcher_user.name or "לא ידוע"
-                ) if dispatcher_user else "לא ידוע"
+                    (dispatcher_user.full_name or dispatcher_user.name or "לא ידוע")
+                    if dispatcher_user
+                    else "לא ידוע"
+                )
                 text += f"{i}. {escape(name)}\n"
         else:
             text += "אין סדרנים רשומים עדיין.\n"
@@ -414,21 +410,18 @@ class StationOwnerStateHandler:
             keyboard=[
                 ["➕ הוספת סדרן", "➖ הסרת סדרן"],
                 ["🔙 חזרה לתפריט"],
-            ]
+            ],
         )
         return response, StationOwnerState.MANAGE_DISPATCHERS.value, {}
 
-    async def _handle_manage_dispatchers(
-        self, user: User, message: str, context: dict
-    ):
+    async def _handle_manage_dispatchers(self, user: User, message: str, context: dict):
         """תפריט ניהול סדרנים"""
         if "חזרה" in message:
             return await self._show_menu(user, context)
 
         if "הוספת" in message or "הוספה" in message:
             response = MessageResponse(
-                "👥 <b>הוספת סדרן</b>\n\n"
-                "הזן את מספר הטלפון של הסדרן:"
+                "👥 <b>הוספת סדרן</b>\n\n" "הזן את מספר הטלפון של הסדרן:"
             )
             return response, StationOwnerState.ADD_DISPATCHER_PHONE.value, {}
 
@@ -437,37 +430,30 @@ class StationOwnerStateHandler:
 
         return await self._show_manage_dispatchers(user, context)
 
-    async def _handle_add_dispatcher(
-        self, user: User, message: str, context: dict
-    ):
+    async def _handle_add_dispatcher(self, user: User, message: str, context: dict):
         """הוספת סדרן לפי מספר טלפון"""
         if "חזרה" in message:
             return await self._show_manage_dispatchers(user, context)
 
         phone = message.strip()
-        success, msg = await self.station_service.add_dispatcher(
-            self.station_id, phone
-        )
+        success, msg = await self.station_service.add_dispatcher(self.station_id, phone)
 
         response = MessageResponse(
             msg,
             keyboard=[
                 ["➕ הוספת סדרן", "➖ הסרת סדרן"],
                 ["🔙 חזרה לתפריט"],
-            ]
+            ],
         )
         return response, StationOwnerState.MANAGE_DISPATCHERS.value, {}
 
-    async def _show_dispatcher_list_for_removal(
-        self, user: User, context: dict
-    ):
+    async def _show_dispatcher_list_for_removal(self, user: User, context: dict):
         """הצגת רשימת סדרנים להסרה"""
         dispatchers = await self.station_service.get_dispatchers(self.station_id)
 
         if not dispatchers:
             response = MessageResponse(
-                "אין סדרנים להסרה.",
-                keyboard=[["🔙 חזרה לתפריט"]]
+                "אין סדרנים להסרה.", keyboard=[["🔙 חזרה לתפריט"]]
             )
             return response, StationOwnerState.MANAGE_DISPATCHERS.value, {}
 
@@ -476,13 +462,13 @@ class StationOwnerStateHandler:
         dispatcher_map = {}
 
         for i, d in enumerate(dispatchers, 1):
-            result = await self.db.execute(
-                select(User).where(User.id == d.user_id)
-            )
+            result = await self.db.execute(select(User).where(User.id == d.user_id))
             dispatcher_user = result.scalar_one_or_none()
             name = (
-                dispatcher_user.full_name or dispatcher_user.name or "לא ידוע"
-            ) if dispatcher_user else "לא ידוע"
+                (dispatcher_user.full_name or dispatcher_user.name or "לא ידוע")
+                if dispatcher_user
+                else "לא ידוע"
+            )
             text += f"{i}. {escape(name)}\n"
             keyboard_items.append([f"הסר {i}"])
             dispatcher_map[str(i)] = d.user_id
@@ -490,9 +476,11 @@ class StationOwnerStateHandler:
         keyboard_items.append(["🔙 חזרה"])
 
         response = MessageResponse(text, keyboard=keyboard_items)
-        return response, StationOwnerState.REMOVE_DISPATCHER_SELECT.value, {
-            "dispatcher_map": dispatcher_map
-        }
+        return (
+            response,
+            StationOwnerState.REMOVE_DISPATCHER_SELECT.value,
+            {"dispatcher_map": dispatcher_map},
+        )
 
     async def _handle_remove_dispatcher_select(
         self, user: User, message: str, context: dict
@@ -502,7 +490,8 @@ class StationOwnerStateHandler:
             return await self._show_manage_dispatchers(user, context)
 
         import re
-        numbers = re.findall(r'\d+', message)
+
+        numbers = re.findall(r"\d+", message)
         dispatcher_map = context.get("dispatcher_map", {})
 
         if numbers and numbers[0] in dispatcher_map:
@@ -513,23 +502,28 @@ class StationOwnerStateHandler:
             )
             dispatcher_user = result.scalar_one_or_none()
             name = (
-                dispatcher_user.full_name or dispatcher_user.name or "לא ידוע"
-            ) if dispatcher_user else "לא ידוע"
+                (dispatcher_user.full_name or dispatcher_user.name or "לא ידוע")
+                if dispatcher_user
+                else "לא ידוע"
+            )
 
             response = MessageResponse(
                 f"⚠️ <b>אישור הסרת סדרן</b>\n\n"
                 f"האם אתה בטוח שברצונך להסיר את <b>{escape(name)}</b> מרשימת הסדרנים?",
                 keyboard=[["✅ כן, הסר", "❌ ביטול"]],
-                inline=True
+                inline=True,
             )
-            return response, StationOwnerState.CONFIRM_REMOVE_DISPATCHER.value, {
-                "remove_dispatcher_id": dispatcher_user_id,
-                "remove_dispatcher_name": name,
-            }
+            return (
+                response,
+                StationOwnerState.CONFIRM_REMOVE_DISPATCHER.value,
+                {
+                    "remove_dispatcher_id": dispatcher_user_id,
+                    "remove_dispatcher_name": name,
+                },
+            )
 
         response = MessageResponse(
-            "בחירה לא תקינה. אנא בחר מספר מהרשימה.",
-            keyboard=[["🔙 חזרה"]]
+            "בחירה לא תקינה. אנא בחר מספר מהרשימה.", keyboard=[["🔙 חזרה"]]
         )
         return response, StationOwnerState.REMOVE_DISPATCHER_SELECT.value, {}
 
@@ -553,14 +547,14 @@ class StationOwnerStateHandler:
                 keyboard=[
                     ["➕ הוספת סדרן", "➖ הסרת סדרן"],
                     ["🔙 חזרה לתפריט"],
-                ]
+                ],
             )
             return response, StationOwnerState.MANAGE_DISPATCHERS.value, {}
 
         response = MessageResponse(
             "אנא בחר:\n✅ כן, הסר\n❌ ביטול",
             keyboard=[["✅ כן, הסר", "❌ ביטול"]],
-            inline=True
+            inline=True,
         )
         return response, StationOwnerState.CONFIRM_REMOVE_DISPATCHER.value, {}
 
@@ -590,7 +584,7 @@ class StationOwnerStateHandler:
             keyboard=[
                 ["📊 שינוי אחוז עמלה"],
                 ["🔙 חזרה לתפריט"],
-            ]
+            ],
         )
         return response, StationOwnerState.VIEW_WALLET.value, {}
 
@@ -643,7 +637,8 @@ class StationOwnerStateHandler:
         hi = StationService.COMMISSION_MAX_PCT
 
         import re
-        numbers = re.findall(r'\d+', message)
+
+        numbers = re.findall(r"\d+", message)
         if not numbers:
             response = MessageResponse(
                 f"אנא בחר אחוז עמלה מהכפתורים או הזן מספר בין {lo} ל-{hi}.",
@@ -656,7 +651,9 @@ class StationOwnerStateHandler:
         new_rate = Decimal(pct) / Decimal("100")
 
         success, msg = await self.station_service.update_commission_rate(
-            self.station_id, float(new_rate), actor_user_id=user.id,
+            self.station_id,
+            float(new_rate),
+            actor_user_id=user.id,
         )
 
         if success:
@@ -695,19 +692,14 @@ class StationOwnerStateHandler:
                 debt = item["total_debt"]
                 text += f"  👤 {escape(name)}: {debt:.2f} ₪\n"
                 total += debt
-            text += f"\n<b>סה\"כ חוב: {total:.2f} ₪</b>"
+            text += f'\n<b>סה"כ חוב: {total:.2f} ₪</b>'
         else:
             text += "אין חובות פתוחים. 🎉"
 
-        response = MessageResponse(
-            text,
-            keyboard=[["🔙 חזרה לתפריט"]]
-        )
+        response = MessageResponse(text, keyboard=[["🔙 חזרה לתפריט"]])
         return response, StationOwnerState.COLLECTION_REPORT.value, {}
 
-    async def _handle_collection_report(
-        self, user: User, message: str, context: dict
-    ):
+    async def _handle_collection_report(self, user: User, message: str, context: dict):
         """דוח גבייה - ה-28 לכל חודש"""
         if "חזרה" in message:
             return await self._show_menu(user, context)
@@ -730,8 +722,10 @@ class StationOwnerStateHandler:
                 )
                 blocked_user = result.scalar_one_or_none()
                 name = (
-                    blocked_user.full_name or blocked_user.name or "לא ידוע"
-                ) if blocked_user else "לא ידוע"
+                    (blocked_user.full_name or blocked_user.name or "לא ידוע")
+                    if blocked_user
+                    else "לא ידוע"
+                )
                 reason = entry.reason or "אי תשלום"
                 text += f"{i}. {escape(name)} - {escape(reason)}\n"
         else:
@@ -742,21 +736,18 @@ class StationOwnerStateHandler:
             keyboard=[
                 ["➕ הוספת נהג לרשימה", "➖ הסרת נהג מהרשימה"],
                 ["🔙 חזרה לתפריט"],
-            ]
+            ],
         )
         return response, StationOwnerState.VIEW_BLACKLIST.value, {}
 
-    async def _handle_view_blacklist(
-        self, user: User, message: str, context: dict
-    ):
+    async def _handle_view_blacklist(self, user: User, message: str, context: dict):
         """צפייה ברשימה השחורה"""
         if "חזרה" in message:
             return await self._show_menu(user, context)
 
         if "הוספת" in message or "הוספה" in message or "חסום" in message:
             response = MessageResponse(
-                "🚫 <b>הוספה לרשימה שחורה</b>\n\n"
-                "הזן את מספר הטלפון של הנהג:"
+                "🚫 <b>הוספה לרשימה שחורה</b>\n\n" "הזן את מספר הטלפון של הנהג:"
             )
             return response, StationOwnerState.ADD_BLACKLIST_PHONE.value, {}
 
@@ -774,18 +765,17 @@ class StationOwnerStateHandler:
 
         phone = message.strip()
         if not PhoneNumberValidator.validate(phone):
-            response = MessageResponse(
-                "מספר טלפון לא תקין. אנא הזן מספר תקין:"
-            )
+            response = MessageResponse("מספר טלפון לא תקין. אנא הזן מספר תקין:")
             return response, StationOwnerState.ADD_BLACKLIST_PHONE.value, {}
 
         response = MessageResponse(
-            f"טלפון: {PhoneNumberValidator.mask(phone)} ✓\n\n"
-            "📝 סיבת החסימה:"
+            f"טלפון: {PhoneNumberValidator.mask(phone)} ✓\n\n" "📝 סיבת החסימה:"
         )
-        return response, StationOwnerState.ADD_BLACKLIST_REASON.value, {
-            "blacklist_phone": phone
-        }
+        return (
+            response,
+            StationOwnerState.ADD_BLACKLIST_REASON.value,
+            {"blacklist_phone": phone},
+        )
 
     async def _handle_add_blacklist_reason(
         self, user: User, message: str, context: dict
@@ -806,20 +796,17 @@ class StationOwnerStateHandler:
             keyboard=[
                 ["➕ הוספת נהג לרשימה", "➖ הסרת נהג מהרשימה"],
                 ["🔙 חזרה לתפריט"],
-            ]
+            ],
         )
         return response, StationOwnerState.VIEW_BLACKLIST.value, {}
 
-    async def _show_blacklist_for_removal(
-        self, user: User, context: dict
-    ):
+    async def _show_blacklist_for_removal(self, user: User, context: dict):
         """הצגת רשימה שחורה להסרה"""
         blacklist = await self.station_service.get_blacklist(self.station_id)
 
         if not blacklist:
             response = MessageResponse(
-                "הרשימה השחורה ריקה, אין מי להסיר.",
-                keyboard=[["🔙 חזרה"]]
+                "הרשימה השחורה ריקה, אין מי להסיר.", keyboard=[["🔙 חזרה"]]
             )
             return response, StationOwnerState.VIEW_BLACKLIST.value, {}
 
@@ -833,8 +820,10 @@ class StationOwnerStateHandler:
             )
             blocked_user = result.scalar_one_or_none()
             name = (
-                blocked_user.full_name or blocked_user.name or "לא ידוע"
-            ) if blocked_user else "לא ידוע"
+                (blocked_user.full_name or blocked_user.name or "לא ידוע")
+                if blocked_user
+                else "לא ידוע"
+            )
             text += f"{i}. {escape(name)}\n"
             keyboard_items.append([f"הסר {i}"])
             blacklist_map[str(i)] = entry.courier_id
@@ -842,9 +831,11 @@ class StationOwnerStateHandler:
         keyboard_items.append(["🔙 חזרה"])
 
         response = MessageResponse(text, keyboard=keyboard_items)
-        return response, StationOwnerState.REMOVE_BLACKLIST_SELECT.value, {
-            "blacklist_map": blacklist_map
-        }
+        return (
+            response,
+            StationOwnerState.REMOVE_BLACKLIST_SELECT.value,
+            {"blacklist_map": blacklist_map},
+        )
 
     async def _handle_remove_blacklist_select(
         self, user: User, message: str, context: dict
@@ -854,34 +845,38 @@ class StationOwnerStateHandler:
             return await self._show_blacklist(user, context)
 
         import re
-        numbers = re.findall(r'\d+', message)
+
+        numbers = re.findall(r"\d+", message)
         blacklist_map = context.get("blacklist_map", {})
 
         if numbers and numbers[0] in blacklist_map:
             courier_id = blacklist_map[numbers[0]]
             # שליפת שם הנהג להצגה בהודעת האישור
-            result = await self.db.execute(
-                select(User).where(User.id == courier_id)
-            )
+            result = await self.db.execute(select(User).where(User.id == courier_id))
             blocked_user = result.scalar_one_or_none()
             name = (
-                blocked_user.full_name or blocked_user.name or "לא ידוע"
-            ) if blocked_user else "לא ידוע"
+                (blocked_user.full_name or blocked_user.name or "לא ידוע")
+                if blocked_user
+                else "לא ידוע"
+            )
 
             response = MessageResponse(
                 f"⚠️ <b>אישור הסרה מרשימה שחורה</b>\n\n"
                 f"האם אתה בטוח שברצונך להסיר את <b>{escape(name)}</b> מהרשימה השחורה?",
                 keyboard=[["✅ כן, הסר", "❌ ביטול"]],
-                inline=True
+                inline=True,
             )
-            return response, StationOwnerState.CONFIRM_REMOVE_BLACKLIST.value, {
-                "remove_blacklist_courier_id": courier_id,
-                "remove_blacklist_name": name,
-            }
+            return (
+                response,
+                StationOwnerState.CONFIRM_REMOVE_BLACKLIST.value,
+                {
+                    "remove_blacklist_courier_id": courier_id,
+                    "remove_blacklist_name": name,
+                },
+            )
 
         response = MessageResponse(
-            "בחירה לא תקינה. אנא בחר מספר מהרשימה.",
-            keyboard=[["🔙 חזרה"]]
+            "בחירה לא תקינה. אנא בחר מספר מהרשימה.", keyboard=[["🔙 חזרה"]]
         )
         return response, StationOwnerState.REMOVE_BLACKLIST_SELECT.value, {}
 
@@ -905,14 +900,14 @@ class StationOwnerStateHandler:
                 keyboard=[
                     ["➕ הוספת נהג לרשימה", "➖ הסרת נהג מהרשימה"],
                     ["🔙 חזרה לתפריט"],
-                ]
+                ],
             )
             return response, StationOwnerState.VIEW_BLACKLIST.value, {}
 
         response = MessageResponse(
             "אנא בחר:\n✅ כן, הסר\n❌ ביטול",
             keyboard=[["✅ כן, הסר", "❌ ביטול"]],
-            inline=True
+            inline=True,
         )
         return response, StationOwnerState.CONFIRM_REMOVE_BLACKLIST.value, {}
 
@@ -932,7 +927,9 @@ class StationOwnerStateHandler:
 
         text = "⚙️ <b>הגדרות קבוצות</b>\n\n"
         text += f"📢 קבוצה ציבורית (שידור): {escape(public_id or 'לא מוגדרת')}\n"
-        text += f"🔒 קבוצה פרטית (כרטיסים סגורים): {escape(private_id or 'לא מוגדרת')}\n\n"
+        text += (
+            f"🔒 קבוצה פרטית (כרטיסים סגורים): {escape(private_id or 'לא מוגדרת')}\n\n"
+        )
         text += "בחר פעולה:"
 
         response = MessageResponse(
@@ -940,13 +937,11 @@ class StationOwnerStateHandler:
             keyboard=[
                 ["📢 הגדרת קבוצה ציבורית", "🔒 הגדרת קבוצה פרטית"],
                 ["🔙 חזרה לתפריט"],
-            ]
+            ],
         )
         return response, StationOwnerState.GROUP_SETTINGS.value, {}
 
-    async def _handle_group_settings(
-        self, user: User, message: str, context: dict
-    ):
+    async def _handle_group_settings(self, user: User, message: str, context: dict):
         """תפריט הגדרות קבוצות"""
         if "חזרה" in message:
             return await self._show_menu(user, context)
@@ -974,9 +969,7 @@ class StationOwnerStateHandler:
 
         return await self._show_group_settings(user, context)
 
-    async def _handle_set_public_group(
-        self, user: User, message: str, context: dict
-    ):
+    async def _handle_set_public_group(self, user: User, message: str, context: dict):
         """קבלת מזהה קבוצה ציבורית"""
         if "חזרה" in message:
             return await self._show_group_settings(user, context)
@@ -1001,13 +994,11 @@ class StationOwnerStateHandler:
             keyboard=[
                 ["📢 הגדרת קבוצה ציבורית", "🔒 הגדרת קבוצה פרטית"],
                 ["🔙 חזרה לתפריט"],
-            ]
+            ],
         )
         return response, StationOwnerState.GROUP_SETTINGS.value, {}
 
-    async def _handle_set_private_group(
-        self, user: User, message: str, context: dict
-    ):
+    async def _handle_set_private_group(self, user: User, message: str, context: dict):
         """קבלת מזהה קבוצה פרטית"""
         if "חזרה" in message:
             return await self._show_group_settings(user, context)
@@ -1030,7 +1021,7 @@ class StationOwnerStateHandler:
             keyboard=[
                 ["📢 הגדרת קבוצה ציבורית", "🔒 הגדרת קבוצה פרטית"],
                 ["🔙 חזרה לתפריט"],
-            ]
+            ],
         )
         return response, StationOwnerState.GROUP_SETTINGS.value, {}
 
@@ -1046,7 +1037,15 @@ class StationOwnerStateHandler:
         "friday": "שישי",
         "saturday": "שבת",
     }
-    _DAYS_ORDER = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
+    _DAYS_ORDER = [
+        "sunday",
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+    ]
 
     async def _show_station_settings(self, user: User, context: dict):
         """הצגת הגדרות תחנה מורחבות"""
@@ -1063,7 +1062,9 @@ class StationOwnerStateHandler:
                 day_he = self._DAYS_HE[day_key]
                 schedule = hours.get(day_key)
                 if schedule:
-                    hours_text += f"  {day_he}: {schedule['open']}-{schedule['close']}\n"
+                    hours_text += (
+                        f"  {day_he}: {schedule['open']}-{schedule['close']}\n"
+                    )
                 else:
                     hours_text += f"  {day_he}: סגור\n"
         else:
@@ -1087,13 +1088,11 @@ class StationOwnerStateHandler:
                 ["✏️ שם תחנה", "📝 תיאור"],
                 ["🕐 שעות פעילות", "📍 אזורי שירות"],
                 ["🔙 חזרה לתפריט"],
-            ]
+            ],
         )
         return response, StationOwnerState.STATION_SETTINGS.value, {}
 
-    async def _handle_station_settings(
-        self, user: User, message: str, context: dict
-    ):
+    async def _handle_station_settings(self, user: User, message: str, context: dict):
         """תפריט הגדרות תחנה מורחבות"""
         if "חזרה" in message:
             return await self._show_menu(user, context)
@@ -1137,9 +1136,7 @@ class StationOwnerStateHandler:
 
         return await self._show_station_settings(user, context)
 
-    async def _handle_edit_name(
-        self, user: User, message: str, context: dict
-    ):
+    async def _handle_edit_name(self, user: User, message: str, context: dict):
         """עריכת שם התחנה"""
         if "חזרה" in message:
             return await self._show_station_settings(user, context)
@@ -1153,15 +1150,10 @@ class StationOwnerStateHandler:
         if success:
             return await self._show_station_settings(user, context)
 
-        response = MessageResponse(
-            f"{msg}\n\nהזן שם תקין:",
-            keyboard=[["🔙 חזרה"]]
-        )
+        response = MessageResponse(f"{msg}\n\nהזן שם תקין:", keyboard=[["🔙 חזרה"]])
         return response, StationOwnerState.EDIT_STATION_NAME.value, {}
 
-    async def _handle_edit_description(
-        self, user: User, message: str, context: dict
-    ):
+    async def _handle_edit_description(self, user: User, message: str, context: dict):
         """עריכת תיאור התחנה"""
         if "חזרה" in message:
             return await self._show_station_settings(user, context)
@@ -1174,9 +1166,13 @@ class StationOwnerStateHandler:
                 description=None,
             )
             if not success:
-                logger.error("כשלון במחיקת תיאור תחנה", extra_data={
-                    "station_id": self.station_id, "error": msg,
-                })
+                logger.error(
+                    "כשלון במחיקת תיאור תחנה",
+                    extra_data={
+                        "station_id": self.station_id,
+                        "error": msg,
+                    },
+                )
                 response = MessageResponse(
                     f"{msg}\n\nנסה שוב או לחץ חזרה:",
                     keyboard=[["🔙 חזרה"]],
@@ -1192,10 +1188,7 @@ class StationOwnerStateHandler:
         if success:
             return await self._show_station_settings(user, context)
 
-        response = MessageResponse(
-            f"{msg}\n\nהזן תיאור תקין:",
-            keyboard=[["🔙 חזרה"]]
-        )
+        response = MessageResponse(f"{msg}\n\nהזן תיאור תקין:", keyboard=[["🔙 חזרה"]])
         return response, StationOwnerState.EDIT_STATION_DESCRIPTION.value, {}
 
     async def _show_edit_operating_hours(self, user: User, context: dict):
@@ -1244,9 +1237,13 @@ class StationOwnerStateHandler:
                 operating_hours=None,
             )
             if not success:
-                logger.error("כשלון במחיקת שעות פעילות", extra_data={
-                    "station_id": self.station_id, "error": msg,
-                })
+                logger.error(
+                    "כשלון במחיקת שעות פעילות",
+                    extra_data={
+                        "station_id": self.station_id,
+                        "error": msg,
+                    },
+                )
                 response = MessageResponse(
                     f"{msg}\n\nנסה שוב או לחץ חזרה:",
                     keyboard=[["🔙 חזרה"]],
@@ -1259,6 +1256,7 @@ class StationOwnerStateHandler:
         he_to_en = {v: k for k, v in self._DAYS_HE.items()}
 
         import re
+
         match = re.match(r"^(\S+)\s+(.+)$", text)
         if not match:
             response = MessageResponse(
@@ -1283,7 +1281,9 @@ class StationOwnerStateHandler:
 
         # קבלת שעות קיימות ועדכון
         station = await self.station_service.get_station(self.station_id)
-        current_hours = dict(station.operating_hours) if station and station.operating_hours else {}
+        current_hours = (
+            dict(station.operating_hours) if station and station.operating_hours else {}
+        )
 
         if time_part == "סגור":
             current_hours[day_en] = None
@@ -1317,9 +1317,7 @@ class StationOwnerStateHandler:
         )
         return response, StationOwnerState.EDIT_OPERATING_HOURS.value, {}
 
-    async def _handle_edit_service_areas(
-        self, user: User, message: str, context: dict
-    ):
+    async def _handle_edit_service_areas(self, user: User, message: str, context: dict):
         """עריכת אזורי שירות"""
         if "חזרה" in message:
             return await self._show_station_settings(user, context)
@@ -1332,9 +1330,13 @@ class StationOwnerStateHandler:
                 service_areas=None,
             )
             if not success:
-                logger.error("כשלון במחיקת אזורי שירות", extra_data={
-                    "station_id": self.station_id, "error": msg,
-                })
+                logger.error(
+                    "כשלון במחיקת אזורי שירות",
+                    extra_data={
+                        "station_id": self.station_id,
+                        "error": msg,
+                    },
+                )
                 response = MessageResponse(
                     f"{msg}\n\nנסה שוב או לחץ חזרה:",
                     keyboard=[["🔙 חזרה"]],
@@ -1372,6 +1374,6 @@ class StationOwnerStateHandler:
         """ניתוב ברירת מחדל - הצגת תפריט ללא ניתוב מילות מפתח (guard)"""
         logger.warning(
             "בעל תחנה במצב לא מוכר, מחזיר לתפריט",
-            extra_data={"user_id": user.id, "message_length": len(message)}
+            extra_data={"user_id": user.id, "message_length": len(message)},
         )
         return await self._show_menu(user, context)

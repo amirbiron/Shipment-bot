@@ -90,28 +90,44 @@ class TestTelegramWebhookHelpers:
 
     @pytest.mark.unit
     def test_is_in_multi_step_flow_courier_registration(self):
-        courier = User(phone_number="tg:unit1", platform="telegram", role=UserRole.COURIER)
-        assert _is_in_multi_step_flow(courier, CourierState.REGISTER_COLLECT_NAME.value) is True
+        courier = User(
+            phone_number="tg:unit1", platform="telegram", role=UserRole.COURIER
+        )
+        assert (
+            _is_in_multi_step_flow(courier, CourierState.REGISTER_COLLECT_NAME.value)
+            is True
+        )
 
     @pytest.mark.unit
     def test_is_in_multi_step_flow_sender_prefix_not_menu(self):
-        sender = User(phone_number="tg:unit_sender", platform="telegram", role=UserRole.SENDER)
+        sender = User(
+            phone_number="tg:unit_sender", platform="telegram", role=UserRole.SENDER
+        )
         assert _is_in_multi_step_flow(sender, SenderState.PICKUP_CITY.value) is True
         assert _is_in_multi_step_flow(sender, SenderState.MENU.value) is False
 
     @pytest.mark.unit
     def test_is_in_multi_step_flow_dispatcher_prefix(self):
-        sender = User(phone_number="tg:unit2", platform="telegram", role=UserRole.SENDER)
-        assert _is_in_multi_step_flow(sender, "DISPATCHER.ADD_SHIPMENT_PICKUP_CITY") is True
+        sender = User(
+            phone_number="tg:unit2", platform="telegram", role=UserRole.SENDER
+        )
+        assert (
+            _is_in_multi_step_flow(sender, "DISPATCHER.ADD_SHIPMENT_PICKUP_CITY")
+            is True
+        )
 
     @pytest.mark.unit
     def test_is_in_multi_step_flow_station_prefix(self):
-        owner = User(phone_number="tg:unit3", platform="telegram", role=UserRole.STATION_OWNER)
+        owner = User(
+            phone_number="tg:unit3", platform="telegram", role=UserRole.STATION_OWNER
+        )
         assert _is_in_multi_step_flow(owner, "STATION.ADD_BLACKLIST_REASON") is True
 
     @pytest.mark.unit
     def test_is_in_multi_step_flow_default_false(self):
-        sender = User(phone_number="tg:unit4", platform="telegram", role=UserRole.SENDER)
+        sender = User(
+            phone_number="tg:unit4", platform="telegram", role=UserRole.SENDER
+        )
         assert _is_in_multi_step_flow(sender, None) is False
 
     @pytest.mark.unit

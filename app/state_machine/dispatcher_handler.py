@@ -9,6 +9,7 @@ Dispatcher State Handler - תפריט סדרן היברידי [שלב 3.2]
 - היסטוריית משלוחים
 - הוספת חיוב ידני
 """
+
 from typing import Tuple
 from html import escape
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,14 +44,23 @@ class DispatcherStateHandler:
 
     # מפתחות קונטקסט של הוספת משלוח — מנוקים בחזרה ל-MENU
     _SHIPMENT_CONTEXT_KEYS = {
-        "pickup_city", "pickup_street", "pickup_number", "pickup_address",
-        "dropoff_city", "dropoff_street", "dropoff_number", "dropoff_address",
-        "description", "fee",
+        "pickup_city",
+        "pickup_street",
+        "pickup_number",
+        "pickup_address",
+        "dropoff_city",
+        "dropoff_street",
+        "dropoff_number",
+        "dropoff_address",
+        "description",
+        "fee",
     }
 
     # מפתחות קונטקסט של חיוב ידני — מנוקים בחזרה ל-MENU
     _MANUAL_CHARGE_CONTEXT_KEYS = {
-        "charge_driver_name", "charge_amount", "charge_description",
+        "charge_driver_name",
+        "charge_amount",
+        "charge_description",
     }
 
     def _is_add_shipment_flow_state(self, state: str) -> bool:
@@ -63,13 +73,12 @@ class DispatcherStateHandler:
 
     def _is_multi_step_flow_state(self, state: str) -> bool:
         """בודק אם המצב שייך לזרימה רב-שלבית"""
-        return self._is_add_shipment_flow_state(state) or self._is_manual_charge_flow_state(state)
+        return self._is_add_shipment_flow_state(
+            state
+        ) or self._is_manual_charge_flow_state(state)
 
     async def handle_message(
-        self,
-        user: User,
-        message: str,
-        photo_file_id: str = None
+        self, user: User, message: str, photo_file_id: str = None
     ) -> Tuple[MessageResponse, str]:
         """עיבוד הודעה נכנסת מסדרן"""
         platform = self.platform or user.platform
@@ -80,12 +89,13 @@ class DispatcherStateHandler:
         response, new_state, context_update = await handler(user, message, context)
 
         # ניקוי קונטקסט זרימת משלוח/חיוב בחזרה ל-MENU
-        if new_state == DispatcherState.MENU.value and self._is_multi_step_flow_state(current_state):
-            keys_to_clean = self._SHIPMENT_CONTEXT_KEYS | self._MANUAL_CHARGE_CONTEXT_KEYS
-            clean_context = {
-                k: v for k, v in context.items()
-                if k not in keys_to_clean
-            }
+        if new_state == DispatcherState.MENU.value and self._is_multi_step_flow_state(
+            current_state
+        ):
+            keys_to_clean = (
+                self._SHIPMENT_CONTEXT_KEYS | self._MANUAL_CHARGE_CONTEXT_KEYS
+            )
+            clean_context = {k: v for k, v in context.items() if k not in keys_to_clean}
             if context_update:
                 for k, v in context_update.items():
                     if k not in keys_to_clean:
@@ -108,12 +118,14 @@ class DispatcherStateHandler:
                         "user_id": user.id,
                         "platform": platform,
                         "current_state": current_state,
-                        "new_state": new_state
-                    }
+                        "new_state": new_state,
+                    },
                 )
                 await self.state_manager.force_state(
-                    user.id, platform, new_state,
-                    {**context, **context_update} if context_update else context
+                    user.id,
+                    platform,
+                    new_state,
+                    {**context, **context_update} if context_update else context,
                 )
         elif context_update:
             for key, value in context_update.items():
@@ -125,7 +137,6 @@ class DispatcherStateHandler:
         """ניתוב ל-handler המתאים"""
         handlers = {
             DispatcherState.MENU.value: self._handle_menu,
-
             # הוספת משלוח
             DispatcherState.ADD_SHIPMENT_PICKUP_CITY.value: self._handle_add_shipment_pickup_city,
             DispatcherState.ADD_SHIPMENT_PICKUP_STREET.value: self._handle_add_shipment_pickup_street,
@@ -136,11 +147,9 @@ class DispatcherStateHandler:
             DispatcherState.ADD_SHIPMENT_DESCRIPTION.value: self._handle_add_shipment_description,
             DispatcherState.ADD_SHIPMENT_FEE.value: self._handle_add_shipment_fee,
             DispatcherState.ADD_SHIPMENT_CONFIRM.value: self._handle_add_shipment_confirm,
-
             # צפייה במשלוחים
             DispatcherState.VIEW_ACTIVE_SHIPMENTS.value: self._handle_view_active,
             DispatcherState.VIEW_SHIPMENT_HISTORY.value: self._handle_view_history,
-
             # חיוב ידני
             DispatcherState.MANUAL_CHARGE_DRIVER_NAME.value: self._handle_manual_charge_name,
             DispatcherState.MANUAL_CHARGE_AMOUNT.value: self._handle_manual_charge_amount,
@@ -157,8 +166,7 @@ class DispatcherStateHandler:
         station_name = station.name if station else "תחנה"
 
         response = MessageResponse(
-            f"🏪 <b>תפריט סדרן - {escape(station_name)}</b>\n\n"
-            "בחר פעולה:",
+            f"🏪 <b>תפריט סדרן - {escape(station_name)}</b>\n\n" "בחר פעולה:",
             keyboard=[
                 ["➕ הוספת משלוח", "📦 משלוחים פעילים"],
                 ["📋 היסטוריית משלוחים", "💳 חיוב ידני"],
@@ -175,9 +183,7 @@ class DispatcherStateHandler:
 
         if "הוספת משלוח" in msg or "משלוח חדש" in msg or "➕" in msg:
             response = MessageResponse(
-                "📦 <b>הוספת משלוח חדש</b>\n\n"
-                "📍 <b>כתובת איסוף</b>\n"
-                "מה העיר?"
+                "📦 <b>הוספת משלוח חדש</b>\n\n" "📍 <b>כתובת איסוף</b>\n" "מה העיר?"
             )
             return response, DispatcherState.ADD_SHIPMENT_PICKUP_CITY.value, {}
 
@@ -189,8 +195,7 @@ class DispatcherStateHandler:
 
         if "חיוב ידני" in msg or "חיוב" in msg:
             response = MessageResponse(
-                "💳 <b>הוספת חיוב ידני</b>\n\n"
-                "הזן את שם הנהג:"
+                "💳 <b>הוספת חיוב ידני</b>\n\n" "הזן את שם הנהג:"
             )
             return response, DispatcherState.MANUAL_CHARGE_DRIVER_NAME.value, {}
 
@@ -207,11 +212,12 @@ class DispatcherStateHandler:
             response = MessageResponse("שם העיר קצר מדי. אנא הזן שם עיר תקין:")
             return response, DispatcherState.ADD_SHIPMENT_PICKUP_CITY.value, {}
 
-        response = MessageResponse(
-            f"עיר: {escape(city)} ✓\n\n"
-            "מה שם הרחוב?"
+        response = MessageResponse(f"עיר: {escape(city)} ✓\n\n" "מה שם הרחוב?")
+        return (
+            response,
+            DispatcherState.ADD_SHIPMENT_PICKUP_STREET.value,
+            {"pickup_city": city},
         )
-        return response, DispatcherState.ADD_SHIPMENT_PICKUP_STREET.value, {"pickup_city": city}
 
     async def _handle_add_shipment_pickup_street(
         self, user: User, message: str, context: dict
@@ -227,7 +233,11 @@ class DispatcherStateHandler:
             f"רחוב: {escape(street)} ✓\n\n"
             "מה מספר הבית?"
         )
-        return response, DispatcherState.ADD_SHIPMENT_PICKUP_NUMBER.value, {"pickup_street": street}
+        return (
+            response,
+            DispatcherState.ADD_SHIPMENT_PICKUP_NUMBER.value,
+            {"pickup_street": street},
+        )
 
     async def _handle_add_shipment_pickup_number(
         self, user: User, message: str, context: dict
@@ -247,10 +257,14 @@ class DispatcherStateHandler:
             "🎯 <b>כתובת יעד</b>\n"
             "מה העיר?"
         )
-        return response, DispatcherState.ADD_SHIPMENT_DROPOFF_CITY.value, {
-            "pickup_number": number,
-            "pickup_address": pickup_address,
-        }
+        return (
+            response,
+            DispatcherState.ADD_SHIPMENT_DROPOFF_CITY.value,
+            {
+                "pickup_number": number,
+                "pickup_address": pickup_address,
+            },
+        )
 
     async def _handle_add_shipment_dropoff_city(
         self, user: User, message: str, context: dict
@@ -261,11 +275,12 @@ class DispatcherStateHandler:
             response = MessageResponse("שם העיר קצר מדי. אנא הזן שם עיר תקין:")
             return response, DispatcherState.ADD_SHIPMENT_DROPOFF_CITY.value, {}
 
-        response = MessageResponse(
-            f"עיר: {escape(city)} ✓\n\n"
-            "מה שם הרחוב?"
+        response = MessageResponse(f"עיר: {escape(city)} ✓\n\n" "מה שם הרחוב?")
+        return (
+            response,
+            DispatcherState.ADD_SHIPMENT_DROPOFF_STREET.value,
+            {"dropoff_city": city},
         )
-        return response, DispatcherState.ADD_SHIPMENT_DROPOFF_STREET.value, {"dropoff_city": city}
 
     async def _handle_add_shipment_dropoff_street(
         self, user: User, message: str, context: dict
@@ -281,7 +296,11 @@ class DispatcherStateHandler:
             f"רחוב: {escape(street)} ✓\n\n"
             "מה מספר הבית?"
         )
-        return response, DispatcherState.ADD_SHIPMENT_DROPOFF_NUMBER.value, {"dropoff_street": street}
+        return (
+            response,
+            DispatcherState.ADD_SHIPMENT_DROPOFF_NUMBER.value,
+            {"dropoff_street": street},
+        )
 
     async def _handle_add_shipment_dropoff_number(
         self, user: User, message: str, context: dict
@@ -301,10 +320,14 @@ class DispatcherStateHandler:
             "📝 <b>תיאור המשלוח:</b>\n"
             "מה נשלח? (תיאור קצר)"
         )
-        return response, DispatcherState.ADD_SHIPMENT_DESCRIPTION.value, {
-            "dropoff_number": number,
-            "dropoff_address": dropoff_address,
-        }
+        return (
+            response,
+            DispatcherState.ADD_SHIPMENT_DESCRIPTION.value,
+            {
+                "dropoff_number": number,
+                "dropoff_address": dropoff_address,
+            },
+        )
 
     async def _handle_add_shipment_description(
         self, user: User, message: str, context: dict
@@ -312,7 +335,9 @@ class DispatcherStateHandler:
         """תיאור המשלוח"""
         description = message.strip()
         if len(description) < 2:
-            response = MessageResponse("התיאור קצר מדי. אנא תאר את המשלוח (לפחות 2 תווים):")
+            response = MessageResponse(
+                "התיאור קצר מדי. אנא תאר את המשלוח (לפחות 2 תווים):"
+            )
             return response, DispatcherState.ADD_SHIPMENT_DESCRIPTION.value, {}
 
         response = MessageResponse(
@@ -320,14 +345,17 @@ class DispatcherStateHandler:
             "💰 <b>מחיר המשלוח:</b>\n"
             "כמה עולה המשלוח? (מספר בלבד, בשקלים)"
         )
-        return response, DispatcherState.ADD_SHIPMENT_FEE.value, {"description": description}
+        return (
+            response,
+            DispatcherState.ADD_SHIPMENT_FEE.value,
+            {"description": description},
+        )
 
-    async def _handle_add_shipment_fee(
-        self, user: User, message: str, context: dict
-    ):
+    async def _handle_add_shipment_fee(self, user: User, message: str, context: dict):
         """מחיר המשלוח"""
         import re
-        numbers = re.findall(r'\d+\.?\d*', message.strip())
+
+        numbers = re.findall(r"\d+\.?\d*", message.strip())
         if not numbers:
             response = MessageResponse("אנא הזן סכום תקין (מספר בלבד).")
             return response, DispatcherState.ADD_SHIPMENT_FEE.value, {}
@@ -352,9 +380,7 @@ class DispatcherStateHandler:
         )
 
         response = MessageResponse(
-            summary,
-            keyboard=[["✅ אישור ושליחה", "❌ ביטול"]],
-            inline=True
+            summary, keyboard=[["✅ אישור ושליחה", "❌ ביטול"]], inline=True
         )
         return response, DispatcherState.ADD_SHIPMENT_CONFIRM.value, {"fee": fee}
 
@@ -389,28 +415,25 @@ class DispatcherStateHandler:
                     ["➕ הוספת משלוח", "📦 משלוחים פעילים"],
                     ["📋 היסטוריית משלוחים", "💳 חיוב ידני"],
                     ["🔙 חזרה לתפריט ראשי"],
-                ]
+                ],
             )
             return response, DispatcherState.MENU.value, {}
 
         if "ביטול" in message or "❌" in message:
             response = MessageResponse(
-                "המשלוח בוטל.\n\n"
-                "חזרה לתפריט סדרן.",
+                "המשלוח בוטל.\n\n" "חזרה לתפריט סדרן.",
                 keyboard=[
                     ["➕ הוספת משלוח", "📦 משלוחים פעילים"],
                     ["📋 היסטוריית משלוחים", "💳 חיוב ידני"],
                     ["🔙 חזרה לתפריט ראשי"],
-                ]
+                ],
             )
             return response, DispatcherState.MENU.value, {}
 
         response = MessageResponse(
-            "אנא בחר:\n"
-            "1. ✅ אישור ושליחה\n"
-            "2. ❌ ביטול",
+            "אנא בחר:\n" "1. ✅ אישור ושליחה\n" "2. ❌ ביטול",
             keyboard=[["✅ אישור ושליחה", "❌ ביטול"]],
-            inline=True
+            inline=True,
         )
         return response, DispatcherState.ADD_SHIPMENT_CONFIRM.value, {}
 
@@ -424,9 +447,8 @@ class DispatcherStateHandler:
 
         if not deliveries:
             response = MessageResponse(
-                "📦 <b>משלוחים פעילים</b>\n\n"
-                "אין משלוחים פעילים כרגע.",
-                keyboard=[["🔙 חזרה לתפריט סדרן"]]
+                "📦 <b>משלוחים פעילים</b>\n\n" "אין משלוחים פעילים כרגע.",
+                keyboard=[["🔙 חזרה לתפריט סדרן"]],
             )
             return response, DispatcherState.VIEW_ACTIVE_SHIPMENTS.value, {}
 
@@ -446,10 +468,7 @@ class DispatcherStateHandler:
                 f"  💰 {d.fee:.0f} ₪\n\n"
             )
 
-        response = MessageResponse(
-            text,
-            keyboard=[["🔙 חזרה לתפריט סדרן"]]
-        )
+        response = MessageResponse(text, keyboard=[["🔙 חזרה לתפריט סדרן"]])
         return response, DispatcherState.VIEW_ACTIVE_SHIPMENTS.value, {}
 
     async def _handle_view_active(self, user: User, message: str, context: dict):
@@ -467,9 +486,8 @@ class DispatcherStateHandler:
 
         if not deliveries:
             response = MessageResponse(
-                "📋 <b>היסטוריית משלוחים</b>\n\n"
-                "אין משלוחים בהיסטוריה עדיין.",
-                keyboard=[["🔙 חזרה לתפריט סדרן"]]
+                "📋 <b>היסטוריית משלוחים</b>\n\n" "אין משלוחים בהיסטוריה עדיין.",
+                keyboard=[["🔙 חזרה לתפריט סדרן"]],
             )
             return response, DispatcherState.VIEW_SHIPMENT_HISTORY.value, {}
 
@@ -488,10 +506,7 @@ class DispatcherStateHandler:
                 f"  💰 {d.fee:.0f} ₪\n\n"
             )
 
-        response = MessageResponse(
-            text,
-            keyboard=[["🔙 חזרה לתפריט סדרן"]]
-        )
+        response = MessageResponse(text, keyboard=[["🔙 חזרה לתפריט סדרן"]])
         return response, DispatcherState.VIEW_SHIPMENT_HISTORY.value, {}
 
     async def _handle_view_history(self, user: User, message: str, context: dict):
@@ -503,9 +518,7 @@ class DispatcherStateHandler:
 
     # ==================== חיוב ידני ====================
 
-    async def _handle_manual_charge_name(
-        self, user: User, message: str, context: dict
-    ):
+    async def _handle_manual_charge_name(self, user: User, message: str, context: dict):
         """שם הנהג לחיוב ידני"""
         if "חזרה" in message:
             return await self._show_menu(user, context)
@@ -516,10 +529,13 @@ class DispatcherStateHandler:
             return response, DispatcherState.MANUAL_CHARGE_DRIVER_NAME.value, {}
 
         response = MessageResponse(
-            f"נהג: {escape(name)} ✓\n\n"
-            "💰 כמה לחייב? (סכום בשקלים)"
+            f"נהג: {escape(name)} ✓\n\n" "💰 כמה לחייב? (סכום בשקלים)"
         )
-        return response, DispatcherState.MANUAL_CHARGE_AMOUNT.value, {"charge_driver_name": name}
+        return (
+            response,
+            DispatcherState.MANUAL_CHARGE_AMOUNT.value,
+            {"charge_driver_name": name},
+        )
 
     async def _handle_manual_charge_amount(
         self, user: User, message: str, context: dict
@@ -529,7 +545,8 @@ class DispatcherStateHandler:
             return await self._show_menu(user, context)
 
         import re
-        numbers = re.findall(r'\d+\.?\d*', message.strip())
+
+        numbers = re.findall(r"\d+\.?\d*", message.strip())
         if not numbers:
             response = MessageResponse("אנא הזן סכום תקין (מספר בלבד).")
             return response, DispatcherState.MANUAL_CHARGE_AMOUNT.value, {}
@@ -540,10 +557,13 @@ class DispatcherStateHandler:
             return response, DispatcherState.MANUAL_CHARGE_AMOUNT.value, {}
 
         response = MessageResponse(
-            f"סכום: {amount:.0f} ₪ ✓\n\n"
-            "📝 תיאור (פרטי המשלוח):"
+            f"סכום: {amount:.0f} ₪ ✓\n\n" "📝 תיאור (פרטי המשלוח):"
         )
-        return response, DispatcherState.MANUAL_CHARGE_DESCRIPTION.value, {"charge_amount": amount}
+        return (
+            response,
+            DispatcherState.MANUAL_CHARGE_DESCRIPTION.value,
+            {"charge_amount": amount},
+        )
 
     async def _handle_manual_charge_description(
         self, user: User, message: str, context: dict
@@ -565,13 +585,13 @@ class DispatcherStateHandler:
         )
 
         response = MessageResponse(
-            summary,
-            keyboard=[["✅ אישור", "❌ ביטול"]],
-            inline=True
+            summary, keyboard=[["✅ אישור", "❌ ביטול"]], inline=True
         )
-        return response, DispatcherState.MANUAL_CHARGE_CONFIRM.value, {
-            "charge_description": description
-        }
+        return (
+            response,
+            DispatcherState.MANUAL_CHARGE_CONFIRM.value,
+            {"charge_description": description},
+        )
 
     async def _handle_manual_charge_confirm(
         self, user: User, message: str, context: dict
@@ -598,28 +618,25 @@ class DispatcherStateHandler:
                     ["➕ הוספת משלוח", "📦 משלוחים פעילים"],
                     ["📋 היסטוריית משלוחים", "💳 חיוב ידני"],
                     ["🔙 חזרה לתפריט ראשי"],
-                ]
+                ],
             )
             return response, DispatcherState.MENU.value, {}
 
         if "ביטול" in message or "❌" in message:
             response = MessageResponse(
-                "החיוב בוטל.\n\n"
-                "חזרה לתפריט סדרן.",
+                "החיוב בוטל.\n\n" "חזרה לתפריט סדרן.",
                 keyboard=[
                     ["➕ הוספת משלוח", "📦 משלוחים פעילים"],
                     ["📋 היסטוריית משלוחים", "💳 חיוב ידני"],
                     ["🔙 חזרה לתפריט ראשי"],
-                ]
+                ],
             )
             return response, DispatcherState.MENU.value, {}
 
         response = MessageResponse(
-            "אנא בחר:\n"
-            "1. ✅ אישור\n"
-            "2. ❌ ביטול",
+            "אנא בחר:\n" "1. ✅ אישור\n" "2. ❌ ביטול",
             keyboard=[["✅ אישור", "❌ ביטול"]],
-            inline=True
+            inline=True,
         )
         return response, DispatcherState.MANUAL_CHARGE_CONFIRM.value, {}
 
@@ -629,6 +646,6 @@ class DispatcherStateHandler:
         """ניתוב ברירת מחדל - הצגת תפריט סדרן ללא ניתוב מילות מפתח (guard)"""
         logger.warning(
             "סדרן במצב לא מוכר, מחזיר לתפריט",
-            extra_data={"user_id": user.id, "message_length": len(message)}
+            extra_data={"user_id": user.id, "message_length": len(message)},
         )
         return await self._show_menu(user, context)

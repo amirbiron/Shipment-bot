@@ -1,6 +1,7 @@
 """
 State Handlers - Process messages based on current state
 """
+
 from typing import Tuple, Optional
 from html import escape
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,10 +37,23 @@ class SenderStateHandler:
 
     # מפתחות קונטקסט של טיוטת משלוח — מנוקים בחזרה ל-MENU
     _DELIVERY_CONTEXT_KEYS = {
-        "pickup_city", "pickup_street", "pickup_number", "pickup_apartment",
-        "pickup_address", "dropoff_city", "dropoff_street", "dropoff_number",
-        "dropoff_apartment", "dropoff_address", "delivery_location", "same_city",
-        "urgency", "delivery_time", "min_price", "customer_price", "description",
+        "pickup_city",
+        "pickup_street",
+        "pickup_number",
+        "pickup_apartment",
+        "pickup_address",
+        "dropoff_city",
+        "dropoff_street",
+        "dropoff_number",
+        "dropoff_apartment",
+        "dropoff_address",
+        "delivery_location",
+        "same_city",
+        "urgency",
+        "delivery_time",
+        "min_price",
+        "customer_price",
+        "description",
     }
 
     def __init__(self, db: AsyncSession):
@@ -51,10 +65,7 @@ class SenderStateHandler:
         return state.startswith("SENDER.DELIVERY.")
 
     async def handle_message(
-        self,
-        user_id: int,
-        platform: str,
-        message: str
+        self, user_id: int, platform: str, message: str
     ) -> Tuple[MessageResponse, str]:
         """
         Process incoming message and return response with new state
@@ -66,13 +77,11 @@ class SenderStateHandler:
         response, new_state, context_update = await handler(message, context, user_id)
 
         # ניקוי קונטקסט טיוטת משלוח בחזרה ל-MENU מזרימת משלוח
-        if (
-            new_state == SenderState.MENU.value
-            and self._is_delivery_flow_state(current_state)
+        if new_state == SenderState.MENU.value and self._is_delivery_flow_state(
+            current_state
         ):
             clean_context = {
-                k: v for k, v in context.items()
-                if k not in self._DELIVERY_CONTEXT_KEYS
+                k: v for k, v in context.items() if k not in self._DELIVERY_CONTEXT_KEYS
             }
             if context_update:
                 for k, v in context_update.items():
@@ -96,12 +105,14 @@ class SenderStateHandler:
                         "user_id": user_id,
                         "platform": platform,
                         "current_state": current_state,
-                        "new_state": new_state
-                    }
+                        "new_state": new_state,
+                    },
                 )
                 await self.state_manager.force_state(
-                    user_id, platform, new_state,
-                    {**context, **context_update} if context_update else context
+                    user_id,
+                    platform,
+                    new_state,
+                    {**context, **context_update} if context_update else context,
                 )
         elif context_update:
             # State didn't change but we have context to save
@@ -118,26 +129,22 @@ class SenderStateHandler:
             SenderState.NEW.value: self._handle_new,
             SenderState.REGISTER_COLLECT_NAME.value: self._handle_collect_name,
             SenderState.MENU.value: self._handle_menu,
-
             # Pickup address wizard
             SenderState.PICKUP_CITY.value: self._handle_pickup_city,
             SenderState.PICKUP_STREET.value: self._handle_pickup_street,
             SenderState.PICKUP_NUMBER.value: self._handle_pickup_number,
             SenderState.PICKUP_APARTMENT.value: self._handle_pickup_apartment,
-
             # Dropoff address wizard
             SenderState.DROPOFF_CITY.value: self._handle_dropoff_city,
             SenderState.DROPOFF_STREET.value: self._handle_dropoff_street,
             SenderState.DROPOFF_NUMBER.value: self._handle_dropoff_number,
             SenderState.DROPOFF_APARTMENT.value: self._handle_dropoff_apartment,
-
             # Delivery details
             SenderState.DELIVERY_LOCATION.value: self._handle_delivery_location,
             SenderState.DELIVERY_URGENCY.value: self._handle_delivery_urgency,
             SenderState.DELIVERY_TIME.value: self._handle_delivery_time,
             SenderState.DELIVERY_PRICE.value: self._handle_delivery_price,
             SenderState.DELIVERY_DESCRIPTION.value: self._handle_delivery_description,
-
             # Confirmation
             SenderState.DELIVERY_CONFIRM.value: self._handle_confirm,
         }
@@ -148,16 +155,14 @@ class SenderStateHandler:
     async def _handle_initial(self, message: str, context: dict, user_id: int):
         """Handle initial state"""
         response = MessageResponse(
-            "שלום! ברוכים הבאים לבוט המשלוחים.\n"
-            "אנא הזינו את שמכם להרשמה:",
+            "שלום! ברוכים הבאים לבוט המשלוחים.\n" "אנא הזינו את שמכם להרשמה:",
         )
         return response, SenderState.REGISTER_COLLECT_NAME.value, {}
 
     async def _handle_new(self, message: str, context: dict, user_id: int):
         """Handle new user"""
         response = MessageResponse(
-            "שלום! בואו נתחיל בהרשמה.\n"
-            "מה השם שלך?",
+            "שלום! בואו נתחיל בהרשמה.\n" "מה השם שלך?",
         )
         return response, SenderState.REGISTER_COLLECT_NAME.value, {}
 
@@ -214,18 +219,15 @@ class SenderStateHandler:
 
         if "משלוח חדש" in message or "➕" in message or message == "1":
             response = MessageResponse(
-                "בואו ניצור משלוח חדש!\n\n"
-                "📍 <b>כתובת איסוף</b>\n"
-                "מה העיר?"
+                "בואו ניצור משלוח חדש!\n\n" "📍 <b>כתובת איסוף</b>\n" "מה העיר?"
             )
             return response, SenderState.PICKUP_CITY.value, {}
 
         elif "משלוחים" in message or "📦" in message or message == "2":
             response = MessageResponse(
-                "המשלוחים שלך:\n(אין משלוחים עדיין)\n\n"
-                "חזרה לתפריט:",
+                "המשלוחים שלך:\n(אין משלוחים עדיין)\n\n" "חזרה לתפריט:",
                 keyboard=[["📦 המשלוחים שלי"], ["➕ משלוח חדש"]],
-                inline=True
+                inline=True,
             )
             return response, SenderState.MENU.value, {}
 
@@ -238,7 +240,7 @@ class SenderStateHandler:
                 ["🏪 הצטרפות כתחנה"],
                 ["📞 פנייה לניהול"],
             ],
-            inline=True
+            inline=True,
         )
         return response, SenderState.MENU.value, {}
 
@@ -253,10 +255,7 @@ class SenderStateHandler:
             return response, SenderState.PICKUP_CITY.value, {}
 
         safe_city = escape(city)
-        response = MessageResponse(
-            f"עיר: {safe_city} ✓\n\n"
-            "מה שם הרחוב?"
-        )
+        response = MessageResponse(f"עיר: {safe_city} ✓\n\n" "מה שם הרחוב?")
         return response, SenderState.PICKUP_STREET.value, {"pickup_city": city}
 
     async def _handle_pickup_street(self, message: str, context: dict, user_id: int):
@@ -271,9 +270,7 @@ class SenderStateHandler:
         safe_city = escape(city)
         safe_street = escape(street)
         response = MessageResponse(
-            f"עיר: {safe_city} ✓\n"
-            f"רחוב: {safe_street} ✓\n\n"
-            "מה מספר הבית?"
+            f"עיר: {safe_city} ✓\n" f"רחוב: {safe_street} ✓\n\n" "מה מספר הבית?"
         )
         return response, SenderState.PICKUP_NUMBER.value, {"pickup_street": street}
 
@@ -283,7 +280,9 @@ class SenderStateHandler:
 
         # Check if contains a digit
         if not any(char.isdigit() for char in number):
-            response = MessageResponse("מספר הבית חייב להכיל ספרה. אנא הזינו מספר תקין:")
+            response = MessageResponse(
+                "מספר הבית חייב להכיל ספרה. אנא הזינו מספר תקין:"
+            )
             return response, SenderState.PICKUP_NUMBER.value, {}
 
         city = context.get("pickup_city", "")
@@ -298,7 +297,7 @@ class SenderStateHandler:
             f"מספר: {safe_number} ✓\n\n"
             "קומה ודירה? (או לחצו <b>דלג</b> אם לא רלוונטי)",
             keyboard=[["דלג"]],
-            inline=True
+            inline=True,
         )
         return response, SenderState.PICKUP_APARTMENT.value, {"pickup_number": number}
 
@@ -325,12 +324,13 @@ class SenderStateHandler:
             f"{safe_full_address}\n\n"
             "לאן תרצו להעביר את המשלוח?",
             keyboard=[["🏙️ בתוך העיר", "🚗 מחוץ לעיר"]],
-            inline=True
+            inline=True,
         )
-        return response, SenderState.DELIVERY_LOCATION.value, {
-            "pickup_apartment": apartment,
-            "pickup_address": full_address
-        }
+        return (
+            response,
+            SenderState.DELIVERY_LOCATION.value,
+            {"pickup_apartment": apartment, "pickup_address": full_address},
+        )
 
     # ==================== Dropoff Address Wizard ====================
 
@@ -343,10 +343,7 @@ class SenderStateHandler:
             return response, SenderState.DROPOFF_CITY.value, {}
 
         safe_city = escape(city)
-        response = MessageResponse(
-            f"עיר: {safe_city} ✓\n\n"
-            "מה שם הרחוב?"
-        )
+        response = MessageResponse(f"עיר: {safe_city} ✓\n\n" "מה שם הרחוב?")
         return response, SenderState.DROPOFF_STREET.value, {"dropoff_city": city}
 
     async def _handle_dropoff_street(self, message: str, context: dict, user_id: int):
@@ -361,9 +358,7 @@ class SenderStateHandler:
         safe_city = escape(city)
         safe_street = escape(street)
         response = MessageResponse(
-            f"עיר: {safe_city} ✓\n"
-            f"רחוב: {safe_street} ✓\n\n"
-            "מה מספר הבית?"
+            f"עיר: {safe_city} ✓\n" f"רחוב: {safe_street} ✓\n\n" "מה מספר הבית?"
         )
         return response, SenderState.DROPOFF_NUMBER.value, {"dropoff_street": street}
 
@@ -373,7 +368,9 @@ class SenderStateHandler:
 
         # Check if contains a digit
         if not any(char.isdigit() for char in number):
-            response = MessageResponse("מספר הבית חייב להכיל ספרה. אנא הזינו מספר תקין:")
+            response = MessageResponse(
+                "מספר הבית חייב להכיל ספרה. אנא הזינו מספר תקין:"
+            )
             return response, SenderState.DROPOFF_NUMBER.value, {}
 
         city = context.get("dropoff_city", "")
@@ -388,11 +385,13 @@ class SenderStateHandler:
             f"מספר: {safe_number} ✓\n\n"
             "קומה ודירה? (או לחצו <b>דלג</b> אם לא רלוונטי)",
             keyboard=[["דלג"]],
-            inline=True
+            inline=True,
         )
         return response, SenderState.DROPOFF_APARTMENT.value, {"dropoff_number": number}
 
-    async def _handle_dropoff_apartment(self, message: str, context: dict, user_id: int):
+    async def _handle_dropoff_apartment(
+        self, message: str, context: dict, user_id: int
+    ):
         """Collect dropoff apartment/floor (optional) and ask about urgency"""
         msg = message.strip()
 
@@ -415,27 +414,36 @@ class SenderStateHandler:
         # לאחר כתובת יעד - עוברים לשאלת הדחיפות
         safe_full_dropoff = escape(full_dropoff)
         response = MessageResponse(
-            f"🎯 כתובת יעד נשמרה:\n{safe_full_dropoff}\n\n"
-            "האם המשלוח דחוף?",
+            f"🎯 כתובת יעד נשמרה:\n{safe_full_dropoff}\n\n" "האם המשלוח דחוף?",
             keyboard=[["🚀 מיידי", "☕ בנחת"]],
-            inline=True
+            inline=True,
         )
-        return response, SenderState.DELIVERY_URGENCY.value, {
-            "dropoff_apartment": apartment,
-            "dropoff_address": full_dropoff,
-            "same_city": same_city
-        }
+        return (
+            response,
+            SenderState.DELIVERY_URGENCY.value,
+            {
+                "dropoff_apartment": apartment,
+                "dropoff_address": full_dropoff,
+                "same_city": same_city,
+            },
+        )
 
     # ==================== Delivery Details ====================
 
-    async def _handle_delivery_location(self, message: str, context: dict, user_id: int):
+    async def _handle_delivery_location(
+        self, message: str, context: dict, user_id: int
+    ):
         """Handle delivery location selection (within/outside city)"""
         msg = message.strip()
 
         # לוג לדיבוג - מה בדיוק התקבל מהמשתמש
         logger.debug(
             "Handling delivery location input",
-            extra_data={"user_id": user_id, "raw_input": repr(msg), "input_length": len(msg)}
+            extra_data={
+                "user_id": user_id,
+                "raw_input": repr(msg),
+                "input_length": len(msg),
+            },
         )
 
         if "בתוך" in msg or "🏙️" in msg or msg == "1":
@@ -448,14 +456,12 @@ class SenderStateHandler:
             # לוג כשהתנאי לא מתקיים - לעזור בדיבוג
             logger.warning(
                 "Delivery location input did not match expected patterns",
-                extra_data={"user_id": user_id, "raw_input": repr(msg)}
+                extra_data={"user_id": user_id, "raw_input": repr(msg)},
             )
             response = MessageResponse(
-                "אנא בחרו אפשרות:\n"
-                "1. בתוך העיר\n"
-                "2. מחוץ לעיר",
+                "אנא בחרו אפשרות:\n" "1. בתוך העיר\n" "2. מחוץ לעיר",
                 keyboard=[["🏙️ בתוך העיר", "🚗 מחוץ לעיר"]],
-                inline=True
+                inline=True,
             )
             return response, SenderState.DELIVERY_LOCATION.value, {}
 
@@ -470,10 +476,14 @@ class SenderStateHandler:
                 f"עיר: {safe_city} ✓\n\n"
                 "מה שם הרחוב?"
             )
-            return response, SenderState.DROPOFF_STREET.value, {
-                "delivery_location": location_type,
-                "dropoff_city": pickup_city  # עיר היעד = עיר האיסוף
-            }
+            return (
+                response,
+                SenderState.DROPOFF_STREET.value,
+                {
+                    "delivery_location": location_type,
+                    "dropoff_city": pickup_city,  # עיר היעד = עיר האיסוף
+                },
+            )
 
         # משלוח מחוץ לעיר - שואלים על עיר היעד
         response = MessageResponse(
@@ -482,7 +492,11 @@ class SenderStateHandler:
             "🎯 <b>כתובת יעד</b>\n"
             "מה העיר?"
         )
-        return response, SenderState.DROPOFF_CITY.value, {"delivery_location": location_type}
+        return (
+            response,
+            SenderState.DROPOFF_CITY.value,
+            {"delivery_location": location_type},
+        )
 
     async def _handle_delivery_urgency(self, message: str, context: dict, user_id: int):
         """Handle urgency selection (immediate/later)"""
@@ -495,10 +509,11 @@ class SenderStateHandler:
                 "📝 <b>תיאור המשלוח:</b>\n"
                 "מה אתם שולחים? (תיאור קצר של הפריט)"
             )
-            return response, SenderState.DELIVERY_DESCRIPTION.value, {
-                "urgency": "immediate",
-                "delivery_time": "מיידי"
-            }
+            return (
+                response,
+                SenderState.DELIVERY_DESCRIPTION.value,
+                {"urgency": "immediate", "delivery_time": "מיידי"},
+            )
 
         elif "בנחת" in msg or "☕" in msg or msg == "2":
             # Later - ask for time
@@ -514,17 +529,18 @@ class SenderStateHandler:
             "1. 🚀 מיידי - המשלוח יתבצע בהקדם\n"
             "2. ☕ בנחת - תבחרו שעה מועדפת",
             keyboard=[["🚀 מיידי", "☕ בנחת"]],
-            inline=True
+            inline=True,
         )
         return response, SenderState.DELIVERY_URGENCY.value, {}
 
     async def _handle_delivery_time(self, message: str, context: dict, user_id: int):
         """Handle delivery time input (HH:MM format) - only for 'later' urgency"""
         import re
+
         msg = message.strip()
 
         # Validate time format HH:MM
-        time_pattern = re.compile(r'^([01]?[0-9]|2[0-3]):([0-5][0-9])$')
+        time_pattern = re.compile(r"^([01]?[0-9]|2[0-3]):([0-5][0-9])$")
         if not time_pattern.match(msg):
             response = MessageResponse(
                 "❌ פורמט שעה לא תקין.\n\n"
@@ -546,7 +562,11 @@ class SenderStateHandler:
             f"מה המחיר שתרצו לשלם?\n"
             f"(מינימום להזמנה זו: {min_price} ₪)"
         )
-        return response, SenderState.DELIVERY_PRICE.value, {"delivery_time": msg, "min_price": min_price}
+        return (
+            response,
+            SenderState.DELIVERY_PRICE.value,
+            {"delivery_time": msg, "min_price": min_price},
+        )
 
     async def _handle_delivery_price(self, message: str, context: dict, user_id: int):
         """Handle customer price input - only for 'later' urgency"""
@@ -554,12 +574,12 @@ class SenderStateHandler:
 
         # Extract number from message
         import re
-        numbers = re.findall(r'\d+', msg)
+
+        numbers = re.findall(r"\d+", msg)
         if not numbers:
             min_price = context.get("min_price", 25)
             response = MessageResponse(
-                f"❌ אנא הזינו סכום תקין (מספר בלבד).\n"
-                f"מינימום: {min_price} ₪"
+                f"❌ אנא הזינו סכום תקין (מספר בלבד).\n" f"מינימום: {min_price} ₪"
             )
             return response, SenderState.DELIVERY_PRICE.value, {}
 
@@ -579,9 +599,15 @@ class SenderStateHandler:
             "📝 <b>תיאור המשלוח:</b>\n"
             "מה אתם שולחים? (תיאור קצר של הפריט)"
         )
-        return response, SenderState.DELIVERY_DESCRIPTION.value, {"customer_price": price}
+        return (
+            response,
+            SenderState.DELIVERY_DESCRIPTION.value,
+            {"customer_price": price},
+        )
 
-    async def _handle_delivery_description(self, message: str, context: dict, user_id: int):
+    async def _handle_delivery_description(
+        self, message: str, context: dict, user_id: int
+    ):
         """Handle shipment description and show final summary"""
         description = message.strip()
 
@@ -619,11 +645,13 @@ class SenderStateHandler:
         summary += "לאשר את המשלוח?"
 
         response = MessageResponse(
-            summary,
-            keyboard=[["✅ אישור ושליחה", "❌ ביטול"]],
-            inline=True
+            summary, keyboard=[["✅ אישור ושליחה", "❌ ביטול"]], inline=True
         )
-        return response, SenderState.DELIVERY_CONFIRM.value, {"description": description}
+        return (
+            response,
+            SenderState.DELIVERY_CONFIRM.value,
+            {"description": description},
+        )
 
     # ==================== Confirmation ====================
 
@@ -652,34 +680,28 @@ class SenderStateHandler:
             if customer_price:
                 success_msg += f"💰 מחיר: {customer_price} ₪\n"
 
-            success_msg += (
-                "\nהשליחים יקבלו התראה בקרוב.\n"
-                "מה תרצו לעשות עכשיו?"
-            )
+            success_msg += "\nהשליחים יקבלו התראה בקרוב.\n" "מה תרצו לעשות עכשיו?"
 
             response = MessageResponse(
                 success_msg,
                 keyboard=[["📦 המשלוחים שלי"], ["➕ משלוח חדש"]],
-                inline=True
+                inline=True,
             )
             return response, SenderState.MENU.value, {}
 
         if "ביטול" in message or "❌" in message or "לא" in message.lower():
             response = MessageResponse(
-                "המשלוח בוטל.\n\n"
-                "מה תרצו לעשות?",
+                "המשלוח בוטל.\n\n" "מה תרצו לעשות?",
                 keyboard=[["📦 המשלוחים שלי"], ["➕ משלוח חדש"]],
-                inline=True
+                inline=True,
             )
             return response, SenderState.MENU.value, {}
 
         # Invalid response
         response = MessageResponse(
-            "אנא בחרו אפשרות:\n"
-            "1. ✅ אישור ושליחה\n"
-            "2. ❌ ביטול",
+            "אנא בחרו אפשרות:\n" "1. ✅ אישור ושליחה\n" "2. ❌ ביטול",
             keyboard=[["✅ אישור ושליחה", "❌ ביטול"]],
-            inline=True
+            inline=True,
         )
         return response, SenderState.DELIVERY_CONFIRM.value, {}
 
@@ -690,7 +712,7 @@ class SenderStateHandler:
         response = MessageResponse(
             "משהו השתבש. חוזרים לתפריט הראשי.",
             keyboard=[["📦 המשלוחים שלי"], ["➕ משלוח חדש"]],
-            inline=True
+            inline=True,
         )
         return response, SenderState.MENU.value, {}
 
@@ -715,7 +737,9 @@ class CourierStateHandler:
         self.platform = platform
         self.state_manager = StateManager(db)
 
-    def _blocked_or_rejected_response(self, user: User) -> tuple[MessageResponse, str, dict] | None:
+    def _blocked_or_rejected_response(
+        self, user: User
+    ) -> tuple[MessageResponse, str, dict] | None:
         """מחזיר תשובה לשליח חסום/נדחה, או None אם הסטטוס אחר."""
         from app.db.models.user import ApprovalStatus
         from app.core.validation import TextSanitizer
@@ -729,7 +753,8 @@ class CourierStateHandler:
 
         if user.approval_status == ApprovalStatus.REJECTED:
             note_line = TextSanitizer.format_note_line(
-                user.rejection_note, platform=self.platform,
+                user.rejection_note,
+                platform=self.platform,
             )
             response = MessageResponse(
                 f"לצערנו, בקשתך להצטרף כשליח נדחתה.{note_line}\n"
@@ -742,19 +767,22 @@ class CourierStateHandler:
 
     # מפתחות קונטקסט של רישום KYC — מנוקים בחזרה ל-MENU
     _KYC_CONTEXT_KEYS = {
-        "document_file_id", "selfie_file_id", "vehicle_category",
-        "vehicle_photo_file_id", "changing_area",
+        "document_file_id",
+        "selfie_file_id",
+        "vehicle_category",
+        "vehicle_photo_file_id",
+        "changing_area",
     }
 
     def _is_registration_flow_state(self, state: str) -> bool:
         """בודק אם המצב שייך לזרימת רישום שליח"""
-        return state.startswith("COURIER.REGISTER.") or state == CourierState.PENDING_APPROVAL.value
+        return (
+            state.startswith("COURIER.REGISTER.")
+            or state == CourierState.PENDING_APPROVAL.value
+        )
 
     async def handle_message(
-        self,
-        user: User,
-        message: str,
-        photo_file_id: str = None
+        self, user: User, message: str, photo_file_id: str = None
     ) -> Tuple[MessageResponse, str]:
         """Process incoming message for courier and return response with new state"""
         platform = self.platform or user.platform
@@ -762,16 +790,16 @@ class CourierStateHandler:
         context = await self.state_manager.get_context(user.id, platform)
 
         handler = self._get_handler(current_state)
-        response, new_state, context_update = await handler(user, message, context, photo_file_id)
+        response, new_state, context_update = await handler(
+            user, message, context, photo_file_id
+        )
 
         # ניקוי קונטקסט KYC בחזרה ל-MENU מזרימת רישום
-        if (
-            new_state == CourierState.MENU.value
-            and self._is_registration_flow_state(current_state)
+        if new_state == CourierState.MENU.value and self._is_registration_flow_state(
+            current_state
         ):
             clean_context = {
-                k: v for k, v in context.items()
-                if k not in self._KYC_CONTEXT_KEYS
+                k: v for k, v in context.items() if k not in self._KYC_CONTEXT_KEYS
             }
             if context_update:
                 for k, v in context_update.items():
@@ -795,12 +823,14 @@ class CourierStateHandler:
                         "user_id": user.id,
                         "platform": platform,
                         "current_state": current_state,
-                        "new_state": new_state
-                    }
+                        "new_state": new_state,
+                    },
                 )
                 await self.state_manager.force_state(
-                    user.id, platform, new_state,
-                    {**context, **context_update} if context_update else context
+                    user.id,
+                    platform,
+                    new_state,
+                    {**context, **context_update} if context_update else context,
                 )
         elif context_update:
             for key, value in context_update.items():
@@ -828,7 +858,6 @@ class CourierStateHandler:
             CourierState.VIEW_HISTORY.value: self._handle_view_history,
             CourierState.VIEW_ACTIVE.value: self._handle_view_active,
             CourierState.SUPPORT.value: self._handle_support,
-
             # מצבים המטופלים בעיקר דרך webhook קבוצתי (callback queries).
             # כאשר שליח שולח הודעה ישירה בעודו באחד מהמצבים הללו,
             # ה-handler מציג הודעת הכוונה ומחזיר לתפריט.
@@ -841,7 +870,9 @@ class CourierStateHandler:
 
     # ==================== Registration Flow [1.2] ====================
 
-    async def _handle_initial(self, user: User, message: str, context: dict, photo_file_id: str):
+    async def _handle_initial(
+        self, user: User, message: str, context: dict, photo_file_id: str
+    ):
         """Welcome message and start registration"""
         response = MessageResponse(
             "ברוכים הבאים למערכת משלוח בצ'יק! 🚚\n\n"
@@ -851,11 +882,15 @@ class CourierStateHandler:
         )
         return response, CourierState.REGISTER_COLLECT_NAME.value, {}
 
-    async def _handle_collect_name(self, user: User, message: str, context: dict, photo_file_id: str):
+    async def _handle_collect_name(
+        self, user: User, message: str, context: dict, photo_file_id: str
+    ):
         """Collect full name - Step a"""
         name = message.strip()
         if len(name) < 2:
-            response = MessageResponse("השם שהוזן קצר מדי. אנא הזן את שמך המלא (לפחות 2 תווים).")
+            response = MessageResponse(
+                "השם שהוזן קצר מדי. אנא הזן את שמך המלא (לפחות 2 תווים)."
+            )
             return response, CourierState.REGISTER_COLLECT_NAME.value, {}
 
         if len(name) > 150:
@@ -875,7 +910,9 @@ class CourierStateHandler:
         )
         return response, CourierState.REGISTER_COLLECT_DOCUMENT.value, {}
 
-    async def _handle_collect_document(self, user: User, message: str, context: dict, photo_file_id: str):
+    async def _handle_collect_document(
+        self, user: User, message: str, context: dict, photo_file_id: str
+    ):
         """איסוף תעודת זהות / רישיון נהיגה - שלב ב'"""
         if not photo_file_id:
             response = MessageResponse(
@@ -893,9 +930,15 @@ class CourierStateHandler:
             "אנא צלם ושלח סלפי שלך כעת (בזמן אמת).\n\n"
             "📸 שלח תמונת סלפי ברורה."
         )
-        return response, CourierState.REGISTER_COLLECT_SELFIE.value, {"document_file_id": photo_file_id}
+        return (
+            response,
+            CourierState.REGISTER_COLLECT_SELFIE.value,
+            {"document_file_id": photo_file_id},
+        )
 
-    async def _handle_collect_selfie(self, user: User, message: str, context: dict, photo_file_id: str):
+    async def _handle_collect_selfie(
+        self, user: User, message: str, context: dict, photo_file_id: str
+    ):
         """איסוף סלפי לאימות חי - שלב ג'"""
         if not photo_file_id:
             response = MessageResponse(
@@ -915,11 +958,17 @@ class CourierStateHandler:
                 ["🚗 רכב 4 מקומות", "🚐 7 מקומות"],
                 ["🛻 טנדר", "🏍️ אופנוע"],
             ],
-            inline=True
+            inline=True,
         )
-        return response, CourierState.REGISTER_COLLECT_VEHICLE_CATEGORY.value, {"selfie_file_id": photo_file_id}
+        return (
+            response,
+            CourierState.REGISTER_COLLECT_VEHICLE_CATEGORY.value,
+            {"selfie_file_id": photo_file_id},
+        )
 
-    async def _handle_collect_vehicle_category(self, user: User, message: str, context: dict, photo_file_id: str):
+    async def _handle_collect_vehicle_category(
+        self, user: User, message: str, context: dict, photo_file_id: str
+    ):
         """בחירת קטגוריית רכב - שלב ד'"""
         msg = message.strip()
 
@@ -950,7 +999,7 @@ class CourierStateHandler:
                     ["🚗 רכב 4 מקומות", "🚐 7 מקומות"],
                     ["🛻 טנדר", "🏍️ אופנוע"],
                 ],
-                inline=True
+                inline=True,
             )
             return response, CourierState.REGISTER_COLLECT_VEHICLE_CATEGORY.value, {}
 
@@ -963,14 +1012,18 @@ class CourierStateHandler:
             "אנא צלם ושלח תמונה של הרכב שלך.\n\n"
             "📸 שלח תמונה ברורה של הרכב."
         )
-        return response, CourierState.REGISTER_COLLECT_VEHICLE_PHOTO.value, {"vehicle_category": category}
+        return (
+            response,
+            CourierState.REGISTER_COLLECT_VEHICLE_PHOTO.value,
+            {"vehicle_category": category},
+        )
 
-    async def _handle_collect_vehicle_photo(self, user: User, message: str, context: dict, photo_file_id: str):
+    async def _handle_collect_vehicle_photo(
+        self, user: User, message: str, context: dict, photo_file_id: str
+    ):
         """איסוף תמונת רכב - שלב ה'"""
         if not photo_file_id:
-            response = MessageResponse(
-                "לא התקבלה תמונה. אנא שלח תמונה של הרכב שלך."
-            )
+            response = MessageResponse("לא התקבלה תמונה. אנא שלח תמונה של הרכב שלך.")
             return response, CourierState.REGISTER_COLLECT_VEHICLE_PHOTO.value, {}
 
         # שומרים את תמונת הרכב ומעבירים לאישור תקנון
@@ -979,11 +1032,17 @@ class CourierStateHandler:
 
         response = MessageResponse(
             "תמונת הרכב התקבלה בהצלחה! ✓\n\n" + self.TERMS_TEXT,
-            keyboard=[["קראתי ואני מאשר ✅"]]
+            keyboard=[["קראתי ואני מאשר ✅"]],
         )
-        return response, CourierState.REGISTER_TERMS.value, {"vehicle_photo_file_id": photo_file_id}
+        return (
+            response,
+            CourierState.REGISTER_TERMS.value,
+            {"vehicle_photo_file_id": photo_file_id},
+        )
 
-    async def _handle_terms(self, user: User, message: str, context: dict, photo_file_id: str):
+    async def _handle_terms(
+        self, user: User, message: str, context: dict, photo_file_id: str
+    ):
         """אישור תקנון - שלב ו'"""
         from datetime import datetime
         from app.db.models.user import ApprovalStatus, UserRole
@@ -991,17 +1050,22 @@ class CourierStateHandler:
         # מניעת עיבוד כפול: אם המשתמש כבר אישר תקנון (race condition / webhook כפול)
         # מרפרשים מה-DB כדי לתפוס שינויים שבוצעו בבקשה מקבילית
         await self.db.refresh(user)
-        if user.terms_accepted_at is not None and user.approval_status == ApprovalStatus.PENDING:
+        if (
+            user.terms_accepted_at is not None
+            and user.approval_status == ApprovalStatus.PENDING
+        ):
             logger.info(
                 "תקנון כבר אושר, מעביר למצב המתנה לאישור",
                 extra_data={"user_id": user.id},
             )
-            return await self._handle_pending_approval(user, message, context, photo_file_id)
+            return await self._handle_pending_approval(
+                user, message, context, photo_file_id
+            )
 
         if "מאשר" not in message and "אישור" not in message:
             response = MessageResponse(
                 "כדי להמשיך, עליך ללחוץ על הכפתור 'קראתי ואני מאשר'.",
-                keyboard=[["קראתי ואני מאשר ✅"]]
+                keyboard=[["קראתי ואני מאשר ✅"]],
             )
             return response, CourierState.REGISTER_TERMS.value, {}
 
@@ -1033,7 +1097,9 @@ class CourierStateHandler:
         )
         return response, CourierState.PENDING_APPROVAL.value, {}
 
-    async def _handle_pending_approval(self, user: User, message: str, context: dict, photo_file_id: str):
+    async def _handle_pending_approval(
+        self, user: User, message: str, context: dict, photo_file_id: str
+    ):
         """Handle messages while pending approval [1.4]"""
         from app.db.models.user import ApprovalStatus
 
@@ -1049,7 +1115,7 @@ class CourierStateHandler:
         if user.terms_accepted_at is None:
             logger.info(
                 "User in pending_approval but didn't complete registration, restarting",
-                extra_data={"user_id": user.id}
+                extra_data={"user_id": user.id},
             )
             return await self._handle_initial(user, message, context, photo_file_id)
 
@@ -1064,12 +1130,16 @@ class CourierStateHandler:
 
     # ==================== Main Menu [4] ====================
 
-    async def _handle_menu(self, user: User, message: str, context: dict, photo_file_id: str):
+    async def _handle_menu(
+        self, user: User, message: str, context: dict, photo_file_id: str
+    ):
         """Handle main menu display and navigation"""
         from app.db.models.user import ApprovalStatus
 
         if user.approval_status != ApprovalStatus.APPROVED:
-            return await self._handle_pending_approval(user, message, context, photo_file_id)
+            return await self._handle_pending_approval(
+                user, message, context, photo_file_id
+            )
 
         # Navigation by button text
         if "ארנק" in message or "יתרה" in message:
@@ -1077,16 +1147,21 @@ class CourierStateHandler:
         if "אזור" in message or "הגדרות" in message:
             return await self._handle_change_area(user, message, context, photo_file_id)
         if "היסטוריה" in message or "עבודות" in message:
-            return await self._handle_view_history(user, message, context, photo_file_id)
+            return await self._handle_view_history(
+                user, message, context, photo_file_id
+            )
         if "תמיכה" in message or "עזרה" in message:
             return await self._handle_support(user, message, context, photo_file_id)
         if "הפקדה" in message or "טעינה" in message:
-            return await self._handle_deposit_request(user, message, context, photo_file_id)
+            return await self._handle_deposit_request(
+                user, message, context, photo_file_id
+            )
         if "משלוח פעיל" in message or "משלוח נוכחי" in message:
             return await self._handle_view_active(user, message, context, photo_file_id)
 
         # בדיקה אם הנהג הוא גם סדרן - הוספת כפתור תפריט סדרן [שלב 3.2]
         from app.domain.services.station_service import StationService
+
         station_service = StationService(self.db)
         is_dispatcher = await station_service.is_dispatcher(user.id)
 
@@ -1116,7 +1191,9 @@ class CourierStateHandler:
 
     # ==================== Wallet Module [3] ====================
 
-    async def _handle_view_wallet(self, user: User, message: str, context: dict, photo_file_id: str):
+    async def _handle_view_wallet(
+        self, user: User, message: str, context: dict, photo_file_id: str
+    ):
         """Handle wallet view [3.1]"""
         # כפתור חזרה לתפריט - מחזיר לתפריט הראשי
         if "חזרה" in message or "תפריט" in message:
@@ -1131,11 +1208,13 @@ class CourierStateHandler:
             f"📊 מסגרת אשראי: {settings.DEFAULT_CREDIT_LIMIT:.2f} ₪\n"
             f"🎯 נותר עד לחסימה: {-settings.DEFAULT_CREDIT_LIMIT:.2f} ₪\n\n"
             "לטעינת הארנק, לחץ על 'הפקדה'.",
-            keyboard=[["💳 הפקדה"], ["🔙 חזרה לתפריט"]]
+            keyboard=[["💳 הפקדה"], ["🔙 חזרה לתפריט"]],
         )
         return response, CourierState.VIEW_WALLET.value, {}
 
-    async def _handle_deposit_request(self, user: User, message: str, context: dict, photo_file_id: str):
+    async def _handle_deposit_request(
+        self, user: User, message: str, context: dict, photo_file_id: str
+    ):
         """Handle deposit request [3.2]"""
         if "חזרה" in message or "תפריט" in message:
             return await self._handle_menu(user, "תפריט", context, None)
@@ -1150,11 +1229,13 @@ class CourierStateHandler:
             "   סניף: 800\n"
             "   חשבון: 12345678\n\n"
             "לאחר ההעברה, שלח צילום מסך של אישור ההעברה.",
-            keyboard=[["🔙 חזרה לתפריט"]]
+            keyboard=[["🔙 חזרה לתפריט"]],
         )
         return response, CourierState.DEPOSIT_UPLOAD.value, {}
 
-    async def _handle_deposit_upload(self, user: User, message: str, context: dict, photo_file_id: str):
+    async def _handle_deposit_upload(
+        self, user: User, message: str, context: dict, photo_file_id: str
+    ):
         """Handle deposit screenshot upload"""
         if "חזרה" in message or "תפריט" in message:
             return await self._handle_menu(user, "תפריט", context, None)
@@ -1162,7 +1243,7 @@ class CourierStateHandler:
         if not photo_file_id:
             response = MessageResponse(
                 "📸 אנא שלח צילום מסך של אישור ההעברה, או לחץ 'חזרה לתפריט'.",
-                keyboard=[["🔙 חזרה לתפריט"]]
+                keyboard=[["🔙 חזרה לתפריט"]],
             )
             return response, CourierState.DEPOSIT_UPLOAD.value, {}
 
@@ -1171,13 +1252,15 @@ class CourierStateHandler:
             "הבקשה הועברה למנהל לאישור.\n"
             "היתרה תתעדכן לאחר אישור ההפקדה.\n\n"
             "⏳ זמן טיפול: עד 24 שעות.",
-            keyboard=[["🔙 חזרה לתפריט"]]
+            keyboard=[["🔙 חזרה לתפריט"]],
         )
         return response, CourierState.MENU.value, {"deposit_screenshot": photo_file_id}
 
     # ==================== Settings ====================
 
-    async def _handle_change_area(self, user: User, message: str, context: dict, photo_file_id: str):
+    async def _handle_change_area(
+        self, user: User, message: str, context: dict, photo_file_id: str
+    ):
         """Handle area change"""
         if "חזרה" in message or "תפריט" in message:
             return await self._handle_menu(user, "תפריט", context, None)
@@ -1191,7 +1274,7 @@ class CourierStateHandler:
 
                 response = MessageResponse(
                     f"האזור עודכן בהצלחה!\n\nהאזור החדש: <b>{new_area}</b>",
-                    keyboard=[["🔙 חזרה לתפריט"]]
+                    keyboard=[["🔙 חזרה לתפריט"]],
                 )
                 return response, CourierState.MENU.value, {"changing_area": False}
 
@@ -1199,11 +1282,13 @@ class CourierStateHandler:
             f"📍 <b>הגדרות אזור</b>\n\n"
             f"האזור הנוכחי שלך: <b>{user.service_area or 'לא הוגדר'}</b>\n\n"
             "לשינוי האזור, הקלד את האזור החדש.",
-            keyboard=[["🔙 חזרה לתפריט"]]
+            keyboard=[["🔙 חזרה לתפריט"]],
         )
         return response, CourierState.CHANGE_AREA.value, {"changing_area": True}
 
-    async def _handle_view_history(self, user: User, message: str, context: dict, photo_file_id: str):
+    async def _handle_view_history(
+        self, user: User, message: str, context: dict, photo_file_id: str
+    ):
         """Handle work history view"""
         if "חזרה" in message or "תפריט" in message:
             return await self._handle_menu(user, "תפריט", context, None)
@@ -1212,22 +1297,26 @@ class CourierStateHandler:
             "📦 <b>היסטוריית עבודות</b>\n\n"
             "אין משלוחים בהיסטוריה עדיין.\n"
             "התחל לקחת משלוחים כדי לראות את ההיסטוריה שלך!",
-            keyboard=[["🔙 חזרה לתפריט"]]
+            keyboard=[["🔙 חזרה לתפריט"]],
         )
         return response, CourierState.VIEW_HISTORY.value, {}
 
-    async def _handle_view_active(self, user: User, message: str, context: dict, photo_file_id: str):
+    async def _handle_view_active(
+        self, user: User, message: str, context: dict, photo_file_id: str
+    ):
         """Handle viewing active delivery"""
         if "חזרה" in message or "תפריט" in message:
             return await self._handle_menu(user, "תפריט", context, None)
 
         response = MessageResponse(
             "📦 אין לך משלוח פעיל כרגע.\nתפוס משלוח חדש מהקבוצה!",
-            keyboard=[["🔙 חזרה לתפריט"]]
+            keyboard=[["🔙 חזרה לתפריט"]],
         )
         return response, CourierState.MENU.value, {}
 
-    async def _handle_support(self, user: User, message: str, context: dict, photo_file_id: str):
+    async def _handle_support(
+        self, user: User, message: str, context: dict, photo_file_id: str
+    ):
         """Handle support requests"""
         if "חזרה" in message or "תפריט" in message:
             return await self._handle_menu(user, "תפריט", context, None)
@@ -1238,7 +1327,7 @@ class CourierStateHandler:
             "📧 שלח הודעה למנהל - פשוט כתוב את ההודעה כאן והיא תועבר.\n\n"
             "📞 מוקד: 050-1234567\n"
             "שעות פעילות: א'-ה' 08:00-20:00",
-            keyboard=[["🔙 חזרה לתפריט"]]
+            keyboard=[["🔙 חזרה לתפריט"]],
         )
         return response, CourierState.SUPPORT.value, {}
 
@@ -1247,7 +1336,9 @@ class CourierStateHandler:
     # כאשר שליח שולח הודעה ישירה בעודו באחד מהמצבים הללו,
     # ה-handlers מציגים הנחיה מתאימה.
 
-    async def _handle_view_available(self, user: User, message: str, context: dict, photo_file_id: str):
+    async def _handle_view_available(
+        self, user: User, message: str, context: dict, photo_file_id: str
+    ):
         """צפייה במשלוחים זמינים - מטופל בעיקר דרך הקבוצה"""
         if "חזרה" in message or "תפריט" in message:
             return await self._handle_menu(user, "תפריט", context, None)
@@ -1256,11 +1347,13 @@ class CourierStateHandler:
             "📋 <b>משלוחים זמינים</b>\n\n"
             "משלוחים זמינים מוצגים בקבוצת הטלגרם.\n"
             "לחץ על 'תפוס' בקבוצה כדי לתפוס משלוח.",
-            keyboard=[["🔙 חזרה לתפריט"]]
+            keyboard=[["🔙 חזרה לתפריט"]],
         )
         return response, CourierState.MENU.value, {}
 
-    async def _handle_capture_confirm(self, user: User, message: str, context: dict, photo_file_id: str):
+    async def _handle_capture_confirm(
+        self, user: User, message: str, context: dict, photo_file_id: str
+    ):
         """אישור תפיסת משלוח - מטופל בעיקר דרך callback query"""
         if "חזרה" in message or "תפריט" in message:
             return await self._handle_menu(user, "תפריט", context, None)
@@ -1268,11 +1361,13 @@ class CourierStateHandler:
         response = MessageResponse(
             "📦 <b>תפיסת משלוח</b>\n\n"
             "כדי לתפוס משלוח, לחץ על כפתור 'תפוס' בהודעת המשלוח בקבוצה.",
-            keyboard=[["🔙 חזרה לתפריט"]]
+            keyboard=[["🔙 חזרה לתפריט"]],
         )
         return response, CourierState.MENU.value, {}
 
-    async def _handle_mark_picked_up(self, user: User, message: str, context: dict, photo_file_id: str):
+    async def _handle_mark_picked_up(
+        self, user: User, message: str, context: dict, photo_file_id: str
+    ):
         """סימון איסוף משלוח - מטופל בעיקר דרך callback query"""
         if "חזרה" in message or "תפריט" in message:
             return await self._handle_menu(user, "תפריט", context, None)
@@ -1280,11 +1375,13 @@ class CourierStateHandler:
         response = MessageResponse(
             "📦 <b>סימון איסוף</b>\n\n"
             "כדי לסמן שאספת את המשלוח, השתמש בכפתורים בהודעת המשלוח.",
-            keyboard=[["🔙 חזרה לתפריט"]]
+            keyboard=[["🔙 חזרה לתפריט"]],
         )
         return response, CourierState.MENU.value, {}
 
-    async def _handle_mark_delivered(self, user: User, message: str, context: dict, photo_file_id: str):
+    async def _handle_mark_delivered(
+        self, user: User, message: str, context: dict, photo_file_id: str
+    ):
         """סימון מסירת משלוח - מטופל בעיקר דרך callback query"""
         if "חזרה" in message or "תפריט" in message:
             return await self._handle_menu(user, "תפריט", context, None)
@@ -1292,11 +1389,13 @@ class CourierStateHandler:
         response = MessageResponse(
             "📦 <b>סימון מסירה</b>\n\n"
             "כדי לסמן שמסרת את המשלוח, השתמש בכפתורים בהודעת המשלוח.",
-            keyboard=[["🔙 חזרה לתפריט"]]
+            keyboard=[["🔙 חזרה לתפריט"]],
         )
         return response, CourierState.MENU.value, {}
 
-    async def _handle_unknown(self, user: User, message: str, context: dict, photo_file_id: str):
+    async def _handle_unknown(
+        self, user: User, message: str, context: dict, photo_file_id: str
+    ):
         """Handle unknown state - restart registration or show appropriate screen"""
         from app.db.models.user import ApprovalStatus
 
@@ -1311,11 +1410,13 @@ class CourierStateHandler:
 
         # אם השליח סיים את הרישום (יש לו תאריך אישור תקנון) - הוא ממתין לאישור
         if user.terms_accepted_at is not None:
-            return await self._handle_pending_approval(user, message, context, photo_file_id)
+            return await self._handle_pending_approval(
+                user, message, context, photo_file_id
+            )
 
         # אחרת - המשתמש לא סיים את הרישום, מתחילים מחדש
         logger.info(
             "Courier in unknown state without completing registration, restarting",
-            extra_data={"user_id": user.id}
+            extra_data={"user_id": user.id},
         )
         return await self._handle_initial(user, message, context, photo_file_id)
