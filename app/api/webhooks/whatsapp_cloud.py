@@ -543,20 +543,75 @@ async def _route_message_to_handler(
 
     # פנייה לניהול — פתוח לכל התפקידים, ללא תלות ב-guard של זרימה רב-שלבית
     if text and "פנייה לניהול" in text:
-        # קישור WhatsApp ישיר למנהל הראשי
-        if settings.ADMIN_WHATSAPP_NUMBER:
-            admin_link = f"https://wa.me/{settings.ADMIN_WHATSAPP_NUMBER}"
-            admin_text = (
-                "📞 פנייה לניהול\n\n"
-                f"ליצירת קשר עם המנהל:\n{admin_link}"
-            )
-        else:
-            admin_text = (
-                "📞 פנייה לניהול\n\n"
-                "ליצירת קשר עם המנהל, שלחו הודעה כאן ונחזור אליכם בהקדם."
-            )
-        background_tasks.add_task(send_whatsapp_message, reply_to, admin_text)
+        # שמירת flag בקונטקסט — ההודעה הבאה תועבר להנהלה
+        await state_manager.update_context(
+            user.id, "whatsapp", "contact_admin_pending", True
+        )
+        admin_text = (
+            "📞 פנייה לניהול\n\n"
+            "כתבו את ההודעה שלכם והיא תועבר להנהלה."
+        )
+        background_tasks.add_task(
+            send_whatsapp_message, reply_to, admin_text, [["🔙 חזרה לתפריט"]]
+        )
         return admin_text, None
+
+    # העברת הודעה להנהלה — אם המשתמש לחץ "פנייה לניהול" בהודעה הקודמת
+    _cloud_context = await state_manager.get_context(user.id, "whatsapp")
+    if _cloud_context.get("contact_admin_pending"):
+        await state_manager.update_context(
+            user.id, "whatsapp", "contact_admin_pending", False
+        )
+
+        if text and ("חזרה" in text or "תפריט" in text):
+            response, new_state = await _route_to_role_menu_wa(user, db, state_manager)
+            background_tasks.add_task(
+                send_whatsapp_message, reply_to, response.text, response.keyboard
+            )
+            return response.text, new_state
+
+        user_name = user.full_name or user.name or "לא צוין"
+        forward_text = (
+            f"📨 פנייה מ-{user_name}\n"
+            f"({PhoneNumberValidator.mask(reply_to)})\n\n"
+            f"{text or '(הודעה ריקה)'}"
+        )
+
+        from app.domain.services.admin_notification_service import (
+            AdminNotificationService,
+            _parse_csv_setting,
+        )
+
+        sent = False
+        if settings.WHATSAPP_ADMIN_GROUP_ID:
+            sent = await AdminNotificationService._send_whatsapp_admin_message(
+                settings.WHATSAPP_ADMIN_GROUP_ID, forward_text
+            )
+        if not sent:
+            wa_admins = _parse_csv_setting(settings.WHATSAPP_ADMIN_NUMBERS)
+            for admin_phone in wa_admins:
+                sent = await AdminNotificationService._send_whatsapp_admin_message(
+                    admin_phone, forward_text
+                ) or sent
+        if not sent and settings.TELEGRAM_ADMIN_CHAT_ID:
+            sent = await AdminNotificationService._send_telegram_message(
+                settings.TELEGRAM_ADMIN_CHAT_ID, forward_text
+            )
+
+        if sent:
+            confirm_text = "✅ ההודעה נשלחה להנהלה. נחזור אליכם בהקדם!"
+        else:
+            confirm_text = (
+                "⚠️ לא הצלחנו להעביר את ההודעה כרגע.\n"
+                "אנא נסו שוב מאוחר יותר."
+            )
+            logger.error(
+                "כשלון בהעברת פנייה להנהלה — אין יעד זמין",
+                extra_data={"user_id": user.id},
+            )
+
+        background_tasks.add_task(send_whatsapp_message, reply_to, confirm_text)
+        return confirm_text, None
 
     # בעל תחנה
     if user.role == UserRole.STATION_OWNER:

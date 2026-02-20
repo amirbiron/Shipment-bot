@@ -934,6 +934,7 @@ class TestCourierRegistrationNotification:
             mock_sm.get_current_state = AsyncMock(
                 return_value=CourierState.REGISTER_TERMS.value
             )
+            mock_sm.get_context = AsyncMock(return_value={})
             MockSM.return_value = mock_sm
 
             mock_handler = AsyncMock()
@@ -991,6 +992,7 @@ class TestCourierRegistrationNotification:
             mock_sm.get_current_state = AsyncMock(
                 return_value=CourierState.MENU.value
             )
+            mock_sm.get_context = AsyncMock(return_value={})
             MockSM.return_value = mock_sm
 
             mock_handler = AsyncMock()
@@ -1515,6 +1517,7 @@ class TestInitialStateWelcome:
             new_callable=AsyncMock,
         ) as mock_welcome:
             sm_instance = AsyncMock()
+            sm_instance.get_context = AsyncMock(return_value={})
             sm_instance.get_current_state.return_value = "INITIAL"
             MockSM.return_value = sm_instance
 
@@ -1545,6 +1548,7 @@ class TestInitialStateWelcome:
             new_callable=AsyncMock,
         ) as mock_welcome:
             sm_instance = AsyncMock()
+            sm_instance.get_context = AsyncMock(return_value={})
             sm_instance.get_current_state.return_value = "SENDER.INITIAL"
             MockSM.return_value = sm_instance
 
@@ -1575,6 +1579,7 @@ class TestInitialStateWelcome:
             new_callable=AsyncMock,
         ) as mock_welcome:
             sm_instance = AsyncMock()
+            sm_instance.get_context = AsyncMock(return_value={})
             sm_instance.get_current_state.return_value = None
             MockSM.return_value = sm_instance
 
@@ -1608,6 +1613,7 @@ class TestInitialStateWelcome:
             "app.api.webhooks.whatsapp_cloud.SenderStateHandler"
         ) as MockHandler:
             sm_instance = AsyncMock()
+            sm_instance.get_context = AsyncMock(return_value={})
             sm_instance.get_current_state.return_value = "SENDER.DELIVERY_PICKUP_CITY"
             MockSM.return_value = sm_instance
 
@@ -1658,6 +1664,7 @@ class TestDispatcherMenuKeyword:
             "app.api.webhooks.whatsapp_cloud.DispatcherStateHandler"
         ) as MockHandler:
             sm_instance = AsyncMock()
+            sm_instance.get_context = AsyncMock(return_value={})
             sm_instance.get_current_state.return_value = "SENDER.MENU"
             MockSM.return_value = sm_instance
 
@@ -1703,6 +1710,7 @@ class TestDispatcherMenuKeyword:
             return_value=(mock_response, "SENDER.MENU"),
         ) as mock_menu:
             sm_instance = AsyncMock()
+            sm_instance.get_context = AsyncMock(return_value={})
             sm_instance.get_current_state.return_value = None
             MockSM.return_value = sm_instance
 
@@ -1752,6 +1760,7 @@ class TestDispatcherBackButton:
             "app.api.webhooks.whatsapp_cloud.CourierStateHandler"
         ) as MockCH:
             sm_instance = AsyncMock()
+            sm_instance.get_context = AsyncMock(return_value={})
             sm_instance.get_current_state.return_value = "DISPATCHER.MENU"
             MockSM.return_value = sm_instance
 
@@ -1800,6 +1809,7 @@ class TestDispatcherBackButton:
             return_value=(mock_response, "SENDER.MENU"),
         ) as mock_fallback:
             sm_instance = AsyncMock()
+            sm_instance.get_context = AsyncMock(return_value={})
             sm_instance.get_current_state.return_value = "DISPATCHER.ADD_SHIPMENT.PICKUP_CITY"
             MockSM.return_value = sm_instance
 
@@ -1841,6 +1851,7 @@ class TestDispatcherBackButton:
             "app.api.webhooks.whatsapp_cloud.DispatcherStateHandler"
         ) as MockDH:
             sm_instance = AsyncMock()
+            sm_instance.get_context = AsyncMock(return_value={})
             sm_instance.get_current_state.return_value = "DISPATCHER.MENU"
             MockSM.return_value = sm_instance
 

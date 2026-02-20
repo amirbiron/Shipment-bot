@@ -1110,8 +1110,74 @@ async def telegram_webhook(
 
     # פנייה לניהול — פתוח לכל התפקידים, ללא תלות ב-guard של זרימה רב-שלבית
     if "פנייה לניהול" in text:
-        response = await _handle_sender_admin_contact()
+        # שמירת flag בקונטקסט — ההודעה הבאה תועבר להנהלה
+        await state_manager.update_context(
+            user.id, "telegram", "contact_admin_pending", True
+        )
+        admin_text = (
+            "📞 <b>פנייה לניהול</b>\n\n"
+            "כתבו את ההודעה שלכם והיא תועבר להנהלה."
+        )
+        response = MessageResponse(admin_text, keyboard=[["🔙 חזרה לתפריט"]])
         _queue_response_send(background_tasks, send_chat_id, response)
+        return {"ok": True}
+
+    # העברת הודעה להנהלה — אם המשתמש לחץ "פנייה לניהול" בהודעה הקודמת
+    _tg_context = await state_manager.get_context(user.id, "telegram")
+    if _tg_context.get("contact_admin_pending"):
+        await state_manager.update_context(
+            user.id, "telegram", "contact_admin_pending", False
+        )
+
+        if "חזרה" in text or "תפריט" in text:
+            response, new_state = await _route_to_role_menu(user, db, state_manager)
+            _queue_response_send(background_tasks, send_chat_id, response)
+            return {"ok": True, "new_state": new_state}
+
+        user_name = user.full_name or user.name or "לא צוין"
+        forward_text = (
+            f"📨 פנייה מ-{user_name}\n"
+            f"(Telegram: {send_chat_id})\n\n"
+            f"{text}"
+        )
+
+        from app.domain.services.admin_notification_service import (
+            AdminNotificationService,
+            _parse_csv_setting,
+        )
+
+        sent = False
+        if settings.TELEGRAM_ADMIN_CHAT_ID:
+            sent = await AdminNotificationService._send_telegram_message(
+                settings.TELEGRAM_ADMIN_CHAT_ID, forward_text
+            )
+        if not sent:
+            tg_admins = _parse_csv_setting(
+                settings.TELEGRAM_ADMIN_CHAT_IDS
+            ) if settings.TELEGRAM_ADMIN_CHAT_IDS else []
+            for admin_id in tg_admins:
+                sent = await AdminNotificationService._send_telegram_message(
+                    admin_id, forward_text
+                ) or sent
+        if not sent and settings.WHATSAPP_ADMIN_GROUP_ID:
+            sent = await AdminNotificationService._send_whatsapp_admin_message(
+                settings.WHATSAPP_ADMIN_GROUP_ID, forward_text
+            )
+
+        if sent:
+            confirm_text = "✅ ההודעה נשלחה להנהלה. נחזור אליכם בהקדם!"
+        else:
+            confirm_text = (
+                "⚠️ לא הצלחנו להעביר את ההודעה כרגע.\n"
+                "אנא נסו שוב מאוחר יותר."
+            )
+            logger.error(
+                "כשלון בהעברת פנייה להנהלה — אין יעד זמין",
+                extra_data={"user_id": user.id},
+            )
+
+        confirm_response = MessageResponse(confirm_text)
+        _queue_response_send(background_tasks, send_chat_id, confirm_response)
         return {"ok": True}
 
     # ==================== ניתוב לפי תפקיד (handler לכל role) ====================
