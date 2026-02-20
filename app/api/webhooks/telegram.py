@@ -1109,6 +1109,12 @@ async def telegram_webhook(
                         payload["new_state"] = new_state
                     return payload
 
+    # פנייה לניהול — פתוח לכל התפקידים, ללא תלות ב-guard של זרימה רב-שלבית
+    if "פנייה לניהול" in text:
+        response = await _handle_sender_admin_contact()
+        _queue_response_send(background_tasks, send_chat_id, response)
+        return {"ok": True}
+
     # ==================== ניתוב לפי תפקיד (handler לכל role) ====================
 
     if user.role == UserRole.STATION_OWNER:

@@ -1329,25 +1329,6 @@ async def whatsapp_webhook(
                     )
                     continue
     
-                if "פנייה לניהול" in text and (
-                    user.role in (UserRole.SENDER, UserRole.ADMIN) or _admin_root_menu
-                ):
-                    # קישור WhatsApp ישיר למנהל הראשי
-                    if settings.ADMIN_WHATSAPP_NUMBER:
-                        admin_link = f"https://wa.me/{settings.ADMIN_WHATSAPP_NUMBER}"
-                        admin_text = (
-                            "📞 פנייה לניהול\n\n" f"ליצירת קשר עם המנהל:\n{admin_link}"
-                        )
-                    else:
-                        admin_text = (
-                            "📞 פנייה לניהול\n\n"
-                            "ליצירת קשר עם המנהל, שלחו הודעה כאן ונחזור אליכם בהקדם."
-                        )
-                    background_tasks.add_task(send_whatsapp_message, reply_to, admin_text)
-                    responses.append(
-                        {"from": sender_id, "response": admin_text, "new_state": None}
-                    )
-                    continue
     
                 if "חזרה לתפריט" in text and (
                     user.role not in (UserRole.COURIER, UserRole.STATION_OWNER)
@@ -1360,6 +1341,25 @@ async def whatsapp_webhook(
                     )
                     continue
     
+            # פנייה לניהול — פתוח לכל התפקידים, ללא תלות ב-guard של זרימה רב-שלבית
+            if "פנייה לניהול" in text:
+                # קישור WhatsApp ישיר למנהל הראשי
+                if settings.ADMIN_WHATSAPP_NUMBER:
+                    admin_link = f"https://wa.me/{settings.ADMIN_WHATSAPP_NUMBER}"
+                    admin_text = (
+                        "📞 פנייה לניהול\n\n" f"ליצירת קשר עם המנהל:\n{admin_link}"
+                    )
+                else:
+                    admin_text = (
+                        "📞 פנייה לניהול\n\n"
+                        "ליצירת קשר עם המנהל, שלחו הודעה כאן ונחזור אליכם בהקדם."
+                    )
+                background_tasks.add_task(send_whatsapp_message, reply_to, admin_text)
+                responses.append(
+                    {"from": sender_id, "response": admin_text, "new_state": None}
+                )
+                continue
+
             # ==================== ניתוב לפי תפקיד [שלב 3] ====================
     
             current_state = _current_state_value
