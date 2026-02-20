@@ -12,6 +12,7 @@ from app.api.webhooks.telegram import (
     _store_inline_button_mapping,
     _resolve_inline_button_mapping,
     _truncate_utf8,
+    telegram_webhook,
 )
 from app.db.models.user import User, UserRole
 from app.db.models.station import Station
@@ -185,6 +186,50 @@ class TestTelegramWebhookHelpers:
 
         resolved = await _resolve_inline_button_mapping(chat_id, cb)
         assert resolved == text
+
+    @pytest.mark.asyncio
+    async def test_webhook_btn_callback_missing_mapping_sends_expired_message_and_returns(
+        self, db_session, monkeypatch
+    ):
+        # Redis מחזיר None (מיפוי פג תוקף / לא קיים)
+        class _FakeRedis:
+            async def get(self, key):
+                return None
+
+        async def _fake_get_redis():
+            return _FakeRedis()
+
+        monkeypatch.setattr("app.core.redis_client.get_redis", _fake_get_redis)
+
+        update = TelegramUpdate(
+            update_id=100,
+            callback_query={
+                "id": "cb-expired",
+                "data": "btn:expired",
+                "from": {"id": 123, "first_name": "Unit"},
+                "message": {
+                    "message_id": 1,
+                    "chat": {"id": 123, "type": "private"},
+                    "date": 1700000000,
+                    "text": "",
+                },
+            },
+        )
+        background_tasks = BackgroundTasks()
+
+        result = await telegram_webhook(
+            update=update,
+            background_tasks=background_tasks,
+            db=db_session,
+            _=None,
+        )
+
+        assert result["ok"] is True
+        assert result["expired_inline_button"] is True
+        # אמור להישלח גם answer_callback_query וגם הודעת "פג תוקף"
+        funcs = [t.func.__name__ for t in background_tasks.tasks]
+        assert "answer_callback_query" in funcs
+        assert "send_telegram_message" in funcs
 
     @pytest.mark.asyncio
     async def test_get_station_for_owner_or_downgrade_downgrades_when_missing(

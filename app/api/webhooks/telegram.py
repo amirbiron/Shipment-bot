@@ -52,7 +52,7 @@ _PENDING_REJECTION_KEY_PREFIX = "shipmentbot:tg:pending_rejection:"
 # נשמר ב-Redis עם TTL, ונפתר ב-webhook בעת לחיצה.
 _INLINE_BUTTON_CALLBACK_PREFIX = "btn:"
 _INLINE_BUTTON_KEY_PREFIX = "shipmentbot:tg:inline_btn:"
-_INLINE_BUTTON_TTL_SECONDS = 7 * 24 * 60 * 60  # שבוע
+_INLINE_BUTTON_TTL_SECONDS = 2 * 24 * 60 * 60  # 48 שעות
 
 
 def _rejection_key(admin_chat_id: str) -> str:
@@ -690,28 +690,27 @@ async def send_telegram_message(
 
     url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
 
-    def _build_inline_keyboard(button_rows: list) -> list[list[dict]]:
-        """בניית inline keyboard עם callback_data קצר כשצריך (64 bytes מגבלה)."""
+    async def _build_inline_keyboard(button_rows: list) -> list[list[dict]]:
+        """בניית inline keyboard עם callback_data קצר כשצריך (מגבלת 64 bytes)."""
         inline_keyboard: list[list[dict]] = []
         for row in button_rows:
             inline_row: list[dict] = []
             for button_text in row:
-                # ברירת מחדל: callback_data = הטקסט (נוח ל-state machine)
-                callback_data = str(button_text)
+                text_str = str(button_text)
+                callback_data = text_str
                 if len(callback_data.encode("utf-8")) > 64:
-                    token = secrets.token_urlsafe(8)  # קצר, URL-safe
+                    token = secrets.token_urlsafe(8)
                     callback_data = f"{_INLINE_BUTTON_CALLBACK_PREFIX}{token}"
-                    # שמירה ב-Redis כדי לפתוח בחזרה בלחיצה
-                    # אם נכשל, ניפול ל-truncate כדי שהכפתור לפחות יעבוד באופן חלקי
-                    # (רוב ה-handlers מבוססי keyword).
-                    # NOTE: שומרים את הטקסט המלא, לא את הטקסט המקוצר.
-                    # TTL מונע הצטברות.
-                    # ה-storage הוא best-effort.
-                    #
-                    # חשוב: פעולת Redis אסינכרונית, לכן תבוצע ע"י send_telegram_message עצמו.
-                inline_row.append(
-                    {"text": str(button_text), "callback_data": callback_data}
-                )
+
+                    ok = await _store_inline_button_mapping(
+                        chat_id=chat_id,
+                        callback_data=callback_data,
+                        button_text=text_str,
+                    )
+                    if not ok:
+                        callback_data = _truncate_utf8(text_str, 64)
+
+                inline_row.append({"text": text_str, "callback_data": callback_data})
             inline_keyboard.append(inline_row)
         return inline_keyboard
 
@@ -750,46 +749,68 @@ async def send_telegram_message(
                     message=f"editMessageReplyMarkup returned status {response.status_code}",
                 )
 
+    async def _delete_message(message_id: int) -> None:
+        """מחיקת הודעה (best-effort) כדי לא להשאיר placeholder."""
+        delete_url = (
+            f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/deleteMessage"
+        )
+        delete_payload = {"chat_id": chat_id, "message_id": message_id}
+        async with httpx.AsyncClient() as client:
+            response = await client.post(delete_url, json=delete_payload, timeout=30.0)
+            if response.status_code != 200:
+                raise TelegramError.from_response(
+                    "deleteMessage",
+                    response,
+                    message=f"deleteMessage returned status {response.status_code}",
+                )
+
     try:
-        # --- חישוב inline keyboard + שמירת מיפויים ארוכים ב-Redis (best-effort) ---
         inline_keyboard: list[list[dict]] | None = None
         if keyboard and inline:
-            inline_keyboard = _build_inline_keyboard(keyboard)
-            # שמירת מיפויים ל-callback_data מסוג btn:*
-            # (רק לכפתורים ארוכים שדורשים token).
-            for row in inline_keyboard:
-                for btn in row:
-                    cb = btn.get("callback_data", "")
-                    if isinstance(cb, str) and cb.startswith(
-                        _INLINE_BUTTON_CALLBACK_PREFIX
-                    ):
-                        ok = await _store_inline_button_mapping(
-                            chat_id=chat_id,
-                            callback_data=cb,
-                            button_text=btn.get("text", ""),
-                        )
-                        if not ok:
-                            # fallback: callback_data מקוצר ל-64 bytes
-                            btn["callback_data"] = _truncate_utf8(
-                                btn.get("text", ""), 64
-                            )
+            inline_keyboard = await _build_inline_keyboard(keyboard)
 
         # --- שליחה ---
         if keyboard and inline and clear_reply_keyboard:
-            # שלב 1: ניקוי Reply Keyboard ישן
-            base_payload = {
+            # גישה בטוחה: קודם מנקים Reply Keyboard בהודעת placeholder,
+            # ואז שולחים את ההודעה האמיתית עם inline keyboard.
+            placeholder_payload = {
                 "chat_id": chat_id,
-                "text": text,
+                "text": "\u200b",
                 "parse_mode": "HTML",
                 "reply_markup": {"remove_keyboard": True},
             }
-            data = await circuit_breaker.execute(lambda: _send(base_payload))
-            message_id = (data.get("result") or {}).get("message_id")
-            if message_id and inline_keyboard:
-                # שלב 2: הוספת inline keyboard לאותה הודעה
-                await circuit_breaker.execute(
-                    lambda: _edit_reply_markup(int(message_id), inline_keyboard)
-                )
+
+            async def _send_placeholder() -> dict:
+                return await _send(placeholder_payload)
+
+            placeholder_data = await circuit_breaker.execute(_send_placeholder)
+            placeholder_message_id = (placeholder_data.get("result") or {}).get(
+                "message_id"
+            )
+
+            payload: dict = {
+                "chat_id": chat_id,
+                "text": text,
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": inline_keyboard or []},
+            }
+
+            async def _send_actual() -> dict:
+                return await _send(payload)
+
+            await circuit_breaker.execute(_send_actual)
+
+            if placeholder_message_id:
+
+                async def _delete_placeholder() -> None:
+                    return await _delete_message(int(placeholder_message_id))
+
+                try:
+                    await circuit_breaker.execute(_delete_placeholder)
+                except Exception:
+                    # best-effort — לא מפילים את ההודעה האמיתית
+                    pass
+
             return
 
         payload: dict = {
@@ -802,7 +823,7 @@ async def send_telegram_message(
             if inline:
                 payload["reply_markup"] = {
                     "inline_keyboard": inline_keyboard
-                    or _build_inline_keyboard(keyboard)
+                    or await _build_inline_keyboard(keyboard)
                 }
             else:
                 payload["reply_markup"] = {
@@ -811,7 +832,10 @@ async def send_telegram_message(
                     "one_time_keyboard": True,
                 }
 
-        await circuit_breaker.execute(lambda: _send(payload))
+        async def _send_final() -> dict:
+            return await _send(payload)
+
+        await circuit_breaker.execute(_send_final)
     except Exception as e:
         logger.error(
             "Telegram send failed",
@@ -986,6 +1010,14 @@ async def telegram_webhook(
         resolved = await _resolve_inline_button_mapping(send_chat_id, text)
         if resolved:
             text = resolved
+        else:
+            # הכפתור פג תוקף (TTL) או Redis לא זמין — לא מעבירים token ל-state machine.
+            background_tasks.add_task(
+                send_telegram_message,
+                send_chat_id,
+                "⏱️ הכפתור פג תוקף. אנא בקשו תפריט מחדש (/start או 'תפריט').",
+            )
+            return {"ok": True, "expired_inline_button": True}
 
     # Skip if no content
     if not text and not photo_file_id:
