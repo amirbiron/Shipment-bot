@@ -1,8 +1,10 @@
 """
 Telegram Webhook Handler - Bot Gateway Layer
 """
+
 import re
 import hashlib
+import secrets
 from dataclasses import dataclass
 from collections.abc import Awaitable, Callable
 from fastapi import APIRouter, Depends, BackgroundTasks
@@ -15,12 +17,20 @@ from sqlalchemy.exc import IntegrityError
 from app.db.database import get_db
 from app.db.models.user import User, UserRole, ApprovalStatus
 from app.db.models.station import Station
-from app.state_machine.handlers import SenderStateHandler, CourierStateHandler, MessageResponse
-from app.state_machine.states import CourierState, DispatcherState, StationOwnerState, SenderState
+from app.state_machine.handlers import (
+    SenderStateHandler,
+    CourierStateHandler,
+    MessageResponse,
+)
+from app.state_machine.states import (
+    CourierState,
+    DispatcherState,
+    StationOwnerState,
+    SenderState,
+)
 from app.state_machine.dispatcher_handler import DispatcherStateHandler
 from app.state_machine.station_owner_handler import StationOwnerStateHandler
 from app.state_machine.manager import StateManager
-from app.domain.services import AdminNotificationService
 from app.domain.services.courier_approval_service import CourierApprovalService
 from app.core.logging import get_logger
 from app.core.circuit_breaker import get_telegram_circuit_breaker
@@ -38,22 +48,153 @@ router = APIRouter()
 # רשומות פגות תוקף אוטומטית לפי REDIS_PENDING_REJECTION_TTL (ברירת מחדל: 5 דקות).
 _PENDING_REJECTION_KEY_PREFIX = "shipmentbot:tg:pending_rejection:"
 
+# מיפוי callback_data קצר → טקסט כפתור מלא (כדי לעמוד במגבלת 64 bytes של Telegram).
+# נשמר ב-Redis עם TTL, ונפתר ב-webhook בעת לחיצה.
+_INLINE_BUTTON_CALLBACK_PREFIX = "btn:"
+_INLINE_BUTTON_KEY_PREFIX = "shipmentbot:tg:inline_btn:"
+_INLINE_BUTTON_TTL_SECONDS = 2 * 24 * 60 * 60  # 48 שעות
+_INLINE_BUTTON_UNAVAILABLE_CALLBACK = "btn:unavailable"
+
+# ניקוי Reply Keyboard — מסמנים ב-Redis כדי לבצע פעם אחת לכל chat_id,
+# ולא להעמיס 3 קריאות API בכל תפריט אחרי שהמקלדת הישנה נוקתה.
+_REPLY_KEYBOARD_CLEARED_KEY_PREFIX = "shipmentbot:tg:reply_kb_cleared:"
+_REPLY_KEYBOARD_CLEARED_TTL_SECONDS = 30 * 24 * 60 * 60  # 30 יום
+
 
 def _rejection_key(admin_chat_id: str) -> str:
     return f"{_PENDING_REJECTION_KEY_PREFIX}{admin_chat_id}"
+
+
+def _inline_button_key(chat_id: str, callback_data: str) -> str:
+    return f"{_INLINE_BUTTON_KEY_PREFIX}{chat_id}:{callback_data}"
+
+
+def _reply_keyboard_cleared_key(chat_id: str) -> str:
+    return f"{_REPLY_KEYBOARD_CLEARED_KEY_PREFIX}{chat_id}"
+
+
+async def _was_reply_keyboard_cleared(chat_id: str) -> bool:
+    """בדיקה best-effort אם כבר ניקינו Reply Keyboard בעבר."""
+    try:
+        from app.core.redis_client import get_redis
+
+        r = await get_redis()
+        val = await r.get(_reply_keyboard_cleared_key(chat_id))
+        return bool(val)
+    except Exception:
+        return False
+
+
+async def _mark_reply_keyboard_cleared(chat_id: str) -> None:
+    """סימון best-effort שה-Reply Keyboard כבר נוקה."""
+    try:
+        from app.core.redis_client import get_redis
+
+        r = await get_redis()
+        await r.setex(
+            _reply_keyboard_cleared_key(chat_id),
+            _REPLY_KEYBOARD_CLEARED_TTL_SECONDS,
+            "1",
+        )
+    except Exception:
+        return
+
+
+def _compact_callback_data_fallback(button_text: str) -> str | None:
+    """Fallback ל-callback_data קצר שממשיך לנתב נכון גם בלי Redis.
+
+    מחזיר מחרוזת קצרה שמכילה keyword שידוע שה-state machine מזהה,
+    או None אם לא נמצא fallback בטוח.
+    """
+    text = (button_text or "").strip()
+    if not text:
+        return None
+
+    # כפתורי תפריט שולח / שיווק
+    if "הצטרפות למנוי" in text:
+        return "הצטרפות למנוי"
+    if "העלאת משלוח מהיר" in text:
+        return "העלאת משלוח מהיר"
+    if "פנייה לניהול" in text:
+        return "פנייה לניהול"
+    if "הצטרפות כתחנה" in text:
+        return "הצטרפות כתחנה"
+
+    # כפתורי ניווט נפוצים
+    if "תפריט" in text:
+        return "תפריט"
+    if "חזרה" in text:
+        return "חזרה"
+
+    return None
+
+
+async def _store_inline_button_mapping(
+    chat_id: str,
+    callback_data: str,
+    button_text: str,
+) -> bool:
+    """שומר מיפוי callback_data→טקסט ב-Redis.
+
+    משתמש ב-NX כדי למנוע דריסת ערך במקרה נדיר של התנגשות token.
+    """
+    try:
+        from app.core.redis_client import get_redis
+
+        r = await get_redis()
+        was_set = await r.set(
+            _inline_button_key(chat_id, callback_data),
+            button_text,
+            ex=_INLINE_BUTTON_TTL_SECONDS,
+            nx=True,
+        )
+        return bool(was_set)
+    except Exception as e:
+        logger.warning(
+            "כשלון בשמירת מיפוי כפתור inline ב-Redis",
+            extra_data={"chat_id": chat_id, "error": str(e)},
+        )
+        return False
+
+
+async def _resolve_inline_button_mapping(
+    chat_id: str, callback_data: str
+) -> str | None:
+    """פותח callback_data קצר לטקסט כפתור מלא, או None אם לא נמצא."""
+    if not callback_data or not callback_data.startswith(
+        _INLINE_BUTTON_CALLBACK_PREFIX
+    ):
+        return None
+    try:
+        from app.core.redis_client import get_redis
+
+        r = await get_redis()
+        val = await r.get(_inline_button_key(chat_id, callback_data))
+        return val if val else None
+    except Exception as e:
+        logger.warning(
+            "כשלון בפתיחת מיפוי כפתור inline מ-Redis",
+            extra_data={"chat_id": chat_id, "error": str(e)},
+        )
+        return None
 
 
 async def _get_pending_rejection(admin_chat_id: str) -> int | None:
     """מחזיר courier_id אם יש דחייה ממתינה ב-Redis, אחרת None."""
     try:
         from app.core.redis_client import get_redis
+
         r = await get_redis()
         val = await r.get(_rejection_key(admin_chat_id))
         return int(val) if val is not None else None
     except Exception as e:
-        logger.error("Redis get failed for pending rejection", extra_data={
-            "admin_chat_id": admin_chat_id, "error": str(e),
-        })
+        logger.error(
+            "Redis get failed for pending rejection",
+            extra_data={
+                "admin_chat_id": admin_chat_id,
+                "error": str(e),
+            },
+        )
         return None
 
 
@@ -61,6 +202,7 @@ async def _set_pending_rejection(admin_chat_id: str, courier_id: int) -> bool:
     """שומר דחייה ממתינה ב-Redis עם TTL. מחזיר False אם Redis נכשל."""
     try:
         from app.core.redis_client import get_redis
+
         r = await get_redis()
         await r.setex(
             _rejection_key(admin_chat_id),
@@ -69,9 +211,14 @@ async def _set_pending_rejection(admin_chat_id: str, courier_id: int) -> bool:
         )
         return True
     except Exception as e:
-        logger.error("Redis set failed for pending rejection", extra_data={
-            "admin_chat_id": admin_chat_id, "courier_id": courier_id, "error": str(e),
-        })
+        logger.error(
+            "Redis set failed for pending rejection",
+            extra_data={
+                "admin_chat_id": admin_chat_id,
+                "courier_id": courier_id,
+                "error": str(e),
+            },
+        )
         return False
 
 
@@ -79,13 +226,18 @@ async def _pop_pending_rejection(admin_chat_id: str) -> int | None:
     """מחזיר courier_id ומוחק את הרשומה מ-Redis (אטומי עם GETDEL), או None."""
     try:
         from app.core.redis_client import get_redis
+
         r = await get_redis()
         val = await r.getdel(_rejection_key(admin_chat_id))
         return int(val) if val is not None else None
     except Exception as e:
-        logger.error("Redis pop failed for pending rejection", extra_data={
-            "admin_chat_id": admin_chat_id, "error": str(e),
-        })
+        logger.error(
+            "Redis pop failed for pending rejection",
+            extra_data={
+                "admin_chat_id": admin_chat_id,
+                "error": str(e),
+            },
+        )
         return None
 
 
@@ -93,12 +245,18 @@ async def _clear_pending_rejection(admin_chat_id: str) -> None:
     """מוחק דחייה ממתינה מ-Redis (ללא החזרת ערך)."""
     try:
         from app.core.redis_client import get_redis
+
         r = await get_redis()
         await r.delete(_rejection_key(admin_chat_id))
     except Exception as e:
-        logger.error("Redis delete failed for pending rejection", extra_data={
-            "admin_chat_id": admin_chat_id, "error": str(e),
-        })
+        logger.error(
+            "Redis delete failed for pending rejection",
+            extra_data={
+                "admin_chat_id": admin_chat_id,
+                "error": str(e),
+            },
+        )
+
 
 _SenderButtonHandler: TypeAlias = Callable[
     [User, AsyncSession, StateManager, str, str | None],
@@ -133,6 +291,7 @@ def _queue_response_send(
         response.text,
         response.keyboard,
         True,
+        response.clear_reply_keyboard,
     )
 
 
@@ -184,7 +343,9 @@ def _parse_inbound_event(
         if message.chat and message.chat.type == "private":
             telegram_user_id = send_chat_id
         else:
-            telegram_user_id = str(message.from_user.id) if message.from_user else send_chat_id
+            telegram_user_id = (
+                str(message.from_user.id) if message.from_user else send_chat_id
+            )
         text = message.text or ""
 
         photo_file_id = None
@@ -251,7 +412,9 @@ def _is_in_multi_step_flow(
     ):
         return True
 
-    if isinstance(current_state, str) and current_state.startswith(("DISPATCHER.", "STATION.")):
+    if isinstance(current_state, str) and current_state.startswith(
+        ("DISPATCHER.", "STATION.")
+    ):
         return True
 
     return False
@@ -301,7 +464,9 @@ async def _handle_sender_join_as_courier(
     user.role = UserRole.COURIER
     await db.commit()
 
-    await state_manager.force_state(user.id, "telegram", CourierState.INITIAL.value, context={})
+    await state_manager.force_state(
+        user.id, "telegram", CourierState.INITIAL.value, context={}
+    )
     handler = CourierStateHandler(db)
     response, new_state = await handler.handle_message(user, text, photo_file_id)
     return response, new_state
@@ -360,10 +525,7 @@ async def _handle_sender_admin_contact() -> MessageResponse:
     """קישור WhatsApp ישיר למנהל הראשי (או fallback להודעה בתוך הבוט)."""
     if settings.ADMIN_WHATSAPP_NUMBER:
         admin_link = f"https://wa.me/{settings.ADMIN_WHATSAPP_NUMBER}"
-        admin_text = (
-            "📞 <b>פנייה לניהול</b>\n\n"
-            f"ליצירת קשר עם המנהל:\n{admin_link}"
-        )
+        admin_text = "📞 <b>פנייה לניהול</b>\n\n" f"ליצירת קשר עם המנהל:\n{admin_link}"
     else:
         admin_text = (
             "📞 <b>פנייה לניהול</b>\n\n"
@@ -449,6 +611,7 @@ class TelegramPhotoSize(BaseModel):
 
 class TelegramDocument(BaseModel):
     """מודל לקבצים/מסמכים שנשלחים בטלגרם (לא כתמונה דחוסה)"""
+
     file_id: str
     file_unique_id: str
     file_name: Optional[str] = None
@@ -483,9 +646,7 @@ class TelegramUpdate(BaseModel):
 
 
 async def get_or_create_user(
-    db: AsyncSession,
-    telegram_chat_id: str,
-    name: Optional[str] = None
+    db: AsyncSession, telegram_chat_id: str, name: Optional[str] = None
 ) -> tuple[User, bool]:
     """
     Get existing user or create new one. Returns (user, is_new).
@@ -499,7 +660,11 @@ async def get_or_create_user(
     result = await db.execute(
         select(User)
         .where(User.telegram_chat_id == telegram_chat_id)
-        .order_by(User.is_active.desc().nulls_last(), User.updated_at.desc().nulls_last(), User.created_at.desc().nulls_last())
+        .order_by(
+            User.is_active.desc().nulls_last(),
+            User.updated_at.desc().nulls_last(),
+            User.created_at.desc().nulls_last(),
+        )
         .limit(10)
     )
     users = list(result.scalars().all())
@@ -529,7 +694,7 @@ async def get_or_create_user(
             telegram_chat_id=telegram_chat_id,
             name=name,
             platform="telegram",
-            role=UserRole.SENDER
+            role=UserRole.SENDER,
         )
         db.add(user)
         try:
@@ -544,7 +709,10 @@ async def get_or_create_user(
             result = await db.execute(
                 select(User)
                 .where(User.telegram_chat_id == telegram_chat_id)
-                .order_by(User.is_active.desc().nulls_last(), User.updated_at.desc().nulls_last())
+                .order_by(
+                    User.is_active.desc().nulls_last(),
+                    User.updated_at.desc().nulls_last(),
+                )
                 .limit(1)
             )
             user = result.scalars().first()
@@ -566,7 +734,8 @@ async def send_telegram_message(
     chat_id: str,
     text: str,
     keyboard: Optional[list] = None,
-    inline: bool = True
+    inline: bool = True,
+    clear_reply_keyboard: bool = False,
 ) -> None:
     """Send message via Telegram Bot API with circuit breaker protection"""
     import httpx
@@ -580,35 +749,46 @@ async def send_telegram_message(
 
     url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
 
-    payload = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "HTML"
-    }
+    async def _build_inline_keyboard(button_rows: list) -> list[list[dict]]:
+        """בניית inline keyboard עם callback_data קצר כשצריך (מגבלת 64 bytes)."""
+        inline_keyboard: list[list[dict]] = []
+        for row in button_rows:
+            inline_row: list[dict] = []
+            for button_text in row:
+                text_str = str(button_text)
+                callback_data = text_str
+                if len(callback_data.encode("utf-8")) > 64:
+                    # מגבלת Telegram: callback_data עד 64 bytes.
+                    # מייצרים token קצר ושומרים ב-Redis עם NX למניעת התנגשות נדירה.
+                    ok = False
+                    for _attempt in range(3):
+                        token = secrets.token_urlsafe(16)
+                        candidate = f"{_INLINE_BUTTON_CALLBACK_PREFIX}{token}"
+                        ok = await _store_inline_button_mapping(
+                            chat_id=chat_id,
+                            callback_data=candidate,
+                            button_text=text_str,
+                        )
+                        if ok:
+                            callback_data = candidate
+                            break
+                    if not ok:
+                        # אם Redis לא זמין / התנגשות token: נעדיף fallback "חכם"
+                        # שממשיך לעבוד (keyword קצר), ואם אין — נשתמש ב-btn:unavailable
+                        # כדי שה-webhook יחזיר הודעת שגיאה ברורה.
+                        compact = _compact_callback_data_fallback(text_str)
+                        if compact and len(compact.encode("utf-8")) <= 64:
+                            callback_data = compact
+                        else:
+                            callback_data = _INLINE_BUTTON_UNAVAILABLE_CALLBACK
 
-    if keyboard:
-        if inline:
-            # Convert keyboard to inline keyboard format
-            inline_keyboard = []
-            for row in keyboard:
-                inline_row = []
-                for button_text in row:
-                    inline_row.append({
-                        "text": button_text,
-                        "callback_data": button_text
-                    })
-                inline_keyboard.append(inline_row)
-            payload["reply_markup"] = {
-                "inline_keyboard": inline_keyboard
-            }
-        else:
-            payload["reply_markup"] = {
-                "keyboard": keyboard,
-                "resize_keyboard": True,
-                "one_time_keyboard": True
-            }
+                inline_row.append({"text": text_str, "callback_data": callback_data})
+            inline_keyboard.append(inline_row)
+        return inline_keyboard
 
-    async def _send():
+    async def _send(payload: dict) -> dict:
+        import json
+
         async with httpx.AsyncClient() as client:
             response = await client.post(url, json=payload, timeout=30.0)
             if response.status_code != 200:
@@ -617,14 +797,136 @@ async def send_telegram_message(
                     response,
                     message=f"sendMessage returned status {response.status_code}",
                 )
+            try:
+                data = response.json()
+            except json.JSONDecodeError as e:
+                raise TelegramError(
+                    "Telegram returned invalid JSON",
+                    details={"status_code": response.status_code, "error": str(e)},
+                ) from e
+            if not data.get("ok"):
+                raise TelegramError(
+                    "sendMessage returned ok=false",
+                    details={"response": data},
+                )
+            return data
+
+    async def _delete_message(message_id: int) -> bool:
+        """מחיקת הודעה — best-effort, לא זורק exception."""
+        delete_url = (
+            f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/deleteMessage"
+        )
+        delete_payload = {"chat_id": chat_id, "message_id": message_id}
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    delete_url, json=delete_payload, timeout=30.0
+                )
+        except Exception as e:
+            logger.debug(
+                "כשלון בבקשת deleteMessage (best-effort)",
+                extra_data={"chat_id": chat_id, "error": str(e)},
+            )
+            return False
+
+        if response.status_code != 200:
+            # best-effort: לא מפילים ולא פותחים circuit בגלל housekeeping
+            logger.debug(
+                "deleteMessage returned non-200 (best-effort)",
+                extra_data={
+                    "chat_id": chat_id,
+                    "status_code": response.status_code,
+                },
+            )
+            return False
+
+        return True
 
     try:
-        await circuit_breaker.execute(_send)
+        inline_keyboard: list[list[dict]] | None = None
+        if keyboard and inline:
+            inline_keyboard = await _build_inline_keyboard(keyboard)
+
+        # --- שליחה ---
+        should_clear_reply_keyboard = bool(keyboard and inline and clear_reply_keyboard)
+        if should_clear_reply_keyboard and await _was_reply_keyboard_cleared(chat_id):
+            should_clear_reply_keyboard = False
+
+        if should_clear_reply_keyboard:
+            # גישה בטוחה: קודם מנקים Reply Keyboard בהודעת placeholder,
+            # ואז שולחים את ההודעה האמיתית עם inline keyboard.
+            placeholder_payload = {
+                "chat_id": chat_id,
+                "text": "\u200b",
+                "parse_mode": "HTML",
+                "reply_markup": {"remove_keyboard": True},
+            }
+
+            async def _send_placeholder() -> dict:
+                return await _send(placeholder_payload)
+
+            placeholder_data = await circuit_breaker.execute(_send_placeholder)
+            placeholder_message_id = (placeholder_data.get("result") or {}).get(
+                "message_id"
+            )
+            # אם הצלחנו לשלוח remove_keyboard — נסמן כדי לא לעשות זאת שוב בכל תפריט.
+            await _mark_reply_keyboard_cleared(chat_id)
+
+            payload: dict = {
+                "chat_id": chat_id,
+                "text": text,
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": inline_keyboard or []},
+            }
+
+            async def _send_actual() -> dict:
+                return await _send(payload)
+
+            try:
+                await circuit_breaker.execute(_send_actual)
+            except Exception:
+                # אם השליחה האמיתית נכשלה, ננסה למחוק placeholder כדי לא להשאיר הודעה ריקה.
+                if placeholder_message_id:
+                    try:
+                        await _delete_message(int(placeholder_message_id))
+                    except Exception:
+                        pass
+                raise
+
+            if placeholder_message_id:
+                # best-effort: מחיקה ללא circuit breaker כדי לא לצבור כשלונות housekeeping.
+                try:
+                    await _delete_message(int(placeholder_message_id))
+                except Exception:
+                    pass
+
+            return
+
+        payload: dict = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+        }
+
+        if keyboard:
+            if inline:
+                payload["reply_markup"] = {"inline_keyboard": inline_keyboard or []}
+            else:
+                payload["reply_markup"] = {
+                    "keyboard": keyboard,
+                    "resize_keyboard": True,
+                    "one_time_keyboard": True,
+                }
+
+        async def _send_final() -> dict:
+            return await _send(payload)
+
+        await circuit_breaker.execute(_send_final)
     except Exception as e:
         logger.error(
             "Telegram send failed",
             extra_data={"chat_id": chat_id, "error": str(e)},
-            exc_info=True
+            exc_info=True,
         )
 
 
@@ -638,7 +940,9 @@ async def answer_callback_query(callback_query_id: str, text: str = None) -> Non
 
     circuit_breaker = get_telegram_circuit_breaker()
 
-    url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/answerCallbackQuery"
+    url = (
+        f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/answerCallbackQuery"
+    )
     payload = {"callback_query_id": callback_query_id}
     if text:
         payload["text"] = text
@@ -659,7 +963,7 @@ async def answer_callback_query(callback_query_id: str, text: str = None) -> Non
         logger.error(
             "Answer callback failed",
             extra_data={"callback_query_id": callback_query_id, "error": str(e)},
-            exc_info=True
+            exc_info=True,
         )
 
 
@@ -676,7 +980,13 @@ async def send_welcome_message(chat_id: str):
         ["🏪 הצטרפות כתחנה"],
         ["📞 פנייה לניהול"],
     ]
-    await send_telegram_message(chat_id, welcome_text, keyboard, inline=True)
+    await send_telegram_message(
+        chat_id,
+        welcome_text,
+        keyboard,
+        inline=True,
+        clear_reply_keyboard=True,
+    )
 
 
 async def _sender_fallback(
@@ -685,7 +995,9 @@ async def _sender_fallback(
     state_manager: StateManager,
 ) -> tuple[MessageResponse, str]:
     """fallback לתפריט שולח - משותף לכל ה-fallbacks ב-_route_to_role_menu"""
-    await state_manager.force_state(user.id, "telegram", SenderState.MENU.value, context={})
+    await state_manager.force_state(
+        user.id, "telegram", SenderState.MENU.value, context={}
+    )
     handler = SenderStateHandler(db)
     return await handler.handle_message(
         user_id=user.id, platform="telegram", message="תפריט"
@@ -706,7 +1018,9 @@ async def _route_to_role_menu(
     Returns: (response, new_state)
     """
     if user.role == UserRole.COURIER:
-        await state_manager.force_state(user.id, "telegram", CourierState.MENU.value, context={})
+        await state_manager.force_state(
+            user.id, "telegram", CourierState.MENU.value, context={}
+        )
         handler = CourierStateHandler(db)
         return await handler.handle_message(user, "תפריט", None)
 
@@ -714,9 +1028,7 @@ async def _route_to_role_menu(
         station = await _get_station_for_owner_or_downgrade(user, db)
         if station is not None:
             await state_manager.force_state(
-                user.id, "telegram",
-                StationOwnerState.MENU.value,
-                context={}
+                user.id, "telegram", StationOwnerState.MENU.value, context={}
             )
             handler = StationOwnerStateHandler(db, station.id)
             return await handler.handle_message(user, "תפריט", None)
@@ -738,7 +1050,7 @@ async def _route_to_role_menu(
     # תפקיד לא מוכר - אזהרה בלוג ו-fallback לשולח
     logger.warning(
         "Unknown user role in menu routing, falling back to sender",
-        extra_data={"user_id": user.id, "role": str(user.role)}
+        extra_data={"user_id": user.id, "role": str(user.role)},
     )
     return await _sender_fallback(user, db, state_manager)
 
@@ -774,6 +1086,30 @@ async def telegram_webhook(
     photo_file_id = event.photo_file_id
     name = event.name
 
+    # פתיחת callback_data קצר (btn:*) לטקסט הכפתור המלא — כדי שה-state machine
+    # ימשיך לעבוד על "טקסט" כמו בהודעות רגילות.
+    if (
+        event.is_callback
+        and send_chat_id
+        and text.startswith(_INLINE_BUTTON_CALLBACK_PREFIX)
+    ):
+        resolved = await _resolve_inline_button_mapping(send_chat_id, text)
+        if resolved:
+            text = resolved
+        else:
+            # הכפתור פג תוקף (TTL) או Redis לא זמין — לא מעבירים token ל-state machine.
+            background_tasks.add_task(
+                send_telegram_message,
+                send_chat_id,
+                (
+                    "⚠️ הכפתור לא זמין כרגע. "
+                    "אנא בקשו תפריט מחדש (/start או 'תפריט') ונסו שוב."
+                    if text == _INLINE_BUTTON_UNAVAILABLE_CALLBACK
+                    else "⏱️ הכפתור פג תוקף. אנא בקשו תפריט מחדש (/start או 'תפריט')."
+                ),
+            )
+            return {"ok": True, "expired_inline_button": True}
+
     # Skip if no content
     if not text and not photo_file_id:
         return {"ok": True}
@@ -793,7 +1129,11 @@ async def telegram_webhook(
         courier_action = re.match(r"^(approve|reject)_courier_(\d+)$", text)
         if courier_action:
             clicker_id = telegram_user_id
-            admin_ids = {cid.strip() for cid in settings.TELEGRAM_ADMIN_CHAT_IDS.split(",") if cid.strip()}
+            admin_ids = {
+                cid.strip()
+                for cid in settings.TELEGRAM_ADMIN_CHAT_IDS.split(",")
+                if cid.strip()
+            }
             if settings.TELEGRAM_ADMIN_CHAT_ID:
                 admin_ids.add(settings.TELEGRAM_ADMIN_CHAT_ID)
 
@@ -809,7 +1149,9 @@ async def telegram_webhook(
                     result = await CourierApprovalService.approve(db, courier_id)
 
                     # שליחת תוצאה למנהל (בצ'אט שבו לחץ)
-                    background_tasks.add_task(send_telegram_message, send_chat_id, result.message)
+                    background_tasks.add_task(
+                        send_telegram_message, send_chat_id, result.message
+                    )
 
                     # אם הפעולה הצליחה - הודעה לשליח וסיכום לקבוצה
                     if result.success and result.user:
@@ -871,7 +1213,9 @@ async def telegram_webhook(
 
                 return {
                     "ok": True,
-                    "admin_action": "reject_pending_note" if action == "reject" else action,
+                    "admin_action": (
+                        "reject_pending_note" if action == "reject" else action
+                    ),
                     "courier_id": courier_id,
                 }
 
@@ -893,9 +1237,11 @@ async def telegram_webhook(
 
             # שליפת המשלוח לבדיקת תחנה
             from app.domain.services.station_service import StationService
+
             station_service = StationService(db)
 
             from app.db.models.delivery import Delivery
+
             delivery_result = await db.execute(
                 select(Delivery).where(Delivery.id == delivery_id)
             )
@@ -903,8 +1249,7 @@ async def telegram_webhook(
 
             if not target_delivery or not target_delivery.station_id:
                 background_tasks.add_task(
-                    send_telegram_message, send_chat_id,
-                    "❌ המשלוח לא נמצא."
+                    send_telegram_message, send_chat_id, "❌ המשלוח לא נמצא."
                 )
                 return {"ok": True}
 
@@ -915,12 +1260,16 @@ async def telegram_webhook(
 
             if not is_disp:
                 background_tasks.add_task(
-                    send_telegram_message, send_chat_id,
-                    "❌ אין לך הרשאה לאשר/לדחות משלוחים בתחנה זו."
+                    send_telegram_message,
+                    send_chat_id,
+                    "❌ אין לך הרשאה לאשר/לדחות משלוחים בתחנה זו.",
                 )
                 return {"ok": True}
 
-            from app.domain.services.shipment_workflow_service import ShipmentWorkflowService
+            from app.domain.services.shipment_workflow_service import (
+                ShipmentWorkflowService,
+            )
+
             workflow = ShipmentWorkflowService(db)
 
             try:
@@ -952,13 +1301,17 @@ async def telegram_webhook(
             }
 
     # טיפול בהערת דחייה ממתינה — מנהל שלחץ "❌ דחה" ושלח הערה
-    pending_courier_id = (await _pop_pending_rejection(send_chat_id)) if not event.is_callback else None
+    pending_courier_id = (
+        (await _pop_pending_rejection(send_chat_id)) if not event.is_callback else None
+    )
     if pending_courier_id is not None:
         admin_name = name or "מנהל"
         stripped = text.strip()
         rejection_note = stripped if stripped and stripped != "ללא" else None
 
-        result = await CourierApprovalService.reject(db, pending_courier_id, rejection_note=rejection_note)
+        result = await CourierApprovalService.reject(
+            db, pending_courier_id, rejection_note=rejection_note
+        )
         background_tasks.add_task(send_telegram_message, send_chat_id, result.message)
 
         if result.success and result.user:
@@ -1021,7 +1374,10 @@ async def telegram_webhook(
         # רענון מהDB לפני בדיקת סטטוס - למניעת stale data אם האדמין אישר בינתיים
         await db.refresh(user)
 
-        if user.role == UserRole.COURIER and user.approval_status != ApprovalStatus.APPROVED:
+        if (
+            user.role == UserRole.COURIER
+            and user.approval_status != ApprovalStatus.APPROVED
+        ):
             # שליח לא מאושר - מחזירים אותו להיות שולח רגיל
             user.role = UserRole.SENDER
             await db.commit()
@@ -1045,7 +1401,10 @@ async def telegram_webhook(
     current_state = await state_manager.get_current_state(user.id, "telegram")
 
     # "חזרה לתפריט" מתנהג כמו לחיצה על # (כולל איפוס state) — גם אם המשתמש הגיע עם state תקוע
-    if "חזרה לתפריט" in text and user.role not in (UserRole.COURIER, UserRole.STATION_OWNER):
+    if "חזרה לתפריט" in text and user.role not in (
+        UserRole.COURIER,
+        UserRole.STATION_OWNER,
+    ):
         response, new_state = await _route_to_role_menu(user, db, state_manager)
         _queue_response_send(background_tasks, send_chat_id, response)
         return {"ok": True, "new_state": new_state, "reset": True}
@@ -1056,7 +1415,11 @@ async def telegram_webhook(
         if current_state.startswith("STATION.") and user.role != UserRole.STATION_OWNER:
             logger.warning(
                 "Stale station-owner state for role-mismatched user; resetting to role menu",
-                extra_data={"user_id": user.id, "role": str(user.role), "state": current_state},
+                extra_data={
+                    "user_id": user.id,
+                    "role": str(user.role),
+                    "state": current_state,
+                },
             )
             response, new_state = await _route_to_role_menu(user, db, state_manager)
             _queue_response_send(background_tasks, send_chat_id, response)
@@ -1068,7 +1431,11 @@ async def telegram_webhook(
             if dispatcher_station is None:
                 logger.warning(
                     "Stale dispatcher state for non-dispatcher user; resetting to role menu",
-                    extra_data={"user_id": user.id, "role": str(user.role), "state": current_state},
+                    extra_data={
+                        "user_id": user.id,
+                        "role": str(user.role),
+                        "state": current_state,
+                    },
                 )
                 response, new_state = await _route_to_role_menu(user, db, state_manager)
                 _queue_response_send(background_tasks, send_chat_id, response)
@@ -1077,16 +1444,27 @@ async def telegram_webhook(
         if current_state.startswith("COURIER.") and user.role != UserRole.COURIER:
             logger.warning(
                 "Stale courier state for role-mismatched user; resetting to role menu",
-                extra_data={"user_id": user.id, "role": str(user.role), "state": current_state},
+                extra_data={
+                    "user_id": user.id,
+                    "role": str(user.role),
+                    "state": current_state,
+                },
             )
             response, new_state = await _route_to_role_menu(user, db, state_manager)
             _queue_response_send(background_tasks, send_chat_id, response)
             return {"ok": True, "new_state": new_state, "reset": True}
 
-        if current_state.startswith("SENDER.") and user.role not in (UserRole.SENDER, UserRole.ADMIN):
+        if current_state.startswith("SENDER.") and user.role not in (
+            UserRole.SENDER,
+            UserRole.ADMIN,
+        ):
             logger.warning(
                 "Stale sender state for role-mismatched user; resetting to role menu",
-                extra_data={"user_id": user.id, "role": str(user.role), "state": current_state},
+                extra_data={
+                    "user_id": user.id,
+                    "role": str(user.role),
+                    "state": current_state,
+                },
             )
             response, new_state = await _route_to_role_menu(user, db, state_manager)
             _queue_response_send(background_tasks, send_chat_id, response)
@@ -1186,7 +1564,9 @@ async def telegram_webhook(
         station = await _get_station_for_owner_or_downgrade(user, db)
         if station is not None:
             handler = StationOwnerStateHandler(db, station.id)
-            response, new_state = await handler.handle_message(user, text, photo_file_id)
+            response, new_state = await handler.handle_message(
+                user, text, photo_file_id
+            )
             _queue_response_send(background_tasks, send_chat_id, response)
             return {"ok": True, "new_state": new_state}
 
@@ -1195,7 +1575,9 @@ async def telegram_webhook(
         return {"ok": True, "new_state": new_state}
 
     # ניתוב לתפריט סדרן / זרימת סדרן — פתוח לכל תפקיד שהוא סדרן פעיל [שלב 3.2]
-    is_dispatcher_flow = isinstance(current_state, str) and current_state.startswith("DISPATCHER.")
+    is_dispatcher_flow = isinstance(current_state, str) and current_state.startswith(
+        "DISPATCHER."
+    )
     # בדיקת keyword רק כשהמשתמש לא באמצע זרימת סדרן — מונע תפיסת טקסט חופשי כלחיצת כפתור
     is_dispatcher_menu_click = (not is_dispatcher_flow) and (
         ("תפריט סדרן" in text) or ("🏪 תפריט סדרן" in text)
@@ -1223,14 +1605,20 @@ async def telegram_webhook(
                         user.id, "telegram", CourierState.MENU.value, context={}
                     )
                     handler = CourierStateHandler(db)
-                    response, new_state = await handler.handle_message(user, "תפריט", None)
+                    response, new_state = await handler.handle_message(
+                        user, "תפריט", None
+                    )
                 else:
-                    response, new_state = await _sender_fallback(user, db, state_manager)
+                    response, new_state = await _sender_fallback(
+                        user, db, state_manager
+                    )
                 _queue_response_send(background_tasks, send_chat_id, response)
                 return {"ok": True, "new_state": new_state}
 
             handler = DispatcherStateHandler(db, station.id)
-            response, new_state = await handler.handle_message(user, text, photo_file_id)
+            response, new_state = await handler.handle_message(
+                user, text, photo_file_id
+            )
             _queue_response_send(background_tasks, send_chat_id, response)
             return {"ok": True, "new_state": new_state}
 
@@ -1251,6 +1639,7 @@ async def telegram_webhook(
 
         # לוגיקה משותפת: כרטיס נהג + הפקדה (ייבוא inline למניעת circular import)
         from app.api.webhooks.whatsapp import _handle_courier_post_processing
+
         await _handle_courier_post_processing(
             db=db,
             user=user,
