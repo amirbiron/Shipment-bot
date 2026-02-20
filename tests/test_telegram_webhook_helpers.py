@@ -11,7 +11,7 @@ from app.api.webhooks.telegram import (
     _parse_inbound_event,
     _store_inline_button_mapping,
     _resolve_inline_button_mapping,
-    _truncate_utf8,
+    _compact_callback_data_fallback,
     _INLINE_BUTTON_UNAVAILABLE_CALLBACK,
     send_telegram_message,
     telegram_webhook,
@@ -154,12 +154,17 @@ class TestTelegramWebhookHelpers:
         assert first_match == "הצטרפות למנוי"
 
     @pytest.mark.unit
-    def test_truncate_utf8_never_exceeds_max_bytes(self):
-        # מחרוזת עם עברית + אימוג'י (utf-8 multi byte)
+    def test_compact_callback_data_fallback_returns_short_keyword(self):
+        # Redis לא זמין: נרצה fallback קצר שממשיך לנתב נכון (keyword מוכר).
         s = "🚚 הצטרפות למנוי וקבלת משלוחים"
-        out = _truncate_utf8(s, 64)
-        assert isinstance(out, str)
-        assert len(out.encode("utf-8")) <= 64
+        out = _compact_callback_data_fallback(s)
+        assert out == "הצטרפות למנוי"
+
+    @pytest.mark.unit
+    def test_compact_callback_data_fallback_returns_none_when_unknown(self):
+        s = "כפתור לא מוכר בכלל"
+        out = _compact_callback_data_fallback(s)
+        assert out is None
 
     @pytest.mark.asyncio
     async def test_inline_button_mapping_store_and_resolve(self, monkeypatch):

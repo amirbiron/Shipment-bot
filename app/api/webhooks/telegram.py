@@ -100,17 +100,6 @@ async def _mark_reply_keyboard_cleared(chat_id: str) -> None:
         return
 
 
-def _truncate_utf8(text: str, max_bytes: int) -> str:
-    """חיתוך מחרוזת כך שתקודד ל-UTF-8 עד max_bytes, בלי לשבור תווים."""
-    if max_bytes <= 0:
-        return ""
-    encoded = text.encode("utf-8")
-    if len(encoded) <= max_bytes:
-        return text
-    # חיתוך ב-bytes ואז תיקון decode עם ignore כדי לא לשבור תו באמצע
-    return encoded[:max_bytes].decode("utf-8", errors="ignore")
-
-
 def _compact_callback_data_fallback(button_text: str) -> str | None:
     """Fallback ל-callback_data קצר שממשיך לנתב נכון גם בלי Redis.
 
