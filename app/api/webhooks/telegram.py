@@ -53,6 +53,7 @@ _PENDING_REJECTION_KEY_PREFIX = "shipmentbot:tg:pending_rejection:"
 _INLINE_BUTTON_CALLBACK_PREFIX = "btn:"
 _INLINE_BUTTON_KEY_PREFIX = "shipmentbot:tg:inline_btn:"
 _INLINE_BUTTON_TTL_SECONDS = 2 * 24 * 60 * 60  # 48 שעות
+_INLINE_BUTTON_UNAVAILABLE_CALLBACK = "btn:unavailable"
 
 # ניקוי Reply Keyboard — מסמנים ב-Redis כדי לבצע פעם אחת לכל chat_id,
 # ולא להעמיס 3 קריאות API בכל תפריט אחרי שהמקלדת הישנה נוקתה.
@@ -108,6 +109,35 @@ def _truncate_utf8(text: str, max_bytes: int) -> str:
         return text
     # חיתוך ב-bytes ואז תיקון decode עם ignore כדי לא לשבור תו באמצע
     return encoded[:max_bytes].decode("utf-8", errors="ignore")
+
+
+def _compact_callback_data_fallback(button_text: str) -> str | None:
+    """Fallback ל-callback_data קצר שממשיך לנתב נכון גם בלי Redis.
+
+    מחזיר מחרוזת קצרה שמכילה keyword שידוע שה-state machine מזהה,
+    או None אם לא נמצא fallback בטוח.
+    """
+    text = (button_text or "").strip()
+    if not text:
+        return None
+
+    # כפתורי תפריט שולח / שיווק
+    if "הצטרפות למנוי" in text:
+        return "הצטרפות למנוי"
+    if "העלאת משלוח מהיר" in text:
+        return "העלאת משלוח מהיר"
+    if "פנייה לניהול" in text:
+        return "פנייה לניהול"
+    if "הצטרפות כתחנה" in text:
+        return "הצטרפות כתחנה"
+
+    # כפתורי ניווט נפוצים
+    if "תפריט" in text:
+        return "תפריט"
+    if "חזרה" in text:
+        return "חזרה"
+
+    return None
 
 
 async def _store_inline_button_mapping(
@@ -754,7 +784,14 @@ async def send_telegram_message(
                             callback_data = candidate
                             break
                     if not ok:
-                        callback_data = _truncate_utf8(text_str, 64)
+                        # אם Redis לא זמין / התנגשות token: נעדיף fallback "חכם"
+                        # שממשיך לעבוד (keyword קצר), ואם אין — נשתמש ב-btn:unavailable
+                        # כדי שה-webhook יחזיר הודעת שגיאה ברורה.
+                        compact = _compact_callback_data_fallback(text_str)
+                        if compact and len(compact.encode("utf-8")) <= 64:
+                            callback_data = compact
+                        else:
+                            callback_data = _INLINE_BUTTON_UNAVAILABLE_CALLBACK
 
                 inline_row.append({"text": text_str, "callback_data": callback_data})
             inline_keyboard.append(inline_row)
@@ -1075,7 +1112,12 @@ async def telegram_webhook(
             background_tasks.add_task(
                 send_telegram_message,
                 send_chat_id,
-                "⏱️ הכפתור פג תוקף. אנא בקשו תפריט מחדש (/start או 'תפריט').",
+                (
+                    "⚠️ הכפתור לא זמין כרגע. "
+                    "אנא בקשו תפריט מחדש (/start או 'תפריט') ונסו שוב."
+                    if text == _INLINE_BUTTON_UNAVAILABLE_CALLBACK
+                    else "⏱️ הכפתור פג תוקף. אנא בקשו תפריט מחדש (/start או 'תפריט')."
+                ),
             )
             return {"ok": True, "expired_inline_button": True}
 
