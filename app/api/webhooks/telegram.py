@@ -54,6 +54,11 @@ _INLINE_BUTTON_CALLBACK_PREFIX = "btn:"
 _INLINE_BUTTON_KEY_PREFIX = "shipmentbot:tg:inline_btn:"
 _INLINE_BUTTON_TTL_SECONDS = 2 * 24 * 60 * 60  # 48 שעות
 
+# ניקוי Reply Keyboard — מסמנים ב-Redis כדי לבצע פעם אחת לכל chat_id,
+# ולא להעמיס 3 קריאות API בכל תפריט אחרי שהמקלדת הישנה נוקתה.
+_REPLY_KEYBOARD_CLEARED_KEY_PREFIX = "shipmentbot:tg:reply_kb_cleared:"
+_REPLY_KEYBOARD_CLEARED_TTL_SECONDS = 30 * 24 * 60 * 60  # 30 יום
+
 
 def _rejection_key(admin_chat_id: str) -> str:
     return f"{_PENDING_REJECTION_KEY_PREFIX}{admin_chat_id}"
@@ -61,6 +66,37 @@ def _rejection_key(admin_chat_id: str) -> str:
 
 def _inline_button_key(chat_id: str, callback_data: str) -> str:
     return f"{_INLINE_BUTTON_KEY_PREFIX}{chat_id}:{callback_data}"
+
+
+def _reply_keyboard_cleared_key(chat_id: str) -> str:
+    return f"{_REPLY_KEYBOARD_CLEARED_KEY_PREFIX}{chat_id}"
+
+
+async def _was_reply_keyboard_cleared(chat_id: str) -> bool:
+    """בדיקה best-effort אם כבר ניקינו Reply Keyboard בעבר."""
+    try:
+        from app.core.redis_client import get_redis
+
+        r = await get_redis()
+        val = await r.get(_reply_keyboard_cleared_key(chat_id))
+        return bool(val)
+    except Exception:
+        return False
+
+
+async def _mark_reply_keyboard_cleared(chat_id: str) -> None:
+    """סימון best-effort שה-Reply Keyboard כבר נוקה."""
+    try:
+        from app.core.redis_client import get_redis
+
+        r = await get_redis()
+        await r.setex(
+            _reply_keyboard_cleared_key(chat_id),
+            _REPLY_KEYBOARD_CLEARED_TTL_SECONDS,
+            "1",
+        )
+    except Exception:
+        return
 
 
 def _truncate_utf8(text: str, max_bytes: int) -> str:
@@ -786,7 +822,11 @@ async def send_telegram_message(
             inline_keyboard = await _build_inline_keyboard(keyboard)
 
         # --- שליחה ---
-        if keyboard and inline and clear_reply_keyboard:
+        should_clear_reply_keyboard = bool(keyboard and inline and clear_reply_keyboard)
+        if should_clear_reply_keyboard and await _was_reply_keyboard_cleared(chat_id):
+            should_clear_reply_keyboard = False
+
+        if should_clear_reply_keyboard:
             # גישה בטוחה: קודם מנקים Reply Keyboard בהודעת placeholder,
             # ואז שולחים את ההודעה האמיתית עם inline keyboard.
             placeholder_payload = {
@@ -803,6 +843,8 @@ async def send_telegram_message(
             placeholder_message_id = (placeholder_data.get("result") or {}).get(
                 "message_id"
             )
+            # אם הצלחנו לשלוח remove_keyboard — נסמן כדי לא לעשות זאת שוב בכל תפריט.
+            await _mark_reply_keyboard_cleared(chat_id)
 
             payload: dict = {
                 "chat_id": chat_id,

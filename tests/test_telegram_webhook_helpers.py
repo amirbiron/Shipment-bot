@@ -12,6 +12,7 @@ from app.api.webhooks.telegram import (
     _store_inline_button_mapping,
     _resolve_inline_button_mapping,
     _truncate_utf8,
+    send_telegram_message,
     telegram_webhook,
 )
 from app.db.models.user import User, UserRole
@@ -233,6 +234,106 @@ class TestTelegramWebhookHelpers:
         funcs = [t.func.__name__ for t in background_tasks.tasks]
         assert "answer_callback_query" in funcs
         assert "send_telegram_message" in funcs
+
+    @pytest.mark.asyncio
+    async def test_clear_reply_keyboard_is_only_done_once_per_chat_id(
+        self, monkeypatch
+    ):
+        # Fake settings token
+        from app.core.config import settings
+
+        monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "unit-token", raising=False)
+
+        # Dummy circuit breaker that always awaits
+        class _DummyCB:
+            async def execute(self, func, *args, **kwargs):
+                return await func(*args, **kwargs)
+
+        monkeypatch.setattr(
+            "app.api.webhooks.telegram.get_telegram_circuit_breaker",
+            lambda: _DummyCB(),
+        )
+
+        # Fake Redis that supports get/setex for "cleared" flag
+        class _FakeRedis:
+            def __init__(self):
+                self._store = {}
+
+            async def get(self, key):
+                return self._store.get(key)
+
+            async def setex(self, key, ttl, value):
+                self._store[key] = value
+
+            async def set(self, key, value, ex=None, nx=False):
+                if nx and key in self._store:
+                    return False
+                self._store[key] = value
+                return True
+
+        fake_redis = _FakeRedis()
+
+        async def _fake_get_redis():
+            return fake_redis
+
+        monkeypatch.setattr("app.core.redis_client.get_redis", _fake_get_redis)
+
+        # Fake httpx client
+        calls = []
+
+        class _FakeResponse:
+            def __init__(self, status_code, json_data):
+                self.status_code = status_code
+                self._json_data = json_data
+
+            def json(self):
+                return self._json_data
+
+        class _FakeAsyncClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def post(self, url, json=None, timeout=None):
+                calls.append((url, json))
+                if url.endswith("/sendMessage"):
+                    return _FakeResponse(
+                        200, {"ok": True, "result": {"message_id": 111}}
+                    )
+                if url.endswith("/deleteMessage"):
+                    return _FakeResponse(200, {"ok": True, "result": True})
+                return _FakeResponse(200, {"ok": True})
+
+        monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+
+        # First call: should do placeholder + actual + delete
+        await send_telegram_message(
+            chat_id="123",
+            text="menu1",
+            keyboard=[["A"]],
+            inline=True,
+            clear_reply_keyboard=True,
+        )
+        assert len(calls) == 3
+        assert any(
+            c[1].get("reply_markup") == {"remove_keyboard": True}
+            for c in calls
+            if c[0].endswith("/sendMessage")
+        )
+
+        # Second call: should skip placeholder and send only once
+        calls.clear()
+        await send_telegram_message(
+            chat_id="123",
+            text="menu2",
+            keyboard=[["A"]],
+            inline=True,
+            clear_reply_keyboard=True,
+        )
+        assert len(calls) == 1
+        assert calls[0][0].endswith("/sendMessage")
 
     @pytest.mark.asyncio
     async def test_get_station_for_owner_or_downgrade_downgrades_when_missing(
