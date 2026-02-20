@@ -731,24 +731,6 @@ async def send_telegram_message(
                 )
             return data
 
-    async def _edit_reply_markup(
-        message_id: int, inline_keyboard: list[list[dict]]
-    ) -> None:
-        edit_url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/editMessageReplyMarkup"
-        edit_payload = {
-            "chat_id": chat_id,
-            "message_id": message_id,
-            "reply_markup": {"inline_keyboard": inline_keyboard},
-        }
-        async with httpx.AsyncClient() as client:
-            response = await client.post(edit_url, json=edit_payload, timeout=30.0)
-            if response.status_code != 200:
-                raise TelegramError.from_response(
-                    "editMessageReplyMarkup",
-                    response,
-                    message=f"editMessageReplyMarkup returned status {response.status_code}",
-                )
-
     async def _delete_message(message_id: int) -> None:
         """מחיקת הודעה (best-effort) כדי לא להשאיר placeholder."""
         delete_url = (
