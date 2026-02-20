@@ -3,6 +3,7 @@ Telegram Webhook Handler - Bot Gateway Layer
 """
 import re
 import hashlib
+import secrets
 from dataclasses import dataclass
 from collections.abc import Awaitable, Callable
 from fastapi import APIRouter, Depends, BackgroundTasks
@@ -38,9 +39,72 @@ router = APIRouter()
 # רשומות פגות תוקף אוטומטית לפי REDIS_PENDING_REJECTION_TTL (ברירת מחדל: 5 דקות).
 _PENDING_REJECTION_KEY_PREFIX = "shipmentbot:tg:pending_rejection:"
 
+# מיפוי callback_data קצר → טקסט כפתור מלא (כדי לעמוד במגבלת 64 bytes של Telegram).
+# נשמר ב-Redis עם TTL, ונפתר ב-webhook בעת לחיצה.
+_INLINE_BUTTON_CALLBACK_PREFIX = "btn:"
+_INLINE_BUTTON_KEY_PREFIX = "shipmentbot:tg:inline_btn:"
+_INLINE_BUTTON_TTL_SECONDS = 7 * 24 * 60 * 60  # שבוע
+
 
 def _rejection_key(admin_chat_id: str) -> str:
     return f"{_PENDING_REJECTION_KEY_PREFIX}{admin_chat_id}"
+
+
+def _inline_button_key(chat_id: str, callback_data: str) -> str:
+    return f"{_INLINE_BUTTON_KEY_PREFIX}{chat_id}:{callback_data}"
+
+
+def _truncate_utf8(text: str, max_bytes: int) -> str:
+    """חיתוך מחרוזת כך שתקודד ל-UTF-8 עד max_bytes, בלי לשבור תווים."""
+    if max_bytes <= 0:
+        return ""
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return text
+    # חיתוך ב-bytes ואז תיקון decode עם ignore כדי לא לשבור תו באמצע
+    return encoded[:max_bytes].decode("utf-8", errors="ignore")
+
+
+async def _store_inline_button_mapping(
+    chat_id: str,
+    callback_data: str,
+    button_text: str,
+) -> bool:
+    """שומר מיפוי callback_data→טקסט ב-Redis. מחזיר False אם Redis נכשל."""
+    try:
+        from app.core.redis_client import get_redis
+
+        r = await get_redis()
+        await r.setex(
+            _inline_button_key(chat_id, callback_data),
+            _INLINE_BUTTON_TTL_SECONDS,
+            button_text,
+        )
+        return True
+    except Exception as e:
+        logger.warning(
+            "כשלון בשמירת מיפוי כפתור inline ב-Redis",
+            extra_data={"chat_id": chat_id, "error": str(e)},
+        )
+        return False
+
+
+async def _resolve_inline_button_mapping(chat_id: str, callback_data: str) -> str | None:
+    """פותח callback_data קצר לטקסט כפתור מלא, או None אם לא נמצא."""
+    if not callback_data or not callback_data.startswith(_INLINE_BUTTON_CALLBACK_PREFIX):
+        return None
+    try:
+        from app.core.redis_client import get_redis
+
+        r = await get_redis()
+        val = await r.get(_inline_button_key(chat_id, callback_data))
+        return val if val else None
+    except Exception as e:
+        logger.warning(
+            "כשלון בפתיחת מיפוי כפתור inline מ-Redis",
+            extra_data={"chat_id": chat_id, "error": str(e)},
+        )
+        return None
 
 
 async def _get_pending_rejection(admin_chat_id: str) -> int | None:
@@ -133,6 +197,7 @@ def _queue_response_send(
         response.text,
         response.keyboard,
         True,
+        response.clear_reply_keyboard,
     )
 
 
@@ -566,7 +631,8 @@ async def send_telegram_message(
     chat_id: str,
     text: str,
     keyboard: Optional[list] = None,
-    inline: bool = True
+    inline: bool = True,
+    clear_reply_keyboard: bool = False,
 ) -> None:
     """Send message via Telegram Bot API with circuit breaker protection"""
     import httpx
@@ -580,35 +646,32 @@ async def send_telegram_message(
 
     url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
 
-    payload = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "HTML"
-    }
+    def _build_inline_keyboard(button_rows: list) -> list[list[dict]]:
+        """בניית inline keyboard עם callback_data קצר כשצריך (64 bytes מגבלה)."""
+        inline_keyboard: list[list[dict]] = []
+        for row in button_rows:
+            inline_row: list[dict] = []
+            for button_text in row:
+                # ברירת מחדל: callback_data = הטקסט (נוח ל-state machine)
+                callback_data = str(button_text)
+                if len(callback_data.encode("utf-8")) > 64:
+                    token = secrets.token_urlsafe(8)  # קצר, URL-safe
+                    callback_data = f"{_INLINE_BUTTON_CALLBACK_PREFIX}{token}"
+                    # שמירה ב-Redis כדי לפתוח בחזרה בלחיצה
+                    # אם נכשל, ניפול ל-truncate כדי שהכפתור לפחות יעבוד באופן חלקי
+                    # (רוב ה-handlers מבוססי keyword).
+                    # NOTE: שומרים את הטקסט המלא, לא את הטקסט המקוצר.
+                    # TTL מונע הצטברות.
+                    # ה-storage הוא best-effort.
+                    #
+                    # חשוב: פעולת Redis אסינכרונית, לכן תבוצע ע"י send_telegram_message עצמו.
+                inline_row.append(
+                    {"text": str(button_text), "callback_data": callback_data}
+                )
+            inline_keyboard.append(inline_row)
+        return inline_keyboard
 
-    if keyboard:
-        if inline:
-            # Convert keyboard to inline keyboard format
-            inline_keyboard = []
-            for row in keyboard:
-                inline_row = []
-                for button_text in row:
-                    inline_row.append({
-                        "text": button_text,
-                        "callback_data": button_text
-                    })
-                inline_keyboard.append(inline_row)
-            payload["reply_markup"] = {
-                "inline_keyboard": inline_keyboard
-            }
-        else:
-            payload["reply_markup"] = {
-                "keyboard": keyboard,
-                "resize_keyboard": True,
-                "one_time_keyboard": True
-            }
-
-    async def _send():
+    async def _send(payload: dict) -> dict:
         async with httpx.AsyncClient() as client:
             response = await client.post(url, json=payload, timeout=30.0)
             if response.status_code != 200:
@@ -617,9 +680,83 @@ async def send_telegram_message(
                     response,
                     message=f"sendMessage returned status {response.status_code}",
                 )
+            data = response.json()
+            if not data.get("ok"):
+                raise TelegramError(
+                    "sendMessage returned ok=false",
+                    details={"response": data},
+                )
+            return data
+
+    async def _edit_reply_markup(message_id: int, inline_keyboard: list[list[dict]]) -> None:
+        edit_url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/editMessageReplyMarkup"
+        edit_payload = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "reply_markup": {"inline_keyboard": inline_keyboard},
+        }
+        async with httpx.AsyncClient() as client:
+            response = await client.post(edit_url, json=edit_payload, timeout=30.0)
+            if response.status_code != 200:
+                raise TelegramError.from_response(
+                    "editMessageReplyMarkup",
+                    response,
+                    message=f"editMessageReplyMarkup returned status {response.status_code}",
+                )
 
     try:
-        await circuit_breaker.execute(_send)
+        # --- חישוב inline keyboard + שמירת מיפויים ארוכים ב-Redis (best-effort) ---
+        inline_keyboard: list[list[dict]] | None = None
+        if keyboard and inline:
+            inline_keyboard = _build_inline_keyboard(keyboard)
+            # שמירת מיפויים ל-callback_data מסוג btn:*
+            # (רק לכפתורים ארוכים שדורשים token).
+            for row in inline_keyboard:
+                for btn in row:
+                    cb = btn.get("callback_data", "")
+                    if isinstance(cb, str) and cb.startswith(_INLINE_BUTTON_CALLBACK_PREFIX):
+                        ok = await _store_inline_button_mapping(
+                            chat_id=chat_id,
+                            callback_data=cb,
+                            button_text=btn.get("text", ""),
+                        )
+                        if not ok:
+                            # fallback: callback_data מקוצר ל-64 bytes
+                            btn["callback_data"] = _truncate_utf8(btn.get("text", ""), 64)
+
+        # --- שליחה ---
+        if keyboard and inline and clear_reply_keyboard:
+            # שלב 1: ניקוי Reply Keyboard ישן
+            base_payload = {
+                "chat_id": chat_id,
+                "text": text,
+                "parse_mode": "HTML",
+                "reply_markup": {"remove_keyboard": True},
+            }
+            data = await circuit_breaker.execute(lambda: _send(base_payload))
+            message_id = (data.get("result") or {}).get("message_id")
+            if message_id and inline_keyboard:
+                # שלב 2: הוספת inline keyboard לאותה הודעה
+                await circuit_breaker.execute(lambda: _edit_reply_markup(int(message_id), inline_keyboard))
+            return
+
+        payload: dict = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+        }
+
+        if keyboard:
+            if inline:
+                payload["reply_markup"] = {"inline_keyboard": inline_keyboard or _build_inline_keyboard(keyboard)}
+            else:
+                payload["reply_markup"] = {
+                    "keyboard": keyboard,
+                    "resize_keyboard": True,
+                    "one_time_keyboard": True,
+                }
+
+        await circuit_breaker.execute(lambda: _send(payload))
     except Exception as e:
         logger.error(
             "Telegram send failed",
@@ -676,7 +813,13 @@ async def send_welcome_message(chat_id: str):
         ["🏪 הצטרפות כתחנה"],
         ["📞 פנייה לניהול"],
     ]
-    await send_telegram_message(chat_id, welcome_text, keyboard, inline=True)
+    await send_telegram_message(
+        chat_id,
+        welcome_text,
+        keyboard,
+        inline=True,
+        clear_reply_keyboard=True,
+    )
 
 
 async def _sender_fallback(
@@ -773,6 +916,13 @@ async def telegram_webhook(
     text = event.text or ""
     photo_file_id = event.photo_file_id
     name = event.name
+
+    # פתיחת callback_data קצר (btn:*) לטקסט הכפתור המלא — כדי שה-state machine
+    # ימשיך לעבוד על "טקסט" כמו בהודעות רגילות.
+    if event.is_callback and send_chat_id and text.startswith(_INLINE_BUTTON_CALLBACK_PREFIX):
+        resolved = await _resolve_inline_button_mapping(send_chat_id, text)
+        if resolved:
+            text = resolved
 
     # Skip if no content
     if not text and not photo_file_id:

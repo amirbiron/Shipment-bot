@@ -164,7 +164,8 @@ class DispatcherStateHandler:
                 ["📋 היסטוריית משלוחים", "💳 חיוב ידני"],
                 ["🔙 חזרה לתפריט ראשי"],
             ],
-            inline=True
+            inline=True,
+            clear_reply_keyboard=True,
         )
         return response, DispatcherState.MENU.value, {}
 

@@ -179,7 +179,8 @@ class StationOwnerStateHandler:
                 ["🚫 רשימה שחורה", "⚙️ הגדרות קבוצות"],
                 ["🏪 הגדרות תחנה"],
             ],
-            inline=True
+            inline=True,
+            clear_reply_keyboard=True,
         )
         return response, StationOwnerState.MENU.value, {}
 

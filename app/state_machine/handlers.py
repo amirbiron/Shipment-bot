@@ -17,10 +17,18 @@ logger = get_logger(__name__)
 class MessageResponse:
     """Response to be sent to user"""
 
-    def __init__(self, text: str, keyboard: Optional[list] = None, inline: bool = False):
+    def __init__(
+        self,
+        text: str,
+        keyboard: Optional[list] = None,
+        inline: bool = False,
+        clear_reply_keyboard: bool = False,
+    ):
         self.text = text
         self.keyboard = keyboard
         self.inline = inline
+        # ניקוי Reply Keyboard ישן (כפתורים מתחת לשורת ההקלדה) כשעוברים ל-inline
+        self.clear_reply_keyboard = clear_reply_keyboard
 
 
 class SenderStateHandler:
@@ -174,7 +182,8 @@ class SenderStateHandler:
             "1. יצירת משלוח חדש\n"
             "2. צפייה במשלוחים שלי",
             keyboard=[["📦 המשלוחים שלי"], ["➕ משלוח חדש"]],
-            inline=True
+            inline=True,
+            clear_reply_keyboard=True,
         )
         return response, SenderState.MENU.value, {"name": name}
 
@@ -198,7 +207,8 @@ class SenderStateHandler:
                     ["🏪 הצטרפות כתחנה"],
                     ["📞 פנייה לניהול"],
                 ],
-                inline=True
+                inline=True,
+                clear_reply_keyboard=True,
             )
             return response, SenderState.MENU.value, {}
 
@@ -1099,7 +1109,8 @@ class CourierStateHandler:
             f"📍 <b>האזור שלך:</b> {user.service_area or 'לא הוגדר'}\n\n"
             "בחר פעולה:",
             keyboard=keyboard,
-            inline=True
+            inline=True,
+            clear_reply_keyboard=True,
         )
         return response, CourierState.MENU.value, {}
 

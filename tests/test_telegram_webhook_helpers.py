@@ -9,6 +9,9 @@ from app.api.webhooks.telegram import (
     _handle_sender_join_as_courier,
     _is_in_multi_step_flow,
     _parse_inbound_event,
+    _store_inline_button_mapping,
+    _resolve_inline_button_mapping,
+    _truncate_utf8,
 )
 from app.db.models.user import User, UserRole
 from app.db.models.station import Station
@@ -130,6 +133,42 @@ class TestTelegramWebhookHelpers:
                 first_match = keyword
                 break
         assert first_match == "הצטרפות למנוי"
+
+    @pytest.mark.unit
+    def test_truncate_utf8_never_exceeds_max_bytes(self):
+        # מחרוזת עם עברית + אימוג'י (utf-8 multi byte)
+        s = "🚚 הצטרפות למנוי וקבלת משלוחים"
+        out = _truncate_utf8(s, 64)
+        assert isinstance(out, str)
+        assert len(out.encode("utf-8")) <= 64
+
+    @pytest.mark.asyncio
+    async def test_inline_button_mapping_store_and_resolve(self, monkeypatch):
+        class _FakeRedis:
+            def __init__(self):
+                self._store = {}
+
+            async def setex(self, key, ttl, value):
+                self._store[key] = value
+
+            async def get(self, key):
+                return self._store.get(key)
+
+        fake = _FakeRedis()
+
+        async def _fake_get_redis():
+            return fake
+
+        monkeypatch.setattr("app.core.redis_client.get_redis", _fake_get_redis)
+
+        chat_id = "123"
+        cb = "btn:unit"
+        text = "כפתור ארוך מאוד מאוד מאוד כדי לבדוק מיפוי"
+        ok = await _store_inline_button_mapping(chat_id, cb, text)
+        assert ok is True
+
+        resolved = await _resolve_inline_button_mapping(chat_id, cb)
+        assert resolved == text
 
     @pytest.mark.asyncio
     async def test_get_station_for_owner_or_downgrade_downgrades_when_missing(
