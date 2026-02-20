@@ -374,7 +374,6 @@ async def _handle_sender_admin_contact() -> MessageResponse:
 
 _sender_button_fast_shipment = _static_sender_button(_handle_sender_fast_shipment)
 _sender_button_station_signup = _static_sender_button(_handle_sender_station_signup)
-_sender_button_admin_contact = _static_sender_button(_handle_sender_admin_contact)
 
 
 _SENDER_BUTTON_ROUTES: list[tuple[str, _SenderButtonHandler]] = [
@@ -388,7 +387,7 @@ _SENDER_BUTTON_ROUTES: list[tuple[str, _SenderButtonHandler]] = [
     ("משלוח מהיר", _sender_button_fast_shipment),
     ("הצטרפות כתחנה", _sender_button_station_signup),
     ("תחנה", _sender_button_station_signup),
-    ("פנייה לניהול", _sender_button_admin_contact),
+    # "פנייה לניהול" מטופל ב-handler גלובלי (לפני ניתוב לפי תפקיד) — פתוח לכל התפקידים
 ]
 
 
@@ -1108,6 +1107,12 @@ async def telegram_webhook(
                     if new_state:
                         payload["new_state"] = new_state
                     return payload
+
+    # פנייה לניהול — פתוח לכל התפקידים, ללא תלות ב-guard של זרימה רב-שלבית
+    if "פנייה לניהול" in text:
+        response = await _handle_sender_admin_contact()
+        _queue_response_send(background_tasks, send_chat_id, response)
+        return {"ok": True}
 
     # ==================== ניתוב לפי תפקיד (handler לכל role) ====================
 

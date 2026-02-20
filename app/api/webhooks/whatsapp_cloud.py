@@ -535,26 +535,28 @@ async def _route_message_to_handler(
             )
             return station_text, None
 
-        # פנייה לניהול
-        if "פנייה לניהול" in text:
-            if settings.ADMIN_WHATSAPP_NUMBER:
-                admin_link = f"https://wa.me/{settings.ADMIN_WHATSAPP_NUMBER}"
-                admin_text = (
-                    "📞 פנייה לניהול\n\n"
-                    f"ליצירת קשר עם המנהל:\n{admin_link}"
-                )
-            else:
-                admin_text = (
-                    "📞 פנייה לניהול\n\n"
-                    "ליצירת קשר עם המנהל, שלחו הודעה כאן ונחזור אליכם בהקדם."
-                )
-            background_tasks.add_task(send_whatsapp_message, reply_to, admin_text)
-            return admin_text, None
 
         # חזרה לתפריט
         if "חזרה לתפריט" in text:
             background_tasks.add_task(send_welcome_message, reply_to)
             return "welcome", None
+
+    # פנייה לניהול — פתוח לכל התפקידים, ללא תלות ב-guard של זרימה רב-שלבית
+    if text and "פנייה לניהול" in text:
+        # קישור WhatsApp ישיר למנהל הראשי
+        if settings.ADMIN_WHATSAPP_NUMBER:
+            admin_link = f"https://wa.me/{settings.ADMIN_WHATSAPP_NUMBER}"
+            admin_text = (
+                "📞 פנייה לניהול\n\n"
+                f"ליצירת קשר עם המנהל:\n{admin_link}"
+            )
+        else:
+            admin_text = (
+                "📞 פנייה לניהול\n\n"
+                "ליצירת קשר עם המנהל, שלחו הודעה כאן ונחזור אליכם בהקדם."
+            )
+        background_tasks.add_task(send_whatsapp_message, reply_to, admin_text)
+        return admin_text, None
 
     # בעל תחנה
     if user.role == UserRole.STATION_OWNER:

@@ -823,6 +823,155 @@ async def test_get_or_create_user_heals_placeholder_to_real_phone(
     assert user.phone_number == "+972509876543"
 
 
+# ============================================================================
+# תיקון באג #227: "פנייה לניהול" לא עובד לבעלי תחנה ושליחים
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_whatsapp_station_owner_can_use_admin_contact_button(
+    test_client: AsyncClient,
+    db_session,
+    user_factory,
+    mock_whatsapp_gateway,
+    monkeypatch,
+):
+    """
+    רגרסיה #227: בעל תחנה שלוחץ על "📞 פנייה לניהול" צריך לקבל קישור ליצירת קשר
+    עם המנהל — לא תפריט ניהול תחנה.
+    """
+    monkeypatch.setattr(settings, "ADMIN_WHATSAPP_NUMBER", "972501234567")
+
+    sender_id = "972559999999@lid"
+    await user_factory(
+        phone_number=sender_id,
+        name="Station Owner Test",
+        role=UserRole.STATION_OWNER,
+        platform="whatsapp",
+    )
+
+    resp = await test_client.post(
+        "/api/whatsapp/webhook",
+        json={
+            "messages": [
+                {
+                    "from_number": sender_id,
+                    "sender_id": sender_id,
+                    "reply_to": sender_id,
+                    "message_id": "m-admin-contact-station-1",
+                    "text": "📞 פנייה לניהול",
+                    "timestamp": 1700000000,
+                }
+            ]
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["processed"] == 1
+
+    response_text = data["responses"][0]["response"]
+    # חייב להכיל קישור ליצירת קשר
+    assert "פנייה לניהול" in response_text
+    assert "wa.me" in response_text
+    # לא צריך להציג תפריט ניהול תחנה
+    assert "ניהול בעלים" not in response_text
+    assert "ניהול סדרנים" not in response_text
+    assert "ארנק תחנה" not in response_text
+
+
+@pytest.mark.asyncio
+async def test_whatsapp_courier_can_use_admin_contact_button(
+    test_client: AsyncClient,
+    db_session,
+    user_factory,
+    mock_whatsapp_gateway,
+    monkeypatch,
+):
+    """
+    רגרסיה #227: שליח שלוחץ על "📞 פנייה לניהול" צריך לקבל קישור ליצירת קשר
+    עם המנהל — לא תפריט שליח.
+    """
+    monkeypatch.setattr(settings, "ADMIN_WHATSAPP_NUMBER", "972501234567")
+
+    sender_id = "972558888888@lid"
+    await user_factory(
+        phone_number=sender_id,
+        name="Courier Test",
+        role=UserRole.COURIER,
+        platform="whatsapp",
+        approval_status=ApprovalStatus.APPROVED,
+    )
+
+    resp = await test_client.post(
+        "/api/whatsapp/webhook",
+        json={
+            "messages": [
+                {
+                    "from_number": sender_id,
+                    "sender_id": sender_id,
+                    "reply_to": sender_id,
+                    "message_id": "m-admin-contact-courier-1",
+                    "text": "📞 פנייה לניהול",
+                    "timestamp": 1700000000,
+                }
+            ]
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["processed"] == 1
+
+    response_text = data["responses"][0]["response"]
+    # חייב להכיל קישור ליצירת קשר
+    assert "פנייה לניהול" in response_text
+    assert "wa.me" in response_text
+
+
+@pytest.mark.asyncio
+async def test_whatsapp_admin_contact_fallback_without_number(
+    test_client: AsyncClient,
+    db_session,
+    user_factory,
+    mock_whatsapp_gateway,
+    monkeypatch,
+):
+    """
+    כשאין ADMIN_WHATSAPP_NUMBER מוגדר, הכפתור "פנייה לניהול" מציג הודעת fallback.
+    """
+    monkeypatch.setattr(settings, "ADMIN_WHATSAPP_NUMBER", "")
+
+    sender_id = "972557777777@lid"
+    await user_factory(
+        phone_number=sender_id,
+        name="Fallback Test",
+        role=UserRole.STATION_OWNER,
+        platform="whatsapp",
+    )
+
+    resp = await test_client.post(
+        "/api/whatsapp/webhook",
+        json={
+            "messages": [
+                {
+                    "from_number": sender_id,
+                    "sender_id": sender_id,
+                    "reply_to": sender_id,
+                    "message_id": "m-admin-contact-fallback-1",
+                    "text": "📞 פנייה לניהול",
+                    "timestamp": 1700000000,
+                }
+            ]
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["processed"] == 1
+
+    response_text = data["responses"][0]["response"]
+    assert "פנייה לניהול" in response_text
+    assert "נחזור אליכם" in response_text
+
+
 @pytest.mark.asyncio
 async def test_get_or_create_user_finds_by_real_phone_after_heal(
     db_session,
