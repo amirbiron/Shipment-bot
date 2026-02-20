@@ -837,11 +837,9 @@ async def test_whatsapp_station_owner_can_use_admin_contact_button(
     monkeypatch,
 ):
     """
-    רגרסיה #227: בעל תחנה שלוחץ על "📞 פנייה לניהול" צריך לקבל קישור ליצירת קשר
-    עם המנהל — לא תפריט ניהול תחנה.
+    רגרסיה #227: בעל תחנה שלוחץ על "📞 פנייה לניהול" צריך לקבל הנחיה
+    לכתוב הודעה — לא תפריט ניהול תחנה.
     """
-    monkeypatch.setattr(settings, "ADMIN_WHATSAPP_NUMBER", "972501234567")
-
     sender_id = "972559999999@lid"
     await user_factory(
         phone_number=sender_id,
@@ -870,9 +868,9 @@ async def test_whatsapp_station_owner_can_use_admin_contact_button(
     assert data["processed"] == 1
 
     response_text = data["responses"][0]["response"]
-    # חייב להכיל קישור ליצירת קשר
+    # חייב להכיל הנחיה לכתוב הודעה
     assert "פנייה לניהול" in response_text
-    assert "wa.me" in response_text
+    assert "תועבר להנהלה" in response_text
     # לא צריך להציג תפריט ניהול תחנה
     assert "ניהול בעלים" not in response_text
     assert "ניהול סדרנים" not in response_text
@@ -880,7 +878,7 @@ async def test_whatsapp_station_owner_can_use_admin_contact_button(
 
 
 @pytest.mark.asyncio
-async def test_whatsapp_courier_can_use_admin_contact_button(
+async def test_whatsapp_admin_contact_forwards_message_to_admin(
     test_client: AsyncClient,
     db_session,
     user_factory,
@@ -888,21 +886,23 @@ async def test_whatsapp_courier_can_use_admin_contact_button(
     monkeypatch,
 ):
     """
-    רגרסיה #227: שליח שלוחץ על "📞 פנייה לניהול" צריך לקבל קישור ליצירת קשר
-    עם המנהל — לא תפריט שליח.
+    רגרסיה #227: אחרי לחיצה על "פנייה לניהול", ההודעה הבאה מועברת להנהלה
+    ולא נופלת לניתוב לפי תפקיד.
     """
-    monkeypatch.setattr(settings, "ADMIN_WHATSAPP_NUMBER", "972501234567")
+    monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "972500000001")
 
     sender_id = "972558888888@lid"
     await user_factory(
         phone_number=sender_id,
         name="Courier Test",
+        full_name="שליח בדיקה",
         role=UserRole.COURIER,
         platform="whatsapp",
         approval_status=ApprovalStatus.APPROVED,
     )
 
-    resp = await test_client.post(
+    # שלב 1: לחיצה על "פנייה לניהול"
+    resp1 = await test_client.post(
         "/api/whatsapp/webhook",
         json={
             "messages": [
@@ -910,45 +910,63 @@ async def test_whatsapp_courier_can_use_admin_contact_button(
                     "from_number": sender_id,
                     "sender_id": sender_id,
                     "reply_to": sender_id,
-                    "message_id": "m-admin-contact-courier-1",
+                    "message_id": "m-admin-fwd-1",
                     "text": "📞 פנייה לניהול",
                     "timestamp": 1700000000,
                 }
             ]
         },
     )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["processed"] == 1
+    assert resp1.status_code == 200
+    assert "תועבר להנהלה" in resp1.json()["responses"][0]["response"]
 
-    response_text = data["responses"][0]["response"]
-    # חייב להכיל קישור ליצירת קשר
-    assert "פנייה לניהול" in response_text
-    assert "wa.me" in response_text
+    # שלב 2: שליחת הודעה — צריכה להיות מועברת להנהלה
+    resp2 = await test_client.post(
+        "/api/whatsapp/webhook",
+        json={
+            "messages": [
+                {
+                    "from_number": sender_id,
+                    "sender_id": sender_id,
+                    "reply_to": sender_id,
+                    "message_id": "m-admin-fwd-2",
+                    "text": "שלום, יש לי בעיה עם החשבון",
+                    "timestamp": 1700000001,
+                }
+            ]
+        },
+    )
+    assert resp2.status_code == 200
+    data2 = resp2.json()
+    assert data2["processed"] == 1
+
+    response_text = data2["responses"][0]["response"]
+    # חייב להכיל אישור שההודעה נשלחה (לא תפריט שליח/תחנה)
+    assert "נשלחה להנהלה" in response_text
+    assert "ניהול בעלים" not in response_text
 
 
 @pytest.mark.asyncio
-async def test_whatsapp_admin_contact_fallback_without_number(
+async def test_whatsapp_admin_contact_back_button_returns_to_menu(
     test_client: AsyncClient,
     db_session,
     user_factory,
     mock_whatsapp_gateway,
-    monkeypatch,
 ):
     """
-    כשאין ADMIN_WHATSAPP_NUMBER מוגדר, הכפתור "פנייה לניהול" מציג הודעת fallback.
+    אחרי לחיצה על "פנייה לניהול", לחיצה על "חזרה לתפריט" מחזירה
+    לתפריט לפי תפקיד במקום להעביר כהודעה.
     """
-    monkeypatch.setattr(settings, "ADMIN_WHATSAPP_NUMBER", "")
-
     sender_id = "972557777777@lid"
     await user_factory(
         phone_number=sender_id,
-        name="Fallback Test",
+        name="Back Test",
         role=UserRole.STATION_OWNER,
         platform="whatsapp",
     )
 
-    resp = await test_client.post(
+    # שלב 1: לחיצה על "פנייה לניהול"
+    resp1 = await test_client.post(
         "/api/whatsapp/webhook",
         json={
             "messages": [
@@ -956,20 +974,36 @@ async def test_whatsapp_admin_contact_fallback_without_number(
                     "from_number": sender_id,
                     "sender_id": sender_id,
                     "reply_to": sender_id,
-                    "message_id": "m-admin-contact-fallback-1",
+                    "message_id": "m-admin-back-1",
                     "text": "📞 פנייה לניהול",
                     "timestamp": 1700000000,
                 }
             ]
         },
     )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["processed"] == 1
+    assert resp1.status_code == 200
 
-    response_text = data["responses"][0]["response"]
-    assert "פנייה לניהול" in response_text
-    assert "נחזור אליכם" in response_text
+    # שלב 2: לחיצה על "חזרה" — לא צריך להעביר הודעה
+    resp2 = await test_client.post(
+        "/api/whatsapp/webhook",
+        json={
+            "messages": [
+                {
+                    "from_number": sender_id,
+                    "sender_id": sender_id,
+                    "reply_to": sender_id,
+                    "message_id": "m-admin-back-2",
+                    "text": "🔙 חזרה לתפריט",
+                    "timestamp": 1700000001,
+                }
+            ]
+        },
+    )
+    assert resp2.status_code == 200
+    data2 = resp2.json()
+    assert data2["processed"] == 1
+    # לא צריך לשלוח "נשלחה להנהלה" — המשתמש לחץ חזרה
+    assert "נשלחה להנהלה" not in data2["responses"][0]["response"]
 
 
 @pytest.mark.asyncio
