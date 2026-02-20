@@ -79,17 +79,21 @@ async def _store_inline_button_mapping(
     callback_data: str,
     button_text: str,
 ) -> bool:
-    """שומר מיפוי callback_data→טקסט ב-Redis. מחזיר False אם Redis נכשל."""
+    """שומר מיפוי callback_data→טקסט ב-Redis.
+
+    משתמש ב-NX כדי למנוע דריסת ערך במקרה נדיר של התנגשות token.
+    """
     try:
         from app.core.redis_client import get_redis
 
         r = await get_redis()
-        await r.setex(
+        was_set = await r.set(
             _inline_button_key(chat_id, callback_data),
-            _INLINE_BUTTON_TTL_SECONDS,
             button_text,
+            ex=_INLINE_BUTTON_TTL_SECONDS,
+            nx=True,
         )
-        return True
+        return bool(was_set)
     except Exception as e:
         logger.warning(
             "כשלון בשמירת מיפוי כפתור inline ב-Redis",
@@ -699,14 +703,20 @@ async def send_telegram_message(
                 text_str = str(button_text)
                 callback_data = text_str
                 if len(callback_data.encode("utf-8")) > 64:
-                    token = secrets.token_urlsafe(8)
-                    callback_data = f"{_INLINE_BUTTON_CALLBACK_PREFIX}{token}"
-
-                    ok = await _store_inline_button_mapping(
-                        chat_id=chat_id,
-                        callback_data=callback_data,
-                        button_text=text_str,
-                    )
+                    # מגבלת Telegram: callback_data עד 64 bytes.
+                    # מייצרים token קצר ושומרים ב-Redis עם NX למניעת התנגשות נדירה.
+                    ok = False
+                    for _attempt in range(3):
+                        token = secrets.token_urlsafe(16)
+                        candidate = f"{_INLINE_BUTTON_CALLBACK_PREFIX}{token}"
+                        ok = await _store_inline_button_mapping(
+                            chat_id=chat_id,
+                            callback_data=candidate,
+                            button_text=text_str,
+                        )
+                        if ok:
+                            callback_data = candidate
+                            break
                     if not ok:
                         callback_data = _truncate_utf8(text_str, 64)
 
@@ -715,6 +725,8 @@ async def send_telegram_message(
         return inline_keyboard
 
     async def _send(payload: dict) -> dict:
+        import json
+
         async with httpx.AsyncClient() as client:
             response = await client.post(url, json=payload, timeout=30.0)
             if response.status_code != 200:
@@ -723,7 +735,13 @@ async def send_telegram_message(
                     response,
                     message=f"sendMessage returned status {response.status_code}",
                 )
-            data = response.json()
+            try:
+                data = response.json()
+            except json.JSONDecodeError as e:
+                raise TelegramError(
+                    "Telegram returned invalid JSON",
+                    details={"status_code": response.status_code, "error": str(e)},
+                ) from e
             if not data.get("ok"):
                 raise TelegramError(
                     "sendMessage returned ok=false",
@@ -731,20 +749,36 @@ async def send_telegram_message(
                 )
             return data
 
-    async def _delete_message(message_id: int) -> None:
-        """מחיקת הודעה (best-effort) כדי לא להשאיר placeholder."""
+    async def _delete_message(message_id: int) -> bool:
+        """מחיקת הודעה — best-effort, לא זורק exception."""
         delete_url = (
             f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/deleteMessage"
         )
         delete_payload = {"chat_id": chat_id, "message_id": message_id}
-        async with httpx.AsyncClient() as client:
-            response = await client.post(delete_url, json=delete_payload, timeout=30.0)
-            if response.status_code != 200:
-                raise TelegramError.from_response(
-                    "deleteMessage",
-                    response,
-                    message=f"deleteMessage returned status {response.status_code}",
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    delete_url, json=delete_payload, timeout=30.0
                 )
+        except Exception as e:
+            logger.debug(
+                "כשלון בבקשת deleteMessage (best-effort)",
+                extra_data={"chat_id": chat_id, "error": str(e)},
+            )
+            return False
+
+        if response.status_code != 200:
+            # best-effort: לא מפילים ולא פותחים circuit בגלל housekeeping
+            logger.debug(
+                "deleteMessage returned non-200 (best-effort)",
+                extra_data={
+                    "chat_id": chat_id,
+                    "status_code": response.status_code,
+                },
+            )
+            return False
+
+        return True
 
     try:
         inline_keyboard: list[list[dict]] | None = None
@@ -780,17 +814,22 @@ async def send_telegram_message(
             async def _send_actual() -> dict:
                 return await _send(payload)
 
-            await circuit_breaker.execute(_send_actual)
+            try:
+                await circuit_breaker.execute(_send_actual)
+            except Exception:
+                # אם השליחה האמיתית נכשלה, ננסה למחוק placeholder כדי לא להשאיר הודעה ריקה.
+                if placeholder_message_id:
+                    try:
+                        await _delete_message(int(placeholder_message_id))
+                    except Exception:
+                        pass
+                raise
 
             if placeholder_message_id:
-
-                async def _delete_placeholder() -> None:
-                    return await _delete_message(int(placeholder_message_id))
-
+                # best-effort: מחיקה ללא circuit breaker כדי לא לצבור כשלונות housekeeping.
                 try:
-                    await circuit_breaker.execute(_delete_placeholder)
+                    await _delete_message(int(placeholder_message_id))
                 except Exception:
-                    # best-effort — לא מפילים את ההודעה האמיתית
                     pass
 
             return
@@ -803,10 +842,7 @@ async def send_telegram_message(
 
         if keyboard:
             if inline:
-                payload["reply_markup"] = {
-                    "inline_keyboard": inline_keyboard
-                    or await _build_inline_keyboard(keyboard)
-                }
+                payload["reply_markup"] = {"inline_keyboard": inline_keyboard or []}
             else:
                 payload["reply_markup"] = {
                     "keyboard": keyboard,

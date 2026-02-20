@@ -165,8 +165,11 @@ class TestTelegramWebhookHelpers:
             def __init__(self):
                 self._store = {}
 
-            async def setex(self, key, ttl, value):
+            async def set(self, key, value, ex=None, nx=False):
+                if nx and key in self._store:
+                    return False
                 self._store[key] = value
+                return True
 
             async def get(self, key):
                 return self._store.get(key)
