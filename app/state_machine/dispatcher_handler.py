@@ -172,8 +172,6 @@ class DispatcherStateHandler:
                 ["📋 היסטוריית משלוחים", "💳 חיוב ידני"],
                 ["🔙 חזרה לתפריט ראשי"],
             ],
-            inline=True,
-            clear_reply_keyboard=True,
         )
         return response, DispatcherState.MENU.value, {}
 
@@ -380,7 +378,7 @@ class DispatcherStateHandler:
         )
 
         response = MessageResponse(
-            summary, keyboard=[["✅ אישור ושליחה", "❌ ביטול"]], inline=True
+            summary, keyboard=[["✅ אישור ושליחה", "❌ ביטול"]]
         )
         return response, DispatcherState.ADD_SHIPMENT_CONFIRM.value, {"fee": fee}
 
@@ -433,7 +431,6 @@ class DispatcherStateHandler:
         response = MessageResponse(
             "אנא בחר:\n" "1. ✅ אישור ושליחה\n" "2. ❌ ביטול",
             keyboard=[["✅ אישור ושליחה", "❌ ביטול"]],
-            inline=True,
         )
         return response, DispatcherState.ADD_SHIPMENT_CONFIRM.value, {}
 
@@ -585,7 +582,7 @@ class DispatcherStateHandler:
         )
 
         response = MessageResponse(
-            summary, keyboard=[["✅ אישור", "❌ ביטול"]], inline=True
+            summary, keyboard=[["✅ אישור", "❌ ביטול"]]
         )
         return (
             response,
@@ -636,7 +633,6 @@ class DispatcherStateHandler:
         response = MessageResponse(
             "אנא בחר:\n" "1. ✅ אישור\n" "2. ❌ ביטול",
             keyboard=[["✅ אישור", "❌ ביטול"]],
-            inline=True,
         )
         return response, DispatcherState.MANUAL_CHARGE_CONFIRM.value, {}
 

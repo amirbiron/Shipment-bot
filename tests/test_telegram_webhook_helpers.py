@@ -136,7 +136,7 @@ class TestTelegramWebhookHelpers:
     @pytest.mark.unit
     def test_queue_response_send_adds_background_task(self):
         background_tasks = BackgroundTasks()
-        response = MessageResponse("hello", keyboard=[["a"]], inline=True)
+        response = MessageResponse("hello", keyboard=[["a"]])
         _queue_response_send(background_tasks, "123", response)
         assert len(background_tasks.tasks) == 1
         task = background_tasks.tasks[0]
@@ -282,15 +282,14 @@ class TestTelegramWebhookHelpers:
         assert "send_telegram_message" in funcs
 
     @pytest.mark.asyncio
-    async def test_clear_reply_keyboard_is_only_done_once_per_chat_id(
+    async def test_reply_keyboard_cleared_automatically_once_per_chat(
         self, monkeypatch
     ):
-        # Fake settings token
+        """reply keyboard ישן מנוקה אוטומטית בהודעה הראשונה לכל chat, ולא שוב"""
         from app.core.config import settings
 
         monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "unit-token", raising=False)
 
-        # Dummy circuit breaker that always awaits
         class _DummyCB:
             async def execute(self, func, *args, **kwargs):
                 return await func(*args, **kwargs)
@@ -300,7 +299,6 @@ class TestTelegramWebhookHelpers:
             lambda: _DummyCB(),
         )
 
-        # Fake Redis that supports get/setex for "cleared" flag
         class _FakeRedis:
             def __init__(self):
                 self._store = {}
@@ -324,7 +322,6 @@ class TestTelegramWebhookHelpers:
 
         monkeypatch.setattr("app.core.redis_client.get_redis", _fake_get_redis)
 
-        # Fake httpx client
         calls = []
 
         class _FakeResponse:
@@ -354,13 +351,11 @@ class TestTelegramWebhookHelpers:
 
         monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
 
-        # First call: should do placeholder + actual + delete
+        # הודעה ראשונה: ניקוי reply keyboard (placeholder + actual + delete)
         await send_telegram_message(
             chat_id="123",
             text="menu1",
             keyboard=[["A"]],
-            inline=True,
-            clear_reply_keyboard=True,
         )
         assert len(calls) == 3
         assert any(
@@ -369,14 +364,12 @@ class TestTelegramWebhookHelpers:
             if c[0].endswith("/sendMessage")
         )
 
-        # Second call: should skip placeholder and send only once
+        # הודעה שנייה: לא מנקה שוב — רק שליחה אחת
         calls.clear()
         await send_telegram_message(
             chat_id="123",
             text="menu2",
             keyboard=[["A"]],
-            inline=True,
-            clear_reply_keyboard=True,
         )
         assert len(calls) == 1
         assert calls[0][0].endswith("/sendMessage")

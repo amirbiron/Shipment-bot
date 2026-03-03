@@ -284,14 +284,12 @@ def _queue_response_send(
     chat_id: str,
     response: MessageResponse,
 ) -> None:
-    """שולח תגובה למשתמש דרך background task — כפתורים תמיד inline"""
+    """שולח תגובה למשתמש דרך background task"""
     background_tasks.add_task(
         send_telegram_message,
         chat_id,
         response.text,
         response.keyboard,
-        True,
-        response.clear_reply_keyboard,
     )
 
 
@@ -518,7 +516,7 @@ async def _handle_sender_station_signup() -> MessageResponse:
         "✅ סדר בבלגן\n\n"
         "לפרטים נוספים, פנו להנהלה."
     )
-    return MessageResponse(station_text, keyboard=[["📞 פנייה לניהול"]], inline=True)
+    return MessageResponse(station_text, keyboard=[["📞 פנייה לניהול"]])
 
 
 async def _handle_sender_admin_contact() -> MessageResponse:
@@ -734,10 +732,8 @@ async def send_telegram_message(
     chat_id: str,
     text: str,
     keyboard: Optional[list] = None,
-    inline: bool = True,
-    clear_reply_keyboard: bool = False,
 ) -> None:
-    """Send message via Telegram Bot API with circuit breaker protection"""
+    """שליחת הודעה דרך Telegram Bot API — כפתורים תמיד inline, reply keyboard מנוקה אוטומטית"""
     import httpx
     from app.core.config import settings
 
@@ -844,17 +840,11 @@ async def send_telegram_message(
 
     try:
         inline_keyboard: list[list[dict]] | None = None
-        if keyboard and inline:
+        if keyboard:
             inline_keyboard = await _build_inline_keyboard(keyboard)
 
-        # --- שליחה ---
-        should_clear_reply_keyboard = bool(keyboard and inline and clear_reply_keyboard)
-        if should_clear_reply_keyboard and await _was_reply_keyboard_cleared(chat_id):
-            should_clear_reply_keyboard = False
-
-        if should_clear_reply_keyboard:
-            # גישה בטוחה: קודם מנקים Reply Keyboard בהודעת placeholder,
-            # ואז שולחים את ההודעה האמיתית עם inline keyboard.
+        # --- ניקוי reply keyboard ישן (פעם אחת לכל chat, רק כשיש כפתורים) ---
+        if keyboard and not await _was_reply_keyboard_cleared(chat_id):
             placeholder_payload = {
                 "chat_id": chat_id,
                 "text": "\u200b",
@@ -869,54 +859,24 @@ async def send_telegram_message(
             placeholder_message_id = (placeholder_data.get("result") or {}).get(
                 "message_id"
             )
-            # אם הצלחנו לשלוח remove_keyboard — נסמן כדי לא לעשות זאת שוב בכל תפריט.
             await _mark_reply_keyboard_cleared(chat_id)
 
-            payload: dict = {
-                "chat_id": chat_id,
-                "text": text,
-                "parse_mode": "HTML",
-                "reply_markup": {"inline_keyboard": inline_keyboard or []},
-            }
-
-            async def _send_actual() -> dict:
-                return await _send(payload)
-
-            try:
-                await circuit_breaker.execute(_send_actual)
-            except Exception:
-                # אם השליחה האמיתית נכשלה, ננסה למחוק placeholder כדי לא להשאיר הודעה ריקה.
-                if placeholder_message_id:
-                    try:
-                        await _delete_message(int(placeholder_message_id))
-                    except Exception:
-                        pass
-                raise
-
+            # best-effort: מחיקת ה-placeholder כדי לא להשאיר הודעה ריקה
             if placeholder_message_id:
-                # best-effort: מחיקה ללא circuit breaker כדי לא לצבור כשלונות housekeeping.
                 try:
                     await _delete_message(int(placeholder_message_id))
                 except Exception:
                     pass
 
-            return
-
+        # --- שליחה ---
         payload: dict = {
             "chat_id": chat_id,
             "text": text,
             "parse_mode": "HTML",
         }
 
-        if keyboard:
-            if inline:
-                payload["reply_markup"] = {"inline_keyboard": inline_keyboard or []}
-            else:
-                payload["reply_markup"] = {
-                    "keyboard": keyboard,
-                    "resize_keyboard": True,
-                    "one_time_keyboard": True,
-                }
+        if inline_keyboard:
+            payload["reply_markup"] = {"inline_keyboard": inline_keyboard}
 
         async def _send_final() -> dict:
             return await _send(payload)
@@ -984,8 +944,6 @@ async def send_welcome_message(chat_id: str):
         chat_id,
         welcome_text,
         keyboard,
-        inline=True,
-        clear_reply_keyboard=True,
     )
 
 
