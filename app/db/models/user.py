@@ -13,6 +13,7 @@ class UserRole(str, enum.Enum):
     COURIER = "courier"
     ADMIN = "admin"
     STATION_OWNER = "station_owner"
+    DRIVER = "driver"  # iDriver — נהג שמחפש עבודה דרך הבוט
 
 
 class ApprovalStatus(str, enum.Enum):

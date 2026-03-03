@@ -438,3 +438,112 @@ STATION_OWNER_TRANSITIONS = {
         StationOwnerState.MENU,
     ],
 }
+
+
+# ============================================================================
+# iDriver — מכונת מצבים לנהג (Issue #233, סשן 1)
+# ============================================================================
+
+
+class DriverState(str, Enum):
+    """
+    מצבי שיחה לנהג (iDriver).
+
+    נהג יכול לחפש עבודה דרך הבוט: רישום, הגדרות סינון, חיפושים ומנוי.
+    """
+
+    # מצבים ראשוניים
+    INITIAL = "DRIVER.INITIAL"
+    NEW = "DRIVER.NEW"
+
+    # זרימת רישום (סשן 2)
+    REGISTER_COLLECT_NAME = "DRIVER.REGISTER.COLLECT_NAME"
+    REGISTER_COLLECT_BIRTH_DATE = "DRIVER.REGISTER.COLLECT_BIRTH_DATE"
+    REGISTER_COLLECT_VEHICLE = "DRIVER.REGISTER.COLLECT_VEHICLE"
+    REGISTER_COLLECT_DRESS_CODE = "DRIVER.REGISTER.COLLECT_DRESS_CODE"
+
+    # זרימת אימות — רק לזרם חרדי (סשן 3)
+    VERIFY_COLLECT_SELFIE = "DRIVER.VERIFY.COLLECT_SELFIE"
+    VERIFY_COLLECT_ID_DOCUMENT = "DRIVER.VERIFY.COLLECT_ID_DOCUMENT"
+    VERIFY_PENDING_APPROVAL = "DRIVER.VERIFY.PENDING_APPROVAL"
+
+    # תפריט ראשי (סשן 4+)
+    MENU = "DRIVER.MENU"
+
+    # זרימת הגדרות (סשן 4)
+    SETTINGS_VIEW = "DRIVER.SETTINGS.VIEW"
+    SETTINGS_VEHICLE_TYPE = "DRIVER.SETTINGS.VEHICLE_TYPE"
+    SETTINGS_TRIP_TYPE = "DRIVER.SETTINGS.TRIP_TYPE"
+    SETTINGS_SHOW_DELIVERIES = "DRIVER.SETTINGS.SHOW_DELIVERIES"
+    SETTINGS_UPCOMING_TIMEFRAME = "DRIVER.SETTINGS.UPCOMING_TIMEFRAME"
+    SETTINGS_FUTURE_ONLY_MODE = "DRIVER.SETTINGS.FUTURE_ONLY_MODE"
+    SETTINGS_START_TIME = "DRIVER.SETTINGS.START_TIME"
+
+    # זרימת חיפוש (סשן 5+)
+    SEARCH_CREATE_ORIGIN = "DRIVER.SEARCH.CREATE_ORIGIN"
+    SEARCH_CREATE_DESTINATION = "DRIVER.SEARCH.CREATE_DESTINATION"
+    SEARCH_CREATE_TYPE = "DRIVER.SEARCH.CREATE_TYPE"
+    SEARCH_VIEW_ACTIVE = "DRIVER.SEARCH.VIEW_ACTIVE"
+    SEARCH_MANAGE = "DRIVER.SEARCH.MANAGE"
+
+    # זרימת מנוי (סשן 8)
+    SUBSCRIPTION_VIEW = "DRIVER.SUBSCRIPTION.VIEW"
+    SUBSCRIPTION_PURCHASE = "DRIVER.SUBSCRIPTION.PURCHASE"
+
+
+# מעברי מצבים לנהג — ריק בסשן 1, יתמלא בסשנים הבאים
+DRIVER_TRANSITIONS: dict[DriverState, list[DriverState]] = {
+    # מצבים ראשוניים → רישום
+    DriverState.INITIAL: [DriverState.REGISTER_COLLECT_NAME],
+    DriverState.NEW: [DriverState.REGISTER_COLLECT_NAME],
+
+    # רישום (סשן 2)
+    DriverState.REGISTER_COLLECT_NAME: [DriverState.REGISTER_COLLECT_BIRTH_DATE],
+    DriverState.REGISTER_COLLECT_BIRTH_DATE: [DriverState.REGISTER_COLLECT_VEHICLE],
+    DriverState.REGISTER_COLLECT_VEHICLE: [DriverState.REGISTER_COLLECT_DRESS_CODE],
+    DriverState.REGISTER_COLLECT_DRESS_CODE: [
+        DriverState.VERIFY_COLLECT_SELFIE,  # זרם חרדי → אימות
+        DriverState.MENU,                    # זרם חילוני → תפריט
+    ],
+
+    # אימות (סשן 3)
+    DriverState.VERIFY_COLLECT_SELFIE: [DriverState.VERIFY_COLLECT_ID_DOCUMENT],
+    DriverState.VERIFY_COLLECT_ID_DOCUMENT: [DriverState.VERIFY_PENDING_APPROVAL],
+    DriverState.VERIFY_PENDING_APPROVAL: [DriverState.MENU],
+
+    # תפריט ראשי (סשנים 4+)
+    DriverState.MENU: [
+        DriverState.SETTINGS_VIEW,
+        DriverState.SEARCH_CREATE_ORIGIN,
+        DriverState.SEARCH_VIEW_ACTIVE,
+        DriverState.SEARCH_MANAGE,
+        DriverState.SUBSCRIPTION_VIEW,
+    ],
+
+    # הגדרות (סשן 4)
+    DriverState.SETTINGS_VIEW: [
+        DriverState.SETTINGS_VEHICLE_TYPE,
+        DriverState.SETTINGS_TRIP_TYPE,
+        DriverState.SETTINGS_SHOW_DELIVERIES,
+        DriverState.SETTINGS_UPCOMING_TIMEFRAME,
+        DriverState.SETTINGS_FUTURE_ONLY_MODE,
+        DriverState.MENU,
+    ],
+    DriverState.SETTINGS_VEHICLE_TYPE: [DriverState.SETTINGS_VIEW, DriverState.MENU],
+    DriverState.SETTINGS_TRIP_TYPE: [DriverState.SETTINGS_VIEW, DriverState.MENU],
+    DriverState.SETTINGS_SHOW_DELIVERIES: [DriverState.SETTINGS_VIEW, DriverState.MENU],
+    DriverState.SETTINGS_UPCOMING_TIMEFRAME: [DriverState.SETTINGS_VIEW, DriverState.MENU],
+    DriverState.SETTINGS_FUTURE_ONLY_MODE: [DriverState.SETTINGS_START_TIME, DriverState.SETTINGS_VIEW, DriverState.MENU],
+    DriverState.SETTINGS_START_TIME: [DriverState.SETTINGS_VIEW, DriverState.MENU],
+
+    # חיפוש (סשן 5)
+    DriverState.SEARCH_CREATE_ORIGIN: [DriverState.SEARCH_CREATE_DESTINATION, DriverState.MENU],
+    DriverState.SEARCH_CREATE_DESTINATION: [DriverState.SEARCH_CREATE_TYPE, DriverState.MENU],
+    DriverState.SEARCH_CREATE_TYPE: [DriverState.SEARCH_VIEW_ACTIVE, DriverState.MENU],
+    DriverState.SEARCH_VIEW_ACTIVE: [DriverState.SEARCH_MANAGE, DriverState.MENU],
+    DriverState.SEARCH_MANAGE: [DriverState.SEARCH_VIEW_ACTIVE, DriverState.MENU],
+
+    # מנוי (סשן 8)
+    DriverState.SUBSCRIPTION_VIEW: [DriverState.SUBSCRIPTION_PURCHASE, DriverState.MENU],
+    DriverState.SUBSCRIPTION_PURCHASE: [DriverState.SUBSCRIPTION_VIEW, DriverState.MENU],
+}

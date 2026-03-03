@@ -279,6 +279,12 @@ async def add_enum_values(engine: AsyncEngine) -> None:
         ))
         logger.info("Ensured 'STATION_OWNER' exists in userrole enum")
 
+        # iDriver: הוספת DRIVER לתפקידי משתמש
+        await conn.execute(text(
+            "ALTER TYPE userrole ADD VALUE IF NOT EXISTS 'DRIVER'"
+        ))
+        logger.info("Ensured 'DRIVER' exists in userrole enum")
+
         # שלב 4: הוספת PENDING_APPROVAL לסטטוס משלוח
         # SQLEnum(DeliveryStatus) ללא values_callable שולח את שם ה-member (uppercase)
         await conn.execute(text(
@@ -402,6 +408,141 @@ async def run_migration_011(conn: AsyncConnection) -> None:
     """))
 
 
+async def run_migration_012(conn: AsyncConnection) -> None:
+    """מיגרציה 012 — iDriver סשן 1: שכבת נתונים בסיסית.
+
+    יצירת 4 טבלאות חדשות:
+    - driver_profiles — פרופיל אישי, רכב, אימות ומנוי
+    - driver_search_settings — העדפות סינון חיפוש
+    - driver_searches — חיפושים פעילים (מקסימום 9 למשתמש)
+    - driver_sessions — ניהול סשן 24 שעות
+    """
+
+    # טבלה 1: driver_profiles
+    await conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS driver_profiles (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+
+            birth_date DATE NOT NULL,
+            vehicle_description TEXT NOT NULL,
+            vehicle_category VARCHAR(50) NOT NULL,
+            dress_code VARCHAR(50) NOT NULL,
+
+            verification_status VARCHAR(50) NOT NULL DEFAULT 'unverified',
+
+            subscription_status VARCHAR(50) NOT NULL DEFAULT 'trial',
+            trial_starts_at TIMESTAMP,
+            trial_expires_at TIMESTAMP,
+            subscription_start_at TIMESTAMP,
+            subscription_expires_at TIMESTAMP,
+
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW()
+        );
+    """))
+
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_driver_profiles_user
+        ON driver_profiles(user_id);
+    """))
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_driver_profiles_verification
+        ON driver_profiles(verification_status);
+    """))
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_driver_profiles_subscription
+        ON driver_profiles(subscription_status, subscription_expires_at);
+    """))
+
+    # טבלה 2: driver_search_settings
+    await conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS driver_search_settings (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+
+            vehicle_type_filter VARCHAR(50) DEFAULT '7_seater',
+            trip_type_filter VARCHAR(50) DEFAULT 'any_distance',
+            show_deliveries BOOLEAN DEFAULT TRUE,
+            upcoming_timeframe VARCHAR(50) DEFAULT 'all',
+
+            future_only_enabled BOOLEAN DEFAULT FALSE,
+            future_only_start_time TIME,
+
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW()
+        );
+    """))
+
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_driver_search_settings_user
+        ON driver_search_settings(user_id);
+    """))
+
+    # טבלה 3: driver_searches
+    await conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS driver_searches (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+
+            origin_city VARCHAR(100) NOT NULL,
+            destination_city VARCHAR(100) NOT NULL,
+            is_area_search BOOLEAN DEFAULT FALSE,
+
+            latitude DECIMAL(10, 7),
+            longitude DECIMAL(10, 7),
+
+            status VARCHAR(50) DEFAULT 'active',
+
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW()
+        );
+    """))
+
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_driver_searches_user
+        ON driver_searches(user_id);
+    """))
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_driver_searches_status
+        ON driver_searches(status);
+    """))
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_driver_searches_location
+        ON driver_searches(origin_city, destination_city);
+    """))
+
+    # טבלה 4: driver_sessions
+    await conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS driver_sessions (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+
+            session_start_at TIMESTAMP DEFAULT NOW(),
+            last_message_at TIMESTAMP DEFAULT NOW(),
+            is_active BOOLEAN DEFAULT TRUE,
+
+            reminder_sent_at TIMESTAMP,
+
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW()
+        );
+    """))
+
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_driver_sessions_user
+        ON driver_sessions(user_id);
+    """))
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_driver_sessions_active
+        ON driver_sessions(is_active);
+    """))
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_driver_sessions_last_activity
+        ON driver_sessions(last_message_at);
+    """))
+
+
 async def run_all_migrations(conn: AsyncConnection) -> None:
     """הרצת כל המיגרציות ברצף (ללא ALTER TYPE — ראה add_enum_values)."""
     logger.info("Running migration 001...")
@@ -426,3 +567,5 @@ async def run_all_migrations(conn: AsyncConnection) -> None:
     await run_migration_010(conn)
     logger.info("Running migration 011...")
     await run_migration_011(conn)
+    logger.info("Running migration 012...")
+    await run_migration_012(conn)
