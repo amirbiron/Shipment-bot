@@ -177,8 +177,6 @@ class StationOwnerStateHandler:
                 ["🚫 רשימה שחורה", "⚙️ הגדרות קבוצות"],
                 ["🏪 הגדרות תחנה"],
             ],
-            inline=True,
-            clear_reply_keyboard=True,
         )
         return response, StationOwnerState.MENU.value, {}
 
@@ -338,7 +336,6 @@ class StationOwnerStateHandler:
                 f"⚠️ <b>אישור הסרת בעלים</b>\n\n"
                 f"האם אתה בטוח שברצונך להסיר את <b>{escape(name)}</b> מרשימת הבעלים?",
                 keyboard=[["✅ כן, הסר", "❌ ביטול"]],
-                inline=True,
             )
             return (
                 response,
@@ -379,7 +376,6 @@ class StationOwnerStateHandler:
         response = MessageResponse(
             "אנא בחר:\n✅ כן, הסר\n❌ ביטול",
             keyboard=[["✅ כן, הסר", "❌ ביטול"]],
-            inline=True,
         )
         return response, StationOwnerState.CONFIRM_REMOVE_OWNER.value, {}
 
@@ -511,7 +507,6 @@ class StationOwnerStateHandler:
                 f"⚠️ <b>אישור הסרת סדרן</b>\n\n"
                 f"האם אתה בטוח שברצונך להסיר את <b>{escape(name)}</b> מרשימת הסדרנים?",
                 keyboard=[["✅ כן, הסר", "❌ ביטול"]],
-                inline=True,
             )
             return (
                 response,
@@ -554,7 +549,6 @@ class StationOwnerStateHandler:
         response = MessageResponse(
             "אנא בחר:\n✅ כן, הסר\n❌ ביטול",
             keyboard=[["✅ כן, הסר", "❌ ביטול"]],
-            inline=True,
         )
         return response, StationOwnerState.CONFIRM_REMOVE_DISPATCHER.value, {}
 
@@ -864,7 +858,6 @@ class StationOwnerStateHandler:
                 f"⚠️ <b>אישור הסרה מרשימה שחורה</b>\n\n"
                 f"האם אתה בטוח שברצונך להסיר את <b>{escape(name)}</b> מהרשימה השחורה?",
                 keyboard=[["✅ כן, הסר", "❌ ביטול"]],
-                inline=True,
             )
             return (
                 response,
@@ -907,7 +900,6 @@ class StationOwnerStateHandler:
         response = MessageResponse(
             "אנא בחר:\n✅ כן, הסר\n❌ ביטול",
             keyboard=[["✅ כן, הסר", "❌ ביטול"]],
-            inline=True,
         )
         return response, StationOwnerState.CONFIRM_REMOVE_BLACKLIST.value, {}
 
