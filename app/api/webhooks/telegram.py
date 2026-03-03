@@ -843,8 +843,8 @@ async def send_telegram_message(
         if keyboard:
             inline_keyboard = await _build_inline_keyboard(keyboard)
 
-        # --- ניקוי reply keyboard ישן (פעם אחת לכל chat) ---
-        if not await _was_reply_keyboard_cleared(chat_id):
+        # --- ניקוי reply keyboard ישן (פעם אחת לכל chat, רק כשיש כפתורים) ---
+        if keyboard and not await _was_reply_keyboard_cleared(chat_id):
             placeholder_payload = {
                 "chat_id": chat_id,
                 "text": "\u200b",
