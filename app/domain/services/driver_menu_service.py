@@ -46,10 +46,10 @@ VEHICLE_TYPE_LABELS: dict[str, str] = {
 VEHICLE_TYPE_BY_LABEL: dict[str, str] = {v: k for k, v in VEHICLE_TYPE_LABELS.items()}
 
 TRIP_TYPE_LABELS: dict[str, str] = {
-    TripTypeFilter.LONG_DISTANCE.value: "מעל 100 ש״ח פנימיות ובינעירוני",
     TripTypeFilter.SHORT_DISTANCE.value: "מתחת ל 100 ש״ח פנימיות וקצרות",
-    TripTypeFilter.MEDIUM_DISTANCE.value: "משלוחים בלבד",
-    TripTypeFilter.RIDES.value: "נהגות בלבד",
+    TripTypeFilter.MEDIUM_DISTANCE.value: "טווח בינוני (15-50 ק״מ)",
+    TripTypeFilter.LONG_DISTANCE.value: "מעל 100 ש״ח פנימיות ובינעירוני",
+    TripTypeFilter.RIDES.value: "נסיעות נוסעים בלבד",
     TripTypeFilter.ANY_DISTANCE.value: "כל סוגי הנסיעות",
 }
 

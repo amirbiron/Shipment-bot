@@ -648,7 +648,7 @@ class TestDriverSettingsFlow:
 
         handler = DriverStateHandler(db_session, platform="telegram")
         response, new_state = await handler.handle_message(
-            user, "משלוחים בלבד", None
+            user, "טווח בינוני (15-50 ק״מ)", None
         )
 
         assert new_state == DriverState.SETTINGS_VIEW.value
