@@ -493,9 +493,9 @@ class DriverState(str, Enum):
 
 # מעברי מצבים לנהג — ריק בסשן 1, יתמלא בסשנים הבאים
 DRIVER_TRANSITIONS: dict[DriverState, list[DriverState]] = {
-    # מצבים ראשוניים → רישום
-    DriverState.INITIAL: [DriverState.REGISTER_COLLECT_NAME],
-    DriverState.NEW: [DriverState.REGISTER_COLLECT_NAME],
+    # מצבים ראשוניים → רישום / תפריט (נהג רשום חוזר)
+    DriverState.INITIAL: [DriverState.REGISTER_COLLECT_NAME, DriverState.MENU],
+    DriverState.NEW: [DriverState.REGISTER_COLLECT_NAME, DriverState.MENU],
 
     # רישום (סשן 2)
     DriverState.REGISTER_COLLECT_NAME: [DriverState.REGISTER_COLLECT_BIRTH_DATE],
