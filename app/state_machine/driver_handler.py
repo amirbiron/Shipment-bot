@@ -1,5 +1,5 @@
 """
-Driver State Handler — זרימת רישום, אימות, תפריט, הגדרות וחיפוש נהג (iDriver סשנים 2-6)
+Driver State Handler — זרימת רישום, אימות, תפריט, הגדרות וחיפוש נהג (iDriver סשנים 2-7)
 
 מנהל את מכונת המצבים של רישום נהג חדש:
 1. REGISTER_COLLECT_NAME — שם מלא
@@ -32,6 +32,10 @@ Driver State Handler — זרימת רישום, אימות, תפריט, הגדר
 20. פקודת "ה" — חידוש חיפושים מושהים
 21. פקודת "מ" — מחיקת חיפוש בודד (רשימה לבחירה)
 22. פקודת "ממ" — מחיקת כל החיפושים (עם אישור)
+
+פרסום נסיעות + מחירון (סשן 7):
+23. פרסום נסיעה חופשית — "בב ים 5 מק 150 ש״ח"
+24. פקודת "מחירון" — "מחירון בב ים"
 """
 
 from datetime import time as time_type
@@ -63,6 +67,8 @@ from app.domain.services.driver_menu_service import (
 )
 from app.domain.services.driver_search_service import DriverSearchService
 from app.domain.services.city_abbreviation_service import CityAbbreviationService
+from app.domain.services.ride_posting_service import RidePostingService
+from app.domain.services.pricing_service import PricingService
 from app.db.models.driver_search import MAX_ACTIVE_SEARCHES_PER_USER, DriverSearchStatus
 from sqlalchemy import select
 from app.core.exceptions import ValidationException, NotFoundException
@@ -115,7 +121,8 @@ class DriverStateHandler:
 
     מטפל בשלבי הרישום (סשן 2), אימות חרדי (סשן 3),
     תפריט ראשי והגדרות חיפוש (סשן 4), חיפוש נסיעות (סשן 5),
-    וניהול חיפושים + סשן 24 שעות (סשן 6).
+    ניהול חיפושים + סשן 24 שעות (סשן 6),
+    ופרסום נסיעות + מחירון (סשן 7).
     """
 
     def __init__(self, db: AsyncSession, platform: str = "telegram"):
@@ -129,6 +136,8 @@ class DriverStateHandler:
         # סשן 6 — ניהול סשנים
         from app.domain.services.driver_session_service import DriverSessionService
         self.session_service = DriverSessionService(db)
+        # סשן 7 — פרסום נסיעות + מחירון
+        self.ride_posting_service = RidePostingService(db)
 
     def _is_registration_flow_state(self, state: str) -> bool:
         """בודק אם המצב שייך לזרימת רישום או אימות (לניקוי קונטקסט)"""
@@ -712,6 +721,8 @@ class DriverStateHandler:
         - "פ <מוצא> <יעד>" → חיפוש ממוצא ליעד
         - "פ א <יעד>" → חיפוש אזורי
         - "פ מיקום" → חיפוש לפי מיקום GPS
+        - "<מוצא> <יעד> <מקומות> מק <מחיר> ש״ח" → פרסום נסיעה (סשן 7)
+        - "מחירון <מוצא> <יעד>" → מחירון (סשן 7)
         - "מילון" → רשימת קיצורי ערים
         """
         msg = message.strip()
@@ -719,6 +730,14 @@ class DriverStateHandler:
         # פקודת חיפוש — "פ ..."
         if CityAbbreviationService.is_search_command(msg):
             return await self._handle_search_command(user, msg)
+
+        # סשן 7: פקודת מחירון — "מחירון ..." (לפני פקודות חד-אותיות)
+        if PricingService.is_pricing_command(msg):
+            return self._handle_pricing_command(msg)
+
+        # סשן 7: פרסום נסיעה — "<מוצא> <יעד> <מקומות> מק <מחיר>"
+        if RidePostingService.is_ride_posting(msg):
+            return await self._handle_ride_posting(user, msg)
 
         # סשן 6: פקודת השהיית חיפושים — "ע"
         if msg == "ע":
@@ -774,6 +793,11 @@ class DriverStateHandler:
                 "🔹 <b>מ</b> — מחיקת חיפוש בודד\n"
                 "🔹 <b>ממ</b> — מחיקת כל החיפושים\n"
                 "🔹 <b>מילון</b> — רשימת קיצורי ערים\n\n"
+                "🚗 <b>פרסום נסיעה</b>\n"
+                "🔹 <b>בב ים 5 מק 150 ש״ח</b> — פרסום נסיעה חופשית\n"
+                "   (מוצא, יעד, מקומות, מחיר)\n\n"
+                "💰 <b>מחירון</b>\n"
+                "🔹 <b>מחירון בב ים</b> — מחיר מומלץ למסלול\n\n"
                 "📋 לחזרה לתפריט שלח 'ת'"
             ),
             keyboard=[["🔙 חזרה לתפריט"]],
@@ -790,6 +814,99 @@ class DriverStateHandler:
                 "💡 אפשר גם לכתוב את שם העיר המלא.\n"
                 "📋 לחזרה לתפריט שלח 'ת'"
             ),
+            keyboard=[["🔙 חזרה לתפריט"]],
+        )
+        return response, DriverState.MENU.value, {}
+
+    # ==================== סשן 7: פרסום נסיעות + מחירון ====================
+
+    async def _handle_ride_posting(
+        self, user: User, text: str
+    ) -> Tuple[MessageResponse, str, dict]:
+        """
+        טיפול בפרסום נסיעה חופשית.
+
+        פורמט: "<מוצא> <יעד> <מקומות> מק <מחיר> ש״ח"
+        למשל: "בב ים 5 מק 150 ש״ח"
+        """
+        posting = RidePostingService.parse_ride_posting(text)
+        if not posting:
+            response = MessageResponse(
+                text=(
+                    "❌ <b>פורמט פרסום לא תקין</b>\n\n"
+                    "פורמט נכון:\n"
+                    "<code>בב ים 5 מק 150 ש״ח</code>\n\n"
+                    "📍 מוצא + יעד (קיצור או שם מלא)\n"
+                    "👥 מספר מקומות + מק\n"
+                    "💰 מחיר בש\"ח\n\n"
+                    "📋 לחזרה לתפריט שלח 'ת'"
+                ),
+                keyboard=[["🔙 חזרה לתפריט"]],
+            )
+            return response, DriverState.MENU.value, {}
+
+        success, message, sent_count = await self.ride_posting_service.post_ride(
+            user, posting
+        )
+
+        if sent_count > 0:
+            confirmation = (
+                f"✅ <b>הנסיעה פורסמה בהצלחה!</b>\n\n"
+                f"{message}\n"
+                f"📢 פורסם ב-{sent_count} קבוצות.\n\n"
+                f"📋 לחזרה לתפריט שלח 'ת'"
+            )
+        else:
+            confirmation = (
+                f"⚠️ <b>לא נמצאו קבוצות רלוונטיות</b>\n\n"
+                f"{message}\n"
+                f"לא נמצאו קבוצות מתאימות למסלול "
+                f"{escape(posting.origin)} → {escape(posting.destination)}.\n"
+                f"הנסיעה לא פורסמה.\n\n"
+                f"📋 לחזרה לתפריט שלח 'ת'"
+            )
+
+        response = MessageResponse(
+            text=confirmation,
+            keyboard=[["🔙 חזרה לתפריט"]],
+        )
+        return response, DriverState.MENU.value, {}
+
+    def _handle_pricing_command(
+        self, text: str
+    ) -> Tuple[MessageResponse, str, dict]:
+        """
+        טיפול בפקודת מחירון.
+
+        פורמט: "מחירון <מוצא> <יעד>"
+        למשל: "מחירון בב ים"
+        """
+        parsed = PricingService.parse_pricing_command(text)
+        if not parsed:
+            response = MessageResponse(
+                text=(
+                    "❌ <b>פורמט מחירון לא תקין</b>\n\n"
+                    "פורמט נכון:\n"
+                    "<code>מחירון בב ים</code>\n\n"
+                    "📍 מוצא + יעד (קיצור או שם מלא)\n\n"
+                    "📋 לחזרה לתפריט שלח 'ת'"
+                ),
+                keyboard=[["🔙 חזרה לתפריט"]],
+            )
+            return response, DriverState.MENU.value, {}
+
+        origin, destination = parsed
+        estimate = PricingService.get_price_estimate(origin, destination)
+
+        if estimate:
+            text_response = PricingService.format_price_response(estimate)
+        else:
+            text_response = PricingService.format_not_found_response(
+                origin, destination
+            )
+
+        response = MessageResponse(
+            text=text_response,
             keyboard=[["🔙 חזרה לתפריט"]],
         )
         return response, DriverState.MENU.value, {}
