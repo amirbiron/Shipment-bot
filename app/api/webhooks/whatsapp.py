@@ -850,6 +850,13 @@ async def _route_to_role_menu_wa(
         return await _sender_fallback_wa(user, db, state_manager)
 
     if user.role == UserRole.DRIVER:
+        from app.state_machine.driver_handler import DriverStateHandler
+        from app.domain.services.driver_session_service import DriverSessionService
+
+        # סשן 6: עדכון פעילות אחרונה — גם לנהג-סדרן
+        session_service = DriverSessionService(db)
+        await session_service.touch_session(user.id)
+
         # סשן 9: בדיקה אם הנהג הוא גם סדרן פעיל בתחנה
         from app.domain.services.station_service import StationService
 
@@ -861,14 +868,6 @@ async def _route_to_role_menu_wa(
             )
             handler = DispatcherStateHandler(db, dispatcher_station.id, platform="whatsapp")
             return await handler.handle_message(user, "תפריט", None)
-
-        # iDriver — ניתוב נהג ל-handler (סשנים 2-7)
-        from app.state_machine.driver_handler import DriverStateHandler
-        from app.domain.services.driver_session_service import DriverSessionService
-
-        # סשן 6: עדכון פעילות אחרונה
-        session_service = DriverSessionService(db)
-        await session_service.touch_session(user.id)
 
         await state_manager.force_state(
             user.id, "whatsapp", DriverState.INITIAL.value, context={}
@@ -1435,8 +1434,17 @@ async def whatsapp_webhook(
                     continue
     
     
+                # סשן 9: DRIVER מוחרג רק כשנמצא בזרימת סדרן — נהג רגיל מקבל reset רגיל
+                _driver_in_dispatcher_flow = (
+                    user.role == UserRole.DRIVER
+                    and isinstance(_current_state_value, str)
+                    and _current_state_value.startswith("DISPATCHER.")
+                )
                 if "חזרה לתפריט" in text and (
-                    user.role not in (UserRole.COURIER, UserRole.STATION_OWNER, UserRole.DRIVER)
+                    (
+                        user.role not in (UserRole.COURIER, UserRole.STATION_OWNER)
+                        and not _driver_in_dispatcher_flow
+                    )
                     or _admin_root_menu
                 ):
                     # כפתור "חזרה לתפריט" - שולחים רגילים חוזרים לתפריט הראשי
