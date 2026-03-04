@@ -180,14 +180,22 @@ async def _resolve_inline_button_mapping(
         return None
 
 
-async def _get_pending_rejection(admin_chat_id: str) -> int | None:
-    """מחזיר courier_id אם יש דחייה ממתינה ב-Redis, אחרת None."""
+async def _get_pending_rejection(
+    admin_chat_id: str,
+) -> tuple[str, int] | None:
+    """מחזיר (target_type, target_id) אם יש דחייה ממתינה ב-Redis, אחרת None."""
     try:
         from app.core.redis_client import get_redis
 
         r = await get_redis()
         val = await r.get(_rejection_key(admin_chat_id))
-        return int(val) if val is not None else None
+        if val is None:
+            return None
+        decoded = val if isinstance(val, str) else val.decode()
+        if ":" in decoded:
+            target_type, target_id_str = decoded.split(":", 1)
+            return target_type, int(target_id_str)
+        return "courier", int(decoded)
     except Exception as e:
         logger.error(
             "Redis get failed for pending rejection",
@@ -199,8 +207,16 @@ async def _get_pending_rejection(admin_chat_id: str) -> int | None:
         return None
 
 
-async def _set_pending_rejection(admin_chat_id: str, courier_id: int) -> bool:
-    """שומר דחייה ממתינה ב-Redis עם TTL. מחזיר False אם Redis נכשל."""
+async def _set_pending_rejection(
+    admin_chat_id: str, target_id: int, target_type: str = "courier"
+) -> bool:
+    """שומר דחייה ממתינה ב-Redis עם TTL. מחזיר False אם Redis נכשל.
+
+    Args:
+        admin_chat_id: מזהה צ'אט המנהל
+        target_id: מזהה המשתמש (שליח או נהג)
+        target_type: סוג היעד — "courier" או "driver"
+    """
     try:
         from app.core.redis_client import get_redis
 
@@ -208,7 +224,7 @@ async def _set_pending_rejection(admin_chat_id: str, courier_id: int) -> bool:
         await r.setex(
             _rejection_key(admin_chat_id),
             settings.REDIS_PENDING_REJECTION_TTL,
-            str(courier_id),
+            f"{target_type}:{target_id}",
         )
         return True
     except Exception as e:
@@ -216,21 +232,35 @@ async def _set_pending_rejection(admin_chat_id: str, courier_id: int) -> bool:
             "Redis set failed for pending rejection",
             extra_data={
                 "admin_chat_id": admin_chat_id,
-                "courier_id": courier_id,
+                "target_id": target_id,
+                "target_type": target_type,
                 "error": str(e),
             },
         )
         return False
 
 
-async def _pop_pending_rejection(admin_chat_id: str) -> int | None:
-    """מחזיר courier_id ומוחק את הרשומה מ-Redis (אטומי עם GETDEL), או None."""
+async def _pop_pending_rejection(
+    admin_chat_id: str,
+) -> tuple[str, int] | None:
+    """מחזיר (target_type, target_id) ומוחק מ-Redis, או None.
+
+    Returns:
+        tuple של (סוג — "courier"/"driver", מזהה משתמש) או None
+    """
     try:
         from app.core.redis_client import get_redis
 
         r = await get_redis()
         val = await r.getdel(_rejection_key(admin_chat_id))
-        return int(val) if val is not None else None
+        if val is None:
+            return None
+        decoded = val if isinstance(val, str) else val.decode()
+        # תמיכה בפורמט ישן (מספר בלבד) — ברירת מחדל courier
+        if ":" in decoded:
+            target_type, target_id_str = decoded.split(":", 1)
+            return target_type, int(target_id_str)
+        return "courier", int(decoded)
     except Exception as e:
         logger.error(
             "Redis pop failed for pending rejection",
@@ -257,6 +287,126 @@ async def _clear_pending_rejection(admin_chat_id: str) -> None:
                 "error": str(e),
             },
         )
+
+
+def _build_driver_rejection_context(
+    user: User,
+    profile: object,
+) -> dict:
+    """בונה קונטקסט רישום מפרופיל נהג קיים — כדי שכרטיס הנהג יוצג תקין אחרי דחייה."""
+    from datetime import date as _date
+
+    ctx: dict = {
+        "reg_name": user.full_name or user.name or "לא צוין",
+    }
+    if hasattr(profile, "birth_date") and profile.birth_date:
+        today = _date.today()
+        bd = profile.birth_date
+        age = today.year - bd.year - ((today.month, today.day) < (bd.month, bd.day))
+        ctx["reg_age"] = str(age)
+    if hasattr(profile, "vehicle_description") and profile.vehicle_description:
+        ctx["reg_vehicle"] = profile.vehicle_description
+    return ctx
+
+
+async def _apply_driver_decision_side_effects(
+    db: AsyncSession,
+    background_tasks: BackgroundTasks | None,
+    driver_user_id: int,
+    decision: str,
+    admin_name: str,
+    user: User,
+    profile: object,
+    rejection_note: str | None = None,
+) -> None:
+    """פעולות צד לאחר אישור/דחיית נהג — עדכון state, הודעה לנהג, סיכום למנהלים.
+
+    מרכז את הלוגיקה המשותפת לכל נתיבי ההחלטה (callback, הערת דחייה, פקודת טקסט, כשל Redis)
+    כדי למנוע כפילויות ואי-עקביות. משמש גם מ-whatsapp.py.
+
+    אם background_tasks=None, הפעולות מבוצעות באופן סינכרוני (await ישיר).
+    """
+    from app.api.webhooks.whatsapp import send_whatsapp_message
+    from app.domain.services.admin_notification_service import (
+        AdminNotificationService,
+    )
+
+    async def _dispatch(fn: Callable, *args: object) -> None:
+        """מפעיל פונקציה כ-background task או await ישיר."""
+        if background_tasks is not None:
+            background_tasks.add_task(fn, *args)
+        else:
+            await fn(*args)
+
+    state_manager = StateManager(db)
+
+    if decision == "approved":
+        # עדכון מצב הנהג ל-MENU
+        for plat in ("telegram", "whatsapp"):
+            await state_manager.force_state(
+                driver_user_id, plat, DriverState.MENU.value, context={}
+            )
+
+        # הודעה לנהג
+        tg_msg = (
+            "🎉 <b>האימות שלך אושר!</b>\n\n"
+            "ברוך הבא ל-iDriver!\n"
+            "כתוב <b>תפריט</b> כדי להתחיל."
+        )
+        if user.telegram_chat_id:
+            await _dispatch(send_telegram_message, str(user.telegram_chat_id), tg_msg)
+        elif (
+            user.phone_number
+            and not user.phone_number.startswith("tg:")
+            and not user.phone_number.endswith("@g.us")
+        ):
+            wa_msg = (
+                "🎉 *האימות שלך אושר!*\n\n"
+                "ברוך הבא ל-iDriver!\n"
+                "כתוב *תפריט* כדי להתחיל."
+            )
+            await _dispatch(send_whatsapp_message, user.phone_number, wa_msg)
+    else:
+        # דחייה — עדכון מצב חזרה ל-VERIFY_COLLECT_SELFIE עם קונטקסט רישום
+        rej_ctx = _build_driver_rejection_context(user, profile)
+        for plat in ("telegram", "whatsapp"):
+            await state_manager.force_state(
+                driver_user_id, plat,
+                DriverState.VERIFY_COLLECT_SELFIE.value,
+                context=rej_ctx,
+            )
+
+        # הודעה לנהג
+        rej_reason_text = f"\nסיבה: {rejection_note}" if rejection_note else ""
+        if user.telegram_chat_id:
+            await _dispatch(
+                send_telegram_message,
+                str(user.telegram_chat_id),
+                f"😔 <b>האימות שלך נדחה.</b>{rej_reason_text}\nתוכל לנסות שוב.",
+            )
+        elif (
+            user.phone_number
+            and not user.phone_number.startswith("tg:")
+            and not user.phone_number.endswith("@g.us")
+        ):
+            await _dispatch(
+                send_whatsapp_message,
+                user.phone_number,
+                f"😔 *האימות שלך נדחה.*{rej_reason_text}\nתוכל לנסות שוב.",
+            )
+
+    # סיכום לקבוצת מנהלים
+    await _dispatch(
+        AdminNotificationService.notify_group_driver_decision,
+        driver_user_id,
+        user.full_name or user.name or "לא צוין",
+        getattr(profile, "dress_code", None) or "לא צוין",
+        getattr(profile, "vehicle_description", None) or "לא צוין",
+        user.platform or "telegram",
+        decision,
+        admin_name,
+        rejection_note,
+    )
 
 
 _SenderButtonHandler: TypeAlias = Callable[
@@ -1137,15 +1287,16 @@ async def telegram_webhook(
                 else:
                     # דחייה — אם יש כבר דחייה ממתינה (לחץ על דחייה פעמיים ברצף),
                     # מוחקים אטומית עם pop כדי שכשל ב-_set לא ישאיר ערך ישן
-                    prev_id = await _pop_pending_rejection(send_chat_id)
-                    if prev_id is not None:
+                    prev = await _pop_pending_rejection(send_chat_id)
+                    if prev is not None:
+                        _, prev_id = prev
                         background_tasks.add_task(
                             send_telegram_message,
                             send_chat_id,
-                            f"⚠️ הדחייה הקודמת (נהג {prev_id}) בוטלה. ממתין להערה על נהג {courier_id}.",
+                            f"⚠️ הדחייה הקודמת ({prev_id}) בוטלה. ממתין להערה על שליח {courier_id}.",
                         )
 
-                    saved = await _set_pending_rejection(send_chat_id, courier_id)
+                    saved = await _set_pending_rejection(send_chat_id, courier_id, target_type="courier")
                     if not saved:
                         # Redis נכשל — דוחים ישירות ללא הערה כדי לא לאבד את הפעולה
                         result = await CourierApprovalService.reject(db, courier_id)
@@ -1190,6 +1341,101 @@ async def telegram_webhook(
 
             logger.warning(
                 "Non-admin clicked approval button",
+                extra_data={"clicker_id": clicker_id, "chat_id": send_chat_id},
+            )
+            return {"ok": True}
+
+    # טיפול בכפתורי אישור/דחיית נהג iDriver (מנהלים בלבד)
+    if event.is_callback:
+        driver_action = re.match(r"^(approve|reject)_driver_(\d+)$", text)
+        if driver_action:
+            clicker_id = telegram_user_id
+            admin_ids = {
+                cid.strip()
+                for cid in settings.TELEGRAM_ADMIN_CHAT_IDS.split(",")
+                if cid.strip()
+            }
+            if settings.TELEGRAM_ADMIN_CHAT_ID:
+                admin_ids.add(settings.TELEGRAM_ADMIN_CHAT_ID)
+
+            if clicker_id and clicker_id in admin_ids:
+                action = driver_action.group(1)
+                driver_user_id = int(driver_action.group(2))
+                admin_name = name or "מנהל"
+
+                from app.domain.services.driver_verification_service import (
+                    DriverVerificationService,
+                )
+
+                if action == "approve":
+                    # ניקוי דחייה ממתינה
+                    await _clear_pending_rejection(send_chat_id)
+
+                    result = await DriverVerificationService.approve_driver(
+                        db, driver_user_id
+                    )
+                    background_tasks.add_task(
+                        send_telegram_message, send_chat_id, result.message
+                    )
+
+                    if result.success and result.user and result.profile:
+                        await _apply_driver_decision_side_effects(
+                            db, background_tasks, driver_user_id, "approved",
+                            admin_name, result.user, result.profile,
+                        )
+                else:
+                    # דחייה — אותו תהליך כמו שליחים (Redis + הערה)
+                    prev = await _pop_pending_rejection(send_chat_id)
+                    if prev is not None:
+                        _, prev_id = prev
+                        background_tasks.add_task(
+                            send_telegram_message,
+                            send_chat_id,
+                            f"⚠️ הדחייה הקודמת ({prev_id}) בוטלה. ממתין לסיבת דחייה על נהג {driver_user_id}.",
+                        )
+
+                    saved = await _set_pending_rejection(send_chat_id, driver_user_id, target_type="driver")
+                    if not saved:
+                        result = await DriverVerificationService.reject_driver(
+                            db, driver_user_id
+                        )
+                        background_tasks.add_task(
+                            send_telegram_message,
+                            send_chat_id,
+                            f"⚠️ שגיאת מערכת — הדחייה בוצעה ללא הערה.\n{result.message}",
+                        )
+                        if result.success and result.user and result.profile:
+                            await _apply_driver_decision_side_effects(
+                                db, background_tasks, driver_user_id, "rejected",
+                                admin_name, result.user, result.profile,
+                            )
+
+                        return {
+                            "ok": True,
+                            "admin_action": "reject_driver_immediate_redis_fail",
+                            "driver_user_id": driver_user_id,
+                        }
+
+                    background_tasks.add_task(
+                        send_telegram_message,
+                        send_chat_id,
+                        f"📝 כתוב סיבת דחייה לנהג {driver_user_id}"
+                        " (או שלח <b>ללא</b> לדחייה ללא סיבה):"
+                        "\n⏱ יש לך 5 דקות לשלוח סיבה.",
+                    )
+
+                return {
+                    "ok": True,
+                    "admin_action": (
+                        "reject_driver_pending_note"
+                        if action == "reject"
+                        else f"approve_driver"
+                    ),
+                    "driver_user_id": driver_user_id,
+                }
+
+            logger.warning(
+                "Non-admin clicked driver approval button",
                 extra_data={"clicker_id": clicker_id, "chat_id": send_chat_id},
             )
             return {"ok": True}
@@ -1270,33 +1516,254 @@ async def telegram_webhook(
             }
 
     # טיפול בהערת דחייה ממתינה — מנהל שלחץ "❌ דחה" ושלח הערה
-    pending_courier_id = (
+    pending_rejection = (
         (await _pop_pending_rejection(send_chat_id)) if not event.is_callback else None
     )
-    if pending_courier_id is not None:
+    if pending_rejection is not None:
+        target_type, target_id = pending_rejection
         admin_name = name or "מנהל"
         stripped = text.strip()
         rejection_note = stripped if stripped and stripped != "ללא" else None
 
-        result = await CourierApprovalService.reject(
-            db, pending_courier_id, rejection_note=rejection_note
-        )
-        background_tasks.add_task(send_telegram_message, send_chat_id, result.message)
-
-        if result.success and result.user:
-            from app.api.webhooks.whatsapp import send_whatsapp_message
-
-            background_tasks.add_task(
-                CourierApprovalService.notify_after_decision,
-                result.user,
-                "reject",
-                admin_name,
-                send_telegram_fn=send_telegram_message,
-                send_whatsapp_fn=send_whatsapp_message,
-                rejection_note=rejection_note,
+        if target_type == "driver":
+            # דחיית נהג iDriver
+            from app.domain.services.driver_verification_service import (
+                DriverVerificationService,
             )
 
-        return {"ok": True, "admin_action": "reject", "courier_id": pending_courier_id}
+            result = await DriverVerificationService.reject_driver(
+                db, target_id, rejection_reason=rejection_note
+            )
+            background_tasks.add_task(
+                send_telegram_message, send_chat_id, result.message
+            )
+
+            if result.success and result.user and result.profile:
+                await _apply_driver_decision_side_effects(
+                    db, background_tasks, target_id, "rejected",
+                    admin_name, result.user, result.profile, rejection_note,
+                )
+
+            return {
+                "ok": True,
+                "admin_action": "reject_driver",
+                "driver_user_id": target_id,
+            }
+        else:
+            # דחיית שליח (courier) — ברירת מחדל
+            result = await CourierApprovalService.reject(
+                db, target_id, rejection_note=rejection_note
+            )
+            background_tasks.add_task(
+                send_telegram_message, send_chat_id, result.message
+            )
+
+            if result.success and result.user:
+                from app.api.webhooks.whatsapp import send_whatsapp_message
+
+                background_tasks.add_task(
+                    CourierApprovalService.notify_after_decision,
+                    result.user,
+                    "reject",
+                    admin_name,
+                    send_telegram_fn=send_telegram_message,
+                    send_whatsapp_fn=send_whatsapp_message,
+                    rejection_note=rejection_note,
+                )
+
+            return {
+                "ok": True,
+                "admin_action": "reject",
+                "courier_id": target_id,
+            }
+
+    # טיפול בפקודות טקסט של מנהלים בקבוצה (fallback כשאין כפתורים)
+    # תומך ב: "אשר נהג 123", "דחה נהג 456", "אשר שליח 789" וכו'
+    if not event.is_callback and text:
+        admin_ids_text = {
+            cid.strip()
+            for cid in settings.TELEGRAM_ADMIN_CHAT_IDS.split(",")
+            if cid.strip()
+        }
+        if settings.TELEGRAM_ADMIN_CHAT_ID:
+            admin_ids_text.add(settings.TELEGRAM_ADMIN_CHAT_ID)
+
+        if telegram_user_id and telegram_user_id in admin_ids_text:
+            from app.api.webhooks.whatsapp import _match_approval_command
+
+            parsed = _match_approval_command(text)
+            if parsed:
+                action, target_id_parsed, target_type, rejection_note = parsed
+                admin_name_text = name or "מנהל"
+
+                if target_type == "driver":
+                    from app.domain.services.driver_verification_service import (
+                        DriverVerificationService,
+                    )
+
+                    if action == "approve":
+                        result = await DriverVerificationService.approve_driver(
+                            db, target_id_parsed
+                        )
+                        background_tasks.add_task(
+                            send_telegram_message, send_chat_id, result.message
+                        )
+
+                        if result.success and result.user and result.profile:
+                            await _apply_driver_decision_side_effects(
+                                db, background_tasks, target_id_parsed, "approved",
+                                admin_name_text, result.user, result.profile,
+                            )
+                    else:
+                        # דחייה — שמירה ב-Redis כדי לחכות להערה, או דחייה ישירה עם הערה
+                        if rejection_note:
+                            result = await DriverVerificationService.reject_driver(
+                                db, target_id_parsed, rejection_reason=rejection_note
+                            )
+                            background_tasks.add_task(
+                                send_telegram_message, send_chat_id, result.message
+                            )
+
+                            if result.success and result.user and result.profile:
+                                await _apply_driver_decision_side_effects(
+                                    db, background_tasks, target_id_parsed, "rejected",
+                                    admin_name_text, result.user, result.profile,
+                                    rejection_note,
+                                )
+                        else:
+                            # ללא הערה — שמירה ב-Redis לחכות לסיבה
+                            prev = await _pop_pending_rejection(send_chat_id)
+                            if prev is not None:
+                                _, prev_id = prev
+                                background_tasks.add_task(
+                                    send_telegram_message,
+                                    send_chat_id,
+                                    f"⚠️ הדחייה הקודמת ({prev_id}) בוטלה. ממתין לסיבת דחייה על נהג {target_id_parsed}.",
+                                )
+
+                            saved = await _set_pending_rejection(
+                                send_chat_id, target_id_parsed, target_type="driver"
+                            )
+                            if saved:
+                                background_tasks.add_task(
+                                    send_telegram_message,
+                                    send_chat_id,
+                                    f"📝 כתוב סיבת דחייה לנהג {target_id_parsed}"
+                                    " (או שלח <b>ללא</b> לדחייה ללא סיבה):"
+                                    "\n⏱ יש לך 5 דקות לשלוח סיבה.",
+                                )
+                            else:
+                                # כשל Redis — דחייה מיידית ללא הערה
+                                result = await DriverVerificationService.reject_driver(
+                                    db, target_id_parsed
+                                )
+                                background_tasks.add_task(
+                                    send_telegram_message,
+                                    send_chat_id,
+                                    f"⚠️ שגיאת מערכת — הדחייה בוצעה ללא הערה.\n{result.message}",
+                                )
+                                if result.success and result.user and result.profile:
+                                    await _apply_driver_decision_side_effects(
+                                        db, background_tasks, target_id_parsed,
+                                        "rejected", admin_name_text,
+                                        result.user, result.profile,
+                                    )
+
+                    return {
+                        "ok": True,
+                        "admin_action": f"{action}_driver_text_command",
+                        "driver_user_id": target_id_parsed,
+                    }
+
+                else:
+                    # שליח (courier) — ניתוב לשירות הקיים
+                    if action == "approve":
+                        await _clear_pending_rejection(send_chat_id)
+                        result = await CourierApprovalService.approve(db, target_id_parsed)
+                        background_tasks.add_task(
+                            send_telegram_message, send_chat_id, result.message
+                        )
+
+                        if result.success and result.user:
+                            from app.api.webhooks.whatsapp import send_whatsapp_message
+
+                            background_tasks.add_task(
+                                CourierApprovalService.notify_after_decision,
+                                result.user,
+                                action,
+                                admin_name_text,
+                                send_telegram_fn=send_telegram_message,
+                                send_whatsapp_fn=send_whatsapp_message,
+                            )
+                    else:
+                        if rejection_note:
+                            result = await CourierApprovalService.reject(
+                                db, target_id_parsed, rejection_note=rejection_note
+                            )
+                            background_tasks.add_task(
+                                send_telegram_message, send_chat_id, result.message
+                            )
+
+                            if result.success and result.user:
+                                from app.api.webhooks.whatsapp import send_whatsapp_message
+
+                                background_tasks.add_task(
+                                    CourierApprovalService.notify_after_decision,
+                                    result.user,
+                                    "reject",
+                                    admin_name_text,
+                                    send_telegram_fn=send_telegram_message,
+                                    send_whatsapp_fn=send_whatsapp_message,
+                                    rejection_note=rejection_note,
+                                )
+                        else:
+                            prev = await _pop_pending_rejection(send_chat_id)
+                            if prev is not None:
+                                _, prev_id = prev
+                                background_tasks.add_task(
+                                    send_telegram_message,
+                                    send_chat_id,
+                                    f"⚠️ הדחייה הקודמת ({prev_id}) בוטלה. ממתין לסיבת דחייה על שליח {target_id_parsed}.",
+                                )
+
+                            saved = await _set_pending_rejection(
+                                send_chat_id, target_id_parsed, target_type="courier"
+                            )
+                            if saved:
+                                background_tasks.add_task(
+                                    send_telegram_message,
+                                    send_chat_id,
+                                    f"📝 כתוב הערת דחייה לשליח {target_id_parsed}"
+                                    " (או שלח <b>ללא</b> לדחייה ללא הערה):"
+                                    "\n⏱ יש לך 5 דקות לשלוח הערה.",
+                                )
+                            else:
+                                # כשל Redis — דחייה מיידית ללא הערה
+                                result = await CourierApprovalService.reject(
+                                    db, target_id_parsed
+                                )
+                                background_tasks.add_task(
+                                    send_telegram_message,
+                                    send_chat_id,
+                                    f"⚠️ שגיאת מערכת — הדחייה בוצעה ללא הערה.\n{result.message}",
+                                )
+                                if result.success and result.user:
+                                    from app.api.webhooks.whatsapp import send_whatsapp_message
+
+                                    background_tasks.add_task(
+                                        CourierApprovalService.notify_after_decision,
+                                        result.user,
+                                        "reject",
+                                        admin_name_text,
+                                        send_telegram_fn=send_telegram_message,
+                                        send_whatsapp_fn=send_whatsapp_message,
+                                    )
+
+                    return {
+                        "ok": True,
+                        "admin_action": f"{action}_courier_text_command",
+                        "courier_id": target_id_parsed,
+                    }
 
     # Get or create user (מזהה לפי from_user.id כשאפשר)
     user, is_new_user = await get_or_create_user(db, telegram_user_id, name)

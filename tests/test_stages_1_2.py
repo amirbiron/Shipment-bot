@@ -945,19 +945,19 @@ class TestWhatsAppAdminApproval:
         from app.api.webhooks.whatsapp import _match_approval_command
 
         # אישור
-        assert _match_approval_command("אשר 123") == ("approve", 123, None)
-        assert _match_approval_command("✅ אשר 456") == ("approve", 456, None)
-        assert _match_approval_command("אשר שליח 789") == ("approve", 789, None)
+        assert _match_approval_command("אשר 123") == ("approve", 123, "courier", None)
+        assert _match_approval_command("✅ אשר 456") == ("approve", 456, "courier", None)
+        assert _match_approval_command("אשר שליח 789") == ("approve", 789, "courier", None)
 
         # דחייה
-        assert _match_approval_command("דחה 123") == ("reject", 123, None)
-        assert _match_approval_command("❌ דחה 456") == ("reject", 456, None)
-        assert _match_approval_command("דחה שליח 789") == ("reject", 789, None)
+        assert _match_approval_command("דחה 123") == ("reject", 123, "courier", None)
+        assert _match_approval_command("❌ דחה 456") == ("reject", 456, "courier", None)
+        assert _match_approval_command("דחה שליח 789") == ("reject", 789, "courier", None)
 
         # דחייה עם הערה
-        assert _match_approval_command("דחה 123 התמונות לא ברורות") == ("reject", 123, "התמונות לא ברורות")
-        assert _match_approval_command("❌ דחה שליח 456 חסר מסמך") == ("reject", 456, "חסר מסמך")
-        assert _match_approval_command("דחייה 789 צריך לשלוח תמונה חדשה") == ("reject", 789, "צריך לשלוח תמונה חדשה")
+        assert _match_approval_command("דחה 123 התמונות לא ברורות") == ("reject", 123, "courier", "התמונות לא ברורות")
+        assert _match_approval_command("❌ דחה שליח 456 חסר מסמך") == ("reject", 456, "courier", "חסר מסמך")
+        assert _match_approval_command("דחייה 789 צריך לשלוח תמונה חדשה") == ("reject", 789, "courier", "צריך לשלוח תמונה חדשה")
 
         # לא תקין
         assert _match_approval_command("שלום") is None
@@ -1090,7 +1090,7 @@ class TestRejectionNote:
             # הנהג עדיין לא נדחה - ממתינים להערה ב-Redis
             key = f"{_PENDING_REJECTION_KEY_PREFIX}{admin_chat_id}"
             stored = await fake_redis.get(key)
-            assert stored == str(courier.id)
+            assert stored == f"courier:{courier.id}"
 
     @pytest.mark.asyncio
     async def test_whatsapp_reject_with_note(self):
@@ -1099,7 +1099,7 @@ class TestRejectionNote:
 
         result = _match_approval_command("דחה 123 התמונות לא ברורות")
         assert result is not None
-        action, user_id, note = result
+        action, user_id, target_type, note = result
         assert action == "reject"
         assert user_id == 123
         assert note == "התמונות לא ברורות"
@@ -1111,7 +1111,7 @@ class TestRejectionNote:
 
         result = _match_approval_command("דחה 123")
         assert result is not None
-        action, user_id, note = result
+        action, user_id, target_type, note = result
         assert action == "reject"
         assert user_id == 123
         assert note is None
@@ -1149,9 +1149,9 @@ class TestRejectionNote:
             _get_pending_rejection,
         )
 
-        await _set_pending_rejection("admin_123", 555)
+        await _set_pending_rejection("admin_123", 555, target_type="courier")
         result = await _get_pending_rejection("admin_123")
-        assert result == 555
+        assert result == ("courier", 555)
 
     @pytest.mark.asyncio
     async def test_redis_pop_returns_and_deletes(self, fake_redis):
@@ -1162,9 +1162,9 @@ class TestRejectionNote:
             _get_pending_rejection,
         )
 
-        await _set_pending_rejection("admin_pop", 777)
+        await _set_pending_rejection("admin_pop", 777, target_type="courier")
         result = await _pop_pending_rejection("admin_pop")
-        assert result == 777
+        assert result == ("courier", 777)
         # הרשומה נמחקה
         assert await _get_pending_rejection("admin_pop") is None
 
@@ -1287,7 +1287,7 @@ class TestRejectionNote:
                 },
             )
             assert resp1.status_code == 200
-            assert await fake_redis.get(key) == str(courier1.id)
+            assert await fake_redis.get(key) == f"courier:{courier1.id}"
 
             # לחיצה שנייה — דחיית שליח 2, דורסת את הראשונה
             resp2 = await test_client.post(
@@ -1310,7 +1310,7 @@ class TestRejectionNote:
             )
             assert resp2.status_code == 200
             # הרשומה הנוכחית היא של שליח 2
-            assert await fake_redis.get(key) == str(courier2.id)
+            assert await fake_redis.get(key) == f"courier:{courier2.id}"
 
     @pytest.mark.asyncio
     async def test_approve_clears_pending_rejection(
@@ -1629,7 +1629,7 @@ class TestPropertyBasedDiscoveries:
             result = _match_approval_command(text)
             # לא אמור לקרוס — None או tuple חוקי
             if result is not None:
-                action, uid, note = result
+                action, uid, _, note = result
                 assert action in ("approve", "reject")
                 assert isinstance(uid, int) and uid > 0
 
@@ -1643,7 +1643,7 @@ class TestPropertyBasedDiscoveries:
 
         result = _match_approval_command("דחה 100   ")
         assert result is not None
-        _, _, note = result
+        _, _, _, note = result
         assert note is None, f"הערה של רווחים בלבד הייתה אמורה להיות None, קיבלנו: '{note}'"
 
     @pytest.mark.asyncio
