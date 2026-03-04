@@ -7,7 +7,7 @@ import re
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, BackgroundTasks
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
@@ -142,8 +142,25 @@ class WhatsAppMessage(BaseModel):
     # סוג MIME של המדיה (למשל image/jpeg) - לזיהוי מסמכים שהם בעצם תמונות
     mime_type: Optional[str] = None
     # מיקום GPS — לחיפוש נסיעות לפי מיקום (iDriver סשן 5)
+    # נתמך גם כשדות שטוחים וגם כאובייקט מקונן {"location": {"latitude": ..., "longitude": ...}}
     location_latitude: Optional[float] = None
     location_longitude: Optional[float] = None
+    # אובייקט מיקום מקונן — נתמך עבור גטוויי שמעביר location כאובייקט
+    location: Optional[dict] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _extract_nested_location(cls, values: dict) -> dict:  # type: ignore[override]
+        """חילוץ lat/lng מאובייקט location מקונן אם השדות השטוחים ריקים"""
+        if not isinstance(values, dict):
+            return values
+        loc = values.get("location")
+        if isinstance(loc, dict):
+            if values.get("location_latitude") is None and "latitude" in loc:
+                values["location_latitude"] = loc["latitude"]
+            if values.get("location_longitude") is None and "longitude" in loc:
+                values["location_longitude"] = loc["longitude"]
+        return values
 
 
 class WhatsAppWebhookPayload(BaseModel):

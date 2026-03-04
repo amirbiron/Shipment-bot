@@ -226,6 +226,30 @@ class TestCityAbbreviationService:
         assert result.destination == "ירושלים"
 
     @pytest.mark.unit
+    def test_parse_multiword_origin_with_destination(self) -> None:
+        """פרסור מוצא מרובה מילים + יעד: פ תל אביב ים"""
+        result = CityAbbreviationService.parse_search_command("פ תל אביב ים")
+        assert result is not None
+        assert result.origin == "תל אביב"
+        assert result.destination == "ירושלים"
+        assert result.is_area_search is False
+
+    @pytest.mark.unit
+    def test_parse_origin_with_multiword_destination(self) -> None:
+        """פרסור מוצא + יעד מרובה מילים: פ ים תל אביב"""
+        result = CityAbbreviationService.parse_search_command("פ ים תל אביב")
+        assert result is not None
+        assert result.origin == "ירושלים"
+        assert result.destination == "תל אביב"
+        assert result.is_area_search is False
+
+    @pytest.mark.unit
+    def test_parse_three_unknown_words_returns_none(self) -> None:
+        """שלוש מילים לא מוכרות מחזיר None"""
+        result = CityAbbreviationService.parse_search_command("פ aaa bbb ccc")
+        assert result is None
+
+    @pytest.mark.unit
     def test_get_abbreviations_help(self) -> None:
         """בדיקת הודעת עזרה קיצורים"""
         help_text = CityAbbreviationService.get_abbreviations_help()
@@ -799,3 +823,102 @@ class TestDriverSearchHandler:
                     if "חיפושים" in btn:
                         found = True
         assert found, "כפתור חיפושים לא נמצא בתפריט"
+
+
+# ============================================================================
+# בדיקות WhatsAppMessage — חילוץ מיקום מקונן
+# ============================================================================
+
+
+class TestWhatsAppLocationExtraction:
+    """בדיקות חילוץ מיקום GPS מ-WhatsApp webhook payload"""
+
+    @pytest.mark.unit
+    def test_flat_location_fields(self) -> None:
+        """שדות שטוחים — location_latitude/longitude מוגדרים ישירות"""
+        from app.api.webhooks.whatsapp import WhatsAppMessage
+
+        msg = WhatsAppMessage(
+            from_number="972501234567",
+            message_id="test1",
+            timestamp=1000000,
+            location_latitude=31.77,
+            location_longitude=35.21,
+        )
+        assert msg.location_latitude == 31.77
+        assert msg.location_longitude == 35.21
+
+    @pytest.mark.unit
+    def test_nested_location_object(self) -> None:
+        """אובייקט location מקונן — מחלץ lat/lng אוטומטית"""
+        from app.api.webhooks.whatsapp import WhatsAppMessage
+
+        msg = WhatsAppMessage(
+            from_number="972501234567",
+            message_id="test2",
+            timestamp=1000000,
+            location={"latitude": 32.08, "longitude": 34.78},
+        )
+        assert msg.location_latitude == 32.08
+        assert msg.location_longitude == 34.78
+
+    @pytest.mark.unit
+    def test_flat_fields_take_priority_over_nested(self) -> None:
+        """שדות שטוחים קודמים לאובייקט מקונן"""
+        from app.api.webhooks.whatsapp import WhatsAppMessage
+
+        msg = WhatsAppMessage(
+            from_number="972501234567",
+            message_id="test3",
+            timestamp=1000000,
+            location_latitude=31.0,
+            location_longitude=35.0,
+            location={"latitude": 99.0, "longitude": 99.0},
+        )
+        assert msg.location_latitude == 31.0
+        assert msg.location_longitude == 35.0
+
+    @pytest.mark.unit
+    def test_no_location(self) -> None:
+        """ללא מיקום — None"""
+        from app.api.webhooks.whatsapp import WhatsAppMessage
+
+        msg = WhatsAppMessage(
+            from_number="972501234567",
+            message_id="test4",
+            timestamp=1000000,
+        )
+        assert msg.location_latitude is None
+        assert msg.location_longitude is None
+
+
+# ============================================================================
+# בדיקות search context cleanup
+# ============================================================================
+
+
+class TestSearchContextCleanup:
+    """בדיקת ניקוי search_ids מהקונטקסט ביציאה מ-SEARCH_MANAGE"""
+
+    @pytest.mark.asyncio
+    async def test_search_ids_cleaned_on_menu_return(
+        self, db_session, user_factory
+    ) -> None:
+        """search_ids מנוקים מהקונטקסט בחזרה לתפריט מ-SEARCH_MANAGE"""
+        user, _ = await _create_registered_driver(db_session, user_factory, "+972505003030")
+
+        handler = DriverStateHandler(db_session, platform="telegram")
+
+        # הכנסת search_ids לקונטקסט בדומה ל-_build_search_delete_menu
+        await handler.state_manager.force_state(
+            user.id, "telegram", DriverState.SEARCH_MANAGE.value,
+            context={"search_ids": {"1": 999}},
+        )
+
+        # חזרה לתפריט
+        response, new_state = await handler.handle_message(user, "🔙 חזרה לתפריט")
+        assert new_state == DriverState.MENU.value
+
+        # וידוא שהקונטקסט לא מכיל search_ids
+        ctx = await handler.state_manager.get_context(user.id, "telegram")
+        assert "search_ids" not in ctx

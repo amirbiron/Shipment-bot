@@ -96,6 +96,11 @@ _REGISTRATION_CONTEXT_KEYS = {
     "reg_vehicle",
 }
 
+# מפתחות קונטקסט של זרימת חיפוש — ניקוי בחזרה לתפריט/צפייה
+_SEARCH_CONTEXT_KEYS = {
+    "search_ids",
+}
+
 
 class DriverStateHandler:
     """
@@ -176,6 +181,23 @@ class DriverStateHandler:
                 user.id, platform, new_state, clean_context
             )
             return response, new_state
+
+        # ניקוי קונטקסט חיפוש ביציאה מ-SEARCH_MANAGE
+        if (
+            current_state == DriverState.SEARCH_MANAGE.value
+            and new_state != DriverState.SEARCH_MANAGE.value
+        ):
+            stale_keys = _SEARCH_CONTEXT_KEYS & context.keys()
+            if stale_keys:
+                clean_ctx = {
+                    k: v for k, v in context.items() if k not in _SEARCH_CONTEXT_KEYS
+                }
+                if context_update:
+                    clean_ctx.update(context_update)
+                await self.state_manager.force_state(
+                    user.id, platform, new_state, clean_ctx
+                )
+                return response, new_state
 
         if new_state != current_state:
             success = await self.state_manager.transition_to(

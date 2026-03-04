@@ -216,8 +216,9 @@ class CityAbbreviationService:
             )
 
         # פורמט 3: "פ <מוצא> <יעד>" או "פ <שם עיר מרובה מילים>"
-        if len(args) == 2:
-            # נסיון ראשון — חיבור כשם עיר מרובה מילים (למשל "תל אביב")
+        # תמיכה ב-1+ מילים — נסיונות: יעד שלם → חלוקת מוצא/יעד
+        if len(args) >= 2:
+            # נסיון ראשון — כל המילים כשם עיר יחיד (למשל "תל אביב")
             joined = " ".join(args)
             joined_resolved = CityAbbreviationService.resolve(joined)
             if joined_resolved:
@@ -227,17 +228,32 @@ class CityAbbreviationService:
                     is_area_search=False,
                     is_location_search=False,
                 )
-            # נסיון שני — מוצא + יעד נפרדים
-            origin = resolve(args[0])
-            destination = resolve(args[1])
-            if not origin or not destination:
-                return None
-            return ParsedSearchCommand(
-                origin=origin,
-                destination=destination,
-                is_area_search=False,
-                is_location_search=False,
-            )
+            # נסיון שני — חלוקה למוצא + יעד בכל נקודת פיצול אפשרית
+            for split_at in range(1, len(args)):
+                origin_text = " ".join(args[:split_at])
+                dest_text = " ".join(args[split_at:])
+                origin_resolved = CityAbbreviationService.resolve(origin_text)
+                dest_resolved = CityAbbreviationService.resolve(dest_text)
+                if origin_resolved and dest_resolved:
+                    return ParsedSearchCommand(
+                        origin=origin_resolved,
+                        destination=dest_resolved,
+                        is_area_search=False,
+                        is_location_search=False,
+                    )
+            # fallback — אם בדיוק 2 מילים, מחזיר כ-raw (תואם התנהגות קודמת)
+            if len(args) == 2:
+                origin = resolve(args[0])
+                destination = resolve(args[1])
+                if not origin or not destination:
+                    return None
+                return ParsedSearchCommand(
+                    origin=origin,
+                    destination=destination,
+                    is_area_search=False,
+                    is_location_search=False,
+                )
+            return None
 
         # פורמט 4: "פ <יעד>" — יעד בלבד
         if len(args) == 1:
