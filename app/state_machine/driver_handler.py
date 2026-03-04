@@ -1171,11 +1171,10 @@ class DriverStateHandler:
         # הצגת אישור + סיכום
         summary = DriverSearchService.format_search_summary(search)
         active_count = await self.search_service.get_active_search_count(user.id)
-        area_text = " (אזורי)" if parsed.is_area_search else ""
 
         response = MessageResponse(
             text=(
-                f"✅ <b>חיפוש חדש נוסף!</b>{escape(area_text)}\n\n"
+                "✅ <b>חיפוש חדש נוסף!</b>\n\n"
                 f"{summary}\n\n"
                 f"📊 סה״כ חיפושים פעילים: {active_count}/{MAX_ACTIVE_SEARCHES_PER_USER}\n\n"
                 "💡 להוספת חיפוש נוסף — שלח 'פ <יעד>'\n"
@@ -1328,7 +1327,7 @@ class DriverStateHandler:
     def _extract_search_index(text: str) -> int | None:
         """חילוץ מספר חיפוש מטקסט כפתור (למשל '🗑 1. ...' → 1)"""
         import re
-        match = re.search(r"(\d+)", text)
+        match = re.match(r"🗑\s*(\d+)\.", text.strip())
         if match:
             return int(match.group(1))
         return None
