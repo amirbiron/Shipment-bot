@@ -91,6 +91,10 @@ class Settings(BaseSettings):
     TELEGRAM_BOT_TOKEN: Optional[str] = None
     TELEGRAM_ADMIN_CHAT_ID: Optional[str] = None  # קבוצת מנהלים בטלגרם - לסיכומי אישור/דחייה
     TELEGRAM_WEBHOOK_SECRET_TOKEN: str = ""  # אימות webhook — openssl rand -hex 32
+    # URL חיצוני של האפליקציה לרישום webhook אוטומטי.
+    # ב-Render מוגדר אוטומטית דרך RENDER_EXTERNAL_URL.
+    # דוגמה: https://my-app.onrender.com
+    TELEGRAM_WEBHOOK_BASE_URL: str = ""
 
     # Credit settings
     DEFAULT_CREDIT_LIMIT: float = -500.0  # Minimum balance allowed (500₪ credit)
