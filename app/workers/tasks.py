@@ -932,6 +932,141 @@ def check_driver_sessions():
     return run_async(_check())
 
 
+@celery_app.task(name="app.workers.tasks.check_driver_subscriptions")
+def check_driver_subscriptions():
+    """
+    סשן 8: בדיקת מנויי נהגים — תזכורות ועדכון סטטוס.
+
+    רצה יומית. בכל ריצה:
+    1. מעדכנת מנויים שפג תוקפם ל-EXPIRED
+    2. שולחת תזכורת יום לפני תפוגה (trial + מנוי ששולם)
+    """
+    from app.db.models.driver_profile import DriverProfile
+    from app.domain.services.driver_subscription_service import DriverSubscriptionService
+    from app.core.redis_client import get_redis
+
+    # הודעות תזכורת
+    _TRIAL_REMINDER = (
+        "👤 נהג יקר — <b>תקופת הניסיון שלך מסתיימת מחר!</b>\n\n"
+        "כדי להמשיך לחפש נסיעות, רכוש מנוי.\n"
+        "שלח <b>תפריט</b> ולחץ על כפתור 💳 <b>מנוי</b>."
+    )
+    _SUBSCRIPTION_REMINDER = (
+        "👤 נהג יקר — <b>המנוי שלך מסתיים מחר!</b>\n\n"
+        "חדש את המנוי כדי להמשיך לחפש נסיעות.\n"
+        "שלח <b>תפריט</b> ולחץ על כפתור 💳 <b>מנוי</b>."
+    )
+
+    # throttle — תזכורת אחת ביום לכל נהג
+    _THROTTLE_SECONDS = 86400
+
+    async def _check():
+        async with get_task_session() as db:
+            subscription_service = DriverSubscriptionService(db)
+            reminders_sent = 0
+            expired_count = 0
+
+            # --- שלב 1: עדכון מנויים שפג תוקפם ---
+            try:
+                expired_count = await subscription_service.expire_lapsed_subscriptions()
+            except Exception as e:
+                logger.error(
+                    "כשלון בעדכון מנויים שפגו",
+                    extra_data={"error": str(e)},
+                    exc_info=True,
+                )
+                # expire_lapsed_subscriptions היא פעולת כתיבה — כשלון commit
+                # משאיר את הסשן ב-failed transaction. חובה rollback כדי
+                # שהשאילתות בשלב 2 (תזכורות) יוכלו לרוץ.
+                await db.rollback()
+
+            # --- שלב 2: שליחת תזכורות (יום לפני תפוגה) ---
+            try:
+                expiring = await subscription_service.check_expiring_subscriptions()
+                redis = await get_redis()
+
+                for profile in expiring:
+                    try:
+                        # throttle — תזכורת אחת ביום לכל נהג
+                        throttle_key = (
+                            f"alert_throttle:subscription:{profile.user_id}"
+                        )
+                        already_sent = await redis.get(throttle_key)
+                        if already_sent:
+                            continue
+
+                        # שליפת פרטי המשתמש
+                        user_result = await db.execute(
+                            select(User).where(User.id == profile.user_id)
+                        )
+                        user = user_result.scalar_one_or_none()
+                        if not user:
+                            continue
+
+                        # בחירת הודעה לפי סוג מנוי
+                        from app.db.models.driver_profile import DriverSubscriptionStatus
+                        if profile.subscription_status == DriverSubscriptionStatus.TRIAL.value:
+                            message_text = _TRIAL_REMINDER
+                        else:
+                            message_text = _SUBSCRIPTION_REMINDER
+
+                        content = {"message_text": message_text}
+                        sent = False
+                        if user.platform == "telegram" and user.telegram_chat_id:
+                            sent = await _send_telegram_message(
+                                user.telegram_chat_id, content
+                            )
+                        elif user.platform == "whatsapp" and user.phone_number:
+                            sent = await _send_whatsapp_message(
+                                user.phone_number, content
+                            )
+
+                        if sent:
+                            # throttle key נקבע רק אחרי שליחה מוצלחת
+                            # כדי שכשלון שליחה לא יחסום ניסיון חוזר
+                            await redis.set(
+                                throttle_key, "1", ex=_THROTTLE_SECONDS
+                            )
+                            reminders_sent += 1
+                            logger.info(
+                                "תזכורת פקיעת מנוי נשלחה",
+                                extra_data={"user_id": profile.user_id},
+                            )
+                    except Exception as e:
+                        logger.error(
+                            "כשלון בשליחת תזכורת פקיעת מנוי",
+                            extra_data={
+                                "user_id": profile.user_id,
+                                "error": str(e),
+                            },
+                            exc_info=True,
+                        )
+                        # לא עושים rollback — הלולאה היא read-only
+                        # (throttle ב-Redis + שליחת הודעה חיצונית).
+                        # rollback מבטל ORM objects ב-session ושובר איטרציות הבאות
+                        # (DetachedInstanceError / MissingGreenlet).
+            except Exception as e:
+                logger.error(
+                    "כשלון בשליפת מנויים שעומדים לפוג",
+                    extra_data={"error": str(e)},
+                    exc_info=True,
+                )
+
+            logger.info(
+                "סיום בדיקת מנויי נהגים תקופתית",
+                extra_data={
+                    "expired_count": expired_count,
+                    "reminders_sent": reminders_sent,
+                },
+            )
+            return {
+                "expired_count": expired_count,
+                "reminders_sent": reminders_sent,
+            }
+
+    return run_async(_check())
+
+
 @celery_app.task(name="app.workers.tasks.check_whatsapp_connection")
 def check_whatsapp_connection() -> dict:
     """
