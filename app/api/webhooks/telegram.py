@@ -1170,7 +1170,16 @@ async def _route_to_role_menu(
         return await _sender_fallback(user, db, state_manager)
 
     if user.role == UserRole.DRIVER:
-        # iDriver — ניתוב נהג ל-handler (סשנים 2-6)
+        # סשן 9: בדיקה אם הנהג הוא גם סדרן פעיל בתחנה
+        dispatcher_station = await _get_dispatcher_station(user, db)
+        if dispatcher_station is not None:
+            await state_manager.force_state(
+                user.id, "telegram", DispatcherState.MENU.value, context={}
+            )
+            handler = DispatcherStateHandler(db, dispatcher_station.id)
+            return await handler.handle_message(user, "תפריט", None)
+
+        # iDriver — ניתוב נהג ל-handler (סשנים 2-7)
         from app.state_machine.driver_handler import DriverStateHandler
         from app.domain.services.driver_session_service import DriverSessionService
 

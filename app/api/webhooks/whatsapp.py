@@ -850,7 +850,19 @@ async def _route_to_role_menu_wa(
         return await _sender_fallback_wa(user, db, state_manager)
 
     if user.role == UserRole.DRIVER:
-        # iDriver — ניתוב נהג ל-handler (סשנים 2-6)
+        # סשן 9: בדיקה אם הנהג הוא גם סדרן פעיל בתחנה
+        from app.domain.services.station_service import StationService
+
+        station_service = StationService(db)
+        dispatcher_station = await station_service.get_dispatcher_station(user.id)
+        if dispatcher_station:
+            await state_manager.force_state(
+                user.id, "whatsapp", DispatcherState.MENU.value, context={}
+            )
+            handler = DispatcherStateHandler(db, dispatcher_station.id, platform="whatsapp")
+            return await handler.handle_message(user, "תפריט", None)
+
+        # iDriver — ניתוב נהג ל-handler (סשנים 2-7)
         from app.state_machine.driver_handler import DriverStateHandler
         from app.domain.services.driver_session_service import DriverSessionService
 
