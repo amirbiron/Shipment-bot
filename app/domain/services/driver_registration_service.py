@@ -15,8 +15,6 @@ from app.db.models.user import User
 from app.db.models.driver_profile import (
     DriverProfile,
     DressCode,
-    DriverVerificationStatus,
-    DriverSubscriptionStatus,
 )
 from app.core.validation import NameValidator, TextSanitizer
 from app.core.logging import get_logger

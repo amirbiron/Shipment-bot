@@ -17,10 +17,7 @@ from app.state_machine.manager import StateManager
 from app.state_machine.handlers import MessageResponse
 from app.db.models.user import User
 from app.db.models.driver_profile import DressCode
-from app.domain.services.driver_registration_service import (
-    DriverRegistrationService,
-    HAREDI_DRESS_CODES,
-)
+from app.domain.services.driver_registration_service import DriverRegistrationService
 from app.core.exceptions import ValidationException
 from app.core.logging import get_logger
 
@@ -143,7 +140,9 @@ class DriverStateHandler:
             # מצבים שהרישום מוביל אליהם — placeholder עד שהסשנים הבאים יממשו
             DriverState.MENU.value: self._handle_post_registration_placeholder,
             DriverState.VERIFY_COLLECT_SELFIE.value: self._handle_post_registration_placeholder,
-            DriverState.VERIFY_COLLECT_ID_DOCUMENT.value: self._handle_post_registration_placeholder,
+            DriverState.VERIFY_COLLECT_ID_DOCUMENT.value: (
+                self._handle_post_registration_placeholder
+            ),
             DriverState.VERIFY_PENDING_APPROVAL.value: self._handle_post_registration_placeholder,
         }
         return handlers.get(state, self._handle_unknown)
