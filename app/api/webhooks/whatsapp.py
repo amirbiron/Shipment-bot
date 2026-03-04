@@ -850,8 +850,13 @@ async def _route_to_role_menu_wa(
         return await _sender_fallback_wa(user, db, state_manager)
 
     if user.role == UserRole.DRIVER:
-        # iDriver — ניתוב נהג ל-handler רישום (סשן 2)
+        # iDriver — ניתוב נהג ל-handler (סשנים 2-6)
         from app.state_machine.driver_handler import DriverStateHandler
+        from app.domain.services.driver_session_service import DriverSessionService
+
+        # סשן 6: עדכון פעילות אחרונה
+        session_service = DriverSessionService(db)
+        await session_service.touch_session(user.id)
 
         await state_manager.force_state(
             user.id, "whatsapp", DriverState.INITIAL.value, context={}
@@ -1693,8 +1698,13 @@ async def whatsapp_webhook(
                 continue
     
             if user.role == UserRole.DRIVER:
-                # iDriver — ניתוב נהג ל-handler רישום (סשן 2)
+                # iDriver — ניתוב נהג ל-handler (סשנים 2-6)
                 from app.state_machine.driver_handler import DriverStateHandler as _DH
+                from app.domain.services.driver_session_service import DriverSessionService as _DSS
+
+                # סשן 6: עדכון פעילות אחרונה בכל הודעה מנהג
+                _session_svc = _DSS(db)
+                await _session_svc.touch_session(user.id)
 
                 is_driver_flow = isinstance(current_state, str) and current_state.startswith("DRIVER.")
                 if not is_driver_flow:
