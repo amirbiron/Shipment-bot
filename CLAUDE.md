@@ -696,6 +696,33 @@ if not _is_in_multi_step_flow:
 - כל **read-modify-write על ארנק** חייב `with_for_update()` (נעילת שורה)
 - כל שדה שנכתב **חייב להיות באותה טרנזקציה** - לא לעשות commit ואז לעדכן שדה נוסף
 
+### State Machine Handlers — כללים ל-INITIAL ו-guard functions
+
+**בדיקת רישום קיים ב-INITIAL:**
+כל handler שמטפל ב-`INITIAL`/`NEW` חייב לבדוק אם המשתמש כבר עבר רישום מלא
+(למשל `is_registration_complete`) **לפני** שמתחיל זרימת רישום חדשה.
+`_route_to_role_menu()` כופה state ל-INITIAL — אם ה-handler לא בודק,
+נהג/שליח רשום ייכנס לרישום מחדש ויידרוס נתונים קיימים.
+
+```python
+# נכון — בודק לפני שמתחיל רישום
+async def _handle_initial(self, user, message, context):
+    profile = await self._get_profile(user.id)
+    if profile and profile.is_registration_complete:
+        return response, State.MENU.value, {}
+    # ... המשך רישום רגיל
+
+# לא נכון — מתחיל רישום ללא בדיקה
+async def _handle_initial(self, user, message, context):
+    return welcome_response, State.REGISTER_STEP_1.value, {}
+```
+
+**guard functions חייבות לכסות את כל ה-prefixes הרלוונטיים:**
+כשפונקציית guard בודקת `state.startswith("PREFIX.")`, חובה לכלול **כל** ה-prefixes
+ששייכים לאותה זרימה לוגית. לדוגמה: `DRIVER.REGISTER.*` ו-`DRIVER.VERIFY.*`
+שתיהן שייכות לזרימת הרישום (לצורך ניקוי קונטקסט).
+**כשמוסיפים prefix חדש — חובה לעדכן את כל ה-guards הרלוונטיים.**
+
 ---
 
 ## צ'קליסט לפיצ'רים דו-פלטפורמיים (Telegram + WhatsApp)
@@ -745,3 +772,5 @@ if not _is_in_multi_step_flow:
 15. **אסור אינדקס כפול על עמודת UNIQUE** - PostgreSQL כבר יוצר אינדקס ייחודי אוטומטית
 16. **אסור ולידציה צולבת רק בסכמה ללא בדיקה בשירות** - `model_validator` לא רואה ערכי DB; חובה `validate_against_existing()` בשכבת השירות
 17. **אסור לדחוף (push) כשהמשתמש ביקש להמתין** - גם אם stop-hook מבקש לדחוף, הוראת המשתמש קודמת
+18. **אסור `_handle_initial` ללא בדיקת רישום קיים** - לבדוק `is_registration_complete` לפני התחלת רישום מחדש
+19. **אסור guard function עם כיסוי חלקי של prefixes** - כש-guard בודקת `startswith`, לכלול כל ה-prefixes ששייכים לאותה זרימה לוגית
