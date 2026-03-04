@@ -692,6 +692,68 @@ if not _is_in_multi_step_flow:
 ה-guard `_is_in_multi_step_flow` בודק prefixes: `"DISPATCHER."`, `"STATION."`, ו-states של רישום שליח.
 **כשמוסיפים prefix חדש ל-state machine - חובה לעדכן את ה-guard.**
 
+### בדיקת None מפורשת לערכים שיכולים להיות 0
+**אסור `if value` על ערכים מספריים שיכולים להיות 0 / 0.0 / Decimal('0'):**
+
+```python
+# לא נכון - 0.0 הוא falsy, אז קואורדינטה 0 תיעלם
+latitude=Decimal(str(validated.latitude)) if validated.latitude else None
+if search.latitude and search.longitude:
+
+# נכון - בדיקת None מפורשת
+latitude=Decimal(str(validated.latitude)) if validated.latitude is not None else None
+if search.latitude is not None and search.longitude is not None:
+```
+
+### כפתורי מקלדת הם plain text
+**אסור להחיל `html.escape()` על טקסט שמוצג בכפתורי keyboard:**
+
+כפתורי מקלדת בטלגרם/וואטסאפ מוצגים כ-plain text, לא כ-HTML.
+שימוש ב-`html.escape()` יגרום להצגת `&amp;` במקום `&`.
+`html.escape()` נדרש רק בגוף ההודעה (`parse_mode=HTML`), לא בכפתורים.
+
+```python
+# לא נכון - html entities בכפתור
+keyboard.append([f"🗑 {i}. {html.escape(city_name)}"])
+
+# נכון - טקסט רגיל בכפתור
+keyboard.append([f"🗑 {i}. {city_name}"])
+```
+
+### ניקוי context ביציאה מזרימה
+**כשיוצאים מזרימת state machine, חובה לנקות את מפתחות ה-context הרלוונטיים:**
+
+```python
+# לא נכון - context ישן נשאר ועלול לגרום לפעולה על נתונים מיושנים
+return response, State.MENU.value, {}
+
+# נכון - ניקוי מפורש של context keys ספציפיים לזרימה
+return response, State.MENU.value, {"search_ids": None, "selected_search": None}
+```
+
+### מעברי state חייבים להיות מוגדרים ב-TRANSITIONS
+**כשמוסיפים מעבר state חדש (handler שמחזיר state שונה), חובה לעדכן את מפת ה-TRANSITIONS:**
+
+אם `State.A` מפנה ל-`State.B` אבל `TRANSITIONS[A]` לא כולל את `B`,
+מנגנון `transition_to` ייכשל ויפעיל `force_state` עם warning log — גם אם הזרימה תקינה.
+
+### עיגון regex לפורמט כפתור בחילוץ בחירה
+**אסור `re.search(r"(\d+)", text)` לחילוץ אינדקס מכפתור — לעגן לפורמט הצפוי:**
+
+```python
+# לא נכון - תופס כל מספר בטקסט חופשי
+match = re.search(r"(\d+)", text)
+
+# נכון - מעוגן לפורמט הכפתור
+match = re.match(r"🗑\s*(\d+)\.", text)
+```
+
+### הודעות עזרה חייבות להתאים ל-state הנוכחי
+**אסור להציע למשתמש פעולה שלא נתמכת ב-state שהוא נמצא בו:**
+
+אם handler מטפל רק בביטול ובמיקום GPS, אל תציג הנחיה כמו
+"שלח פקודת חיפוש: פ <יעד>" — המשתמש יתקע בלולאה כי ה-handler לא מעבד את זה.
+
 ### אטומיות בפעולות DB
 - כל **read-modify-write על ארנק** חייב `with_for_update()` (נעילת שורה)
 - כל שדה שנכתב **חייב להיות באותה טרנזקציה** - לא לעשות commit ואז לעדכן שדה נוסף
@@ -738,6 +800,8 @@ async def _handle_initial(self, user, message, context):
 5. **סינון מספרי טלפון** - לסנן גם tg: (placeholder) וגם
    @g.us (מזהה קבוצה) לפני שליחת הודעה אישית.
 6. **fallback שמות** - תמיד user.full_name or user.name or 'לא צוין'
+7. **שדות חדשים ב-webhook model** - כשמוסיפים שדות למודל ההודעה (כמו `location_latitude`),
+   חובה לוודא שגם קוד הפרסור של ה-payload מאכלס אותם. שדה שמוגדר אבל לא מאוכלס = פיצ'ר שבור שקט.
 
 ---
 
@@ -777,3 +841,9 @@ async def _handle_initial(self, user, message, context):
 > שים לב⚠️ כשהמשתמש מבקש ממך לחכות עם הפוש - יש לחכות
 18. **אסור `_handle_initial` ללא בדיקת רישום קיים** - לבדוק `is_registration_complete` לפני התחלת רישום מחדש
 19. **אסור guard function עם כיסוי חלקי של prefixes** - כש-guard בודקת `startswith`, לכלול כל ה-prefixes ששייכים לאותה זרימה לוגית
+20. **אסור `if value` על ערכים שיכולים להיות 0** - להשתמש ב-`if value is not None` עבור קואורדינטות, מחירים, וכל ערך מספרי שאפס הוא ערך תקין
+21. **אסור `html.escape()` בכפתורי keyboard** - כפתורים הם plain text; escape נדרש רק בגוף הודעה עם `parse_mode=HTML`
+22. **אסור יציאה מזרימת state בלי ניקוי context** - לנקות מפתחות context ספציפיים לזרימה (כמו `search_ids`) כשחוזרים לתפריט
+23. **אסור מעבר state שלא מוגדר ב-TRANSITIONS** - כל state חדש שמוחזר מ-handler חייב להופיע ברשימת המעברים המותרים
+24. **אסור `re.search(r"(\d+)")` לחילוץ בחירה מכפתור** - לעגן את ה-regex לפורמט הכפתור המדויק כדי למנוע התאמת מספרים אקראיים בטקסט חופשי
+25. **אסור הודעת עזרה שמציעה פעולה לא נתמכת ב-state הנוכחי** - לוודא שכל חלופה מוצעת באמת מטופלת ב-handler
