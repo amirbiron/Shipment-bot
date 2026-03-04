@@ -388,6 +388,58 @@ class TestDriverSearchService:
         result = DriverSearchService.format_searches_list([])
         assert "אין חיפושים" in result
 
+    @pytest.mark.unit
+    def test_format_search_summary_zero_coordinates(self) -> None:
+        """פורמט חיפוש GPS עם קואורדינטות אפס — לא מפספס בגלל truthiness"""
+        from decimal import Decimal
+        search = DriverSearch(
+            origin_city="מיקום נוכחי",
+            destination_city="אזור מיקום",
+            is_area_search=True,
+            latitude=Decimal("0.0000000"),
+            longitude=Decimal("0.0000000"),
+        )
+        result = DriverSearchService.format_search_summary(search)
+        assert "מיקום GPS" in result
+
+    @pytest.mark.asyncio
+    async def test_multiple_gps_searches_different_locations(
+        self, db_session, user_factory
+    ) -> None:
+        """יצירת מספר חיפושי GPS ממיקומים שונים — ללא חסימת כפילויות"""
+        user, _ = await _create_registered_driver(db_session, user_factory, "+972505002020")
+        service = DriverSearchService(db_session)
+
+        search1 = await service.create_location_search(
+            user_id=user.id, latitude=31.7683, longitude=35.2137,
+        )
+        assert search1.id is not None
+
+        search2 = await service.create_location_search(
+            user_id=user.id, latitude=32.0853, longitude=34.7818,
+        )
+        assert search2.id is not None
+
+        searches = await service.get_active_searches(user.id)
+        assert len(searches) == 2
+
+    @pytest.mark.asyncio
+    async def test_gps_search_same_location_blocked(
+        self, db_session, user_factory
+    ) -> None:
+        """חיפוש GPS מאותו מיקום — חסום ככפילות"""
+        user, _ = await _create_registered_driver(db_session, user_factory, "+972505002021")
+        service = DriverSearchService(db_session)
+
+        await service.create_location_search(
+            user_id=user.id, latitude=31.7683, longitude=35.2137,
+        )
+
+        with pytest.raises(ValidationException, match="כבר קיים"):
+            await service.create_location_search(
+                user_id=user.id, latitude=31.7683, longitude=35.2137,
+            )
+
 
 # ============================================================================
 # בדיקות DriverStateHandler — זרימת חיפוש

@@ -65,9 +65,10 @@ class DriverSearchService:
                 "מחק חיפוש קיים כדי להוסיף חדש."
             )
 
-        # בדיקת כפילות — אותו מוצא + יעד
+        # בדיקת כפילות — אותו מוצא + יעד (+ קואורדינטות לחיפוש GPS)
         existing = await self._find_duplicate(
-            user_id, origin_city, destination_city, is_area_search
+            user_id, origin_city, destination_city, is_area_search,
+            latitude=latitude, longitude=longitude,
         )
         if existing:
             raise ValidationException(
@@ -258,16 +259,26 @@ class DriverSearchService:
         origin_city: str,
         destination_city: str,
         is_area_search: bool,
+        latitude: float | None = None,
+        longitude: float | None = None,
     ) -> DriverSearch | None:
-        """בדיקת כפילות חיפוש פעיל"""
+        """בדיקת כפילות חיפוש פעיל — כולל קואורדינטות לחיפושי GPS"""
+        conditions = [
+            DriverSearch.user_id == user_id,
+            DriverSearch.origin_city == origin_city,
+            DriverSearch.destination_city == destination_city,
+            DriverSearch.is_area_search == is_area_search,
+            DriverSearch.status == DriverSearchStatus.ACTIVE.value,
+        ]
+        # חיפושי GPS — כפילות רק אם אותן קואורדינטות
+        if latitude is not None and longitude is not None:
+            conditions.append(DriverSearch.latitude == Decimal(str(latitude)))
+            conditions.append(DriverSearch.longitude == Decimal(str(longitude)))
+        else:
+            conditions.append(DriverSearch.latitude.is_(None))
+
         result = await self.db.execute(
-            select(DriverSearch).where(
-                DriverSearch.user_id == user_id,
-                DriverSearch.origin_city == origin_city,
-                DriverSearch.destination_city == destination_city,
-                DriverSearch.is_area_search == is_area_search,
-                DriverSearch.status == DriverSearchStatus.ACTIVE.value,
-            )
+            select(DriverSearch).where(*conditions)
         )
         return result.scalar_one_or_none()
 
@@ -288,7 +299,7 @@ class DriverSearchService:
                 f"📍 {escape(search.origin_city)} → "
                 f"{escape(search.destination_city)}{escape(area_marker)}"
             )
-        if search.latitude and search.longitude:
+        if search.latitude is not None and search.longitude is not None:
             return f"📍 מיקום GPS → {escape(search.destination_city)}{escape(area_marker)}"
         return f"📍 → {escape(search.destination_city)}{escape(area_marker)}"
 

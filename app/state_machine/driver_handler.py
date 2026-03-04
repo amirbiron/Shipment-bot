@@ -704,7 +704,7 @@ class DriverStateHandler:
             return await self._build_search_view(user)
 
         # מילון קיצורי ערים
-        if msg == "מילון" or "מילון" in msg:
+        if msg == "מילון":
             return self._show_abbreviations_help()
 
         # הוראות שימוש
