@@ -140,20 +140,9 @@ class DriverSubscriptionService:
         )
         return profile
 
-    async def is_subscription_active(self, user_id: int) -> bool:
-        """
-        בדיקה האם למנוי יש גישה פעילה (trial או מנוי ששולם).
-
-        Args:
-            user_id: מזהה המשתמש
-
-        Returns:
-            True אם המנוי פעיל
-        """
-        profile = await self._get_profile(user_id)
-        if not profile:
-            return False
-
+    @staticmethod
+    def _is_profile_active(profile: DriverProfile) -> bool:
+        """בדיקת גישה פעילה על פרופיל שכבר נשלף — ללא שאילתת DB נוספת."""
         now = datetime.utcnow()
         status = profile.subscription_status
 
@@ -171,6 +160,22 @@ class DriverSubscriptionService:
 
         # כל סטטוס אחר (expired, paused, cancelled) = לא פעיל
         return False
+
+    async def is_subscription_active(self, user_id: int) -> bool:
+        """
+        בדיקה האם למנוי יש גישה פעילה (trial או מנוי ששולם).
+
+        Args:
+            user_id: מזהה המשתמש
+
+        Returns:
+            True אם המנוי פעיל
+        """
+        profile = await self._get_profile(user_id)
+        if not profile:
+            return False
+
+        return self._is_profile_active(profile)
 
     async def get_subscription_status(self, user_id: int) -> dict:
         """
@@ -190,7 +195,8 @@ class DriverSubscriptionService:
             raise NotFoundException("DriverProfile", user_id)
 
         now = datetime.utcnow()
-        is_active = await self.is_subscription_active(user_id)
+        # שימוש בפרופיל שכבר נשלף — ללא שאילתת DB כפולה
+        is_active = self._is_profile_active(profile)
 
         # חישוב ימים שנותרו
         days_remaining: int | None = None

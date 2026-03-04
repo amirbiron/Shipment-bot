@@ -1700,15 +1700,22 @@ class DriverStateHandler:
                 status_text = "⚠️ <b>תקופת הניסיון פגה</b>"
         elif status_info["status"] == DriverSubscriptionStatus.ACTIVE.value:
             days = status_info["days_remaining"]
-            if days is not None:
-                expires = status_info["subscription_expires_at"]
-                expires_str = expires.strftime("%d/%m/%Y") if expires else ""
-                status_text = (
-                    f"✅ <b>מנוי פעיל</b>\n"
-                    f"נותרו {days} ימים (עד {expires_str})"
-                )
+            if status_info["is_active"]:
+                if days is not None and days > 0:
+                    expires = status_info["subscription_expires_at"]
+                    expires_str = expires.strftime("%d/%m/%Y") if expires else ""
+                    status_text = (
+                        f"✅ <b>מנוי פעיל</b>\n"
+                        f"נותרו {days} ימים (עד {expires_str})"
+                    )
+                elif days is not None:
+                    # פחות מ-24 שעות אבל עדיין פעיל
+                    status_text = "✅ <b>מנוי פעיל</b> — יום אחרון!"
+                else:
+                    status_text = "✅ <b>מנוי פעיל</b>"
             else:
-                status_text = "✅ <b>מנוי פעיל</b>"
+                # DB עדיין ACTIVE אבל בפועל פג — Celery עדיין לא עדכן
+                status_text = "⚠️ <b>המנוי פג תוקף</b>"
         elif status_info["status"] == DriverSubscriptionStatus.EXPIRED.value:
             status_text = "⚠️ <b>המנוי פג תוקף</b>"
         elif status_info["status"] == DriverSubscriptionStatus.PAUSED.value:
