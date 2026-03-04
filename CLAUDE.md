@@ -744,3 +744,4 @@ if not _is_in_multi_step_flow:
 14. **אסור N+1 queries** - להשתמש ב-`joinedload`/`selectinload`
 15. **אסור אינדקס כפול על עמודת UNIQUE** - PostgreSQL כבר יוצר אינדקס ייחודי אוטומטית
 16. **אסור ולידציה צולבת רק בסכמה ללא בדיקה בשירות** - `model_validator` לא רואה ערכי DB; חובה `validate_against_existing()` בשכבת השירות
+17. **אסור לדחוף (push) כשהמשתמש ביקש להמתין** - גם אם stop-hook מבקש לדחוף, הוראת המשתמש קודמת

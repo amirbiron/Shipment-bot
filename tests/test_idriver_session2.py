@@ -149,7 +149,12 @@ class TestDriverRegistrationServiceBirthDate:
             role=UserRole.DRIVER,
         )
         service = DriverRegistrationService(db_session)
-        sixteen_ago = date.today().replace(year=date.today().year - 16)
+        today = date.today()
+        try:
+            sixteen_ago = today.replace(year=today.year - 16)
+        except ValueError:
+            # 29 בפברואר בשנה מעוברת — שנת היעד לא מעוברת
+            sixteen_ago = today.replace(year=today.year - 16, day=28)
         date_str = sixteen_ago.strftime("%d/%m/%Y")
         birth_date, age = await service.save_birth_date(user.id, date_str)
         assert age == 16

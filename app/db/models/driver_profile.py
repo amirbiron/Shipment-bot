@@ -90,3 +90,8 @@ class DriverProfile(Base):
 
     # קשרים
     user = relationship("User", foreign_keys=[user_id])
+
+    @property
+    def is_registration_complete(self) -> bool:
+        """האם הרישום הושלם — trial_starts_at מוגדר רק בשלב האחרון (שמירת קוד לבוש)"""
+        return self.trial_starts_at is not None

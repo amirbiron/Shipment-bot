@@ -36,6 +36,17 @@ DRESS_CODE_LABELS: dict[str, str] = {
 # מיפוי הפוך — מטקסט כפתור לערך enum
 DRESS_CODE_BY_LABEL: dict[str, str] = {v: k for k, v in DRESS_CODE_LABELS.items()}
 
+# מקלדת כפתורי קוד לבוש — משותפת לשלב 3→4 ולשגיאת בחירה בשלב 4
+_DRESS_CODE_KEYBOARD = [
+    [DRESS_CODE_LABELS[DressCode.HASSIDIC.value]],
+    [DRESS_CODE_LABELS[DressCode.ULTRA_ORTHODOX.value]],
+    [DRESS_CODE_LABELS[DressCode.MODERN_ORTHODOX.value]],
+    [DRESS_CODE_LABELS[DressCode.RELIGIOUS_ELEGANT.value]],
+    [DRESS_CODE_LABELS[DressCode.MIXED.value]],
+    [DRESS_CODE_LABELS[DressCode.SECULAR.value]],
+    ["❌ ביטול"],
+]
+
 # מפתחות קונטקסט של רישום — מנוקים בחזרה ל-MENU
 _REGISTRATION_CONTEXT_KEYS = {
     "reg_name",
@@ -256,24 +267,13 @@ class DriverStateHandler:
             )
             return response, DriverState.REGISTER_COLLECT_VEHICLE.value, {}
 
-        # בניית כפתורי קוד לבוש
-        keyboard = [
-            [DRESS_CODE_LABELS[DressCode.HASSIDIC.value]],
-            [DRESS_CODE_LABELS[DressCode.ULTRA_ORTHODOX.value]],
-            [DRESS_CODE_LABELS[DressCode.MODERN_ORTHODOX.value]],
-            [DRESS_CODE_LABELS[DressCode.RELIGIOUS_ELEGANT.value]],
-            [DRESS_CODE_LABELS[DressCode.MIXED.value]],
-            [DRESS_CODE_LABELS[DressCode.SECULAR.value]],
-            ["❌ ביטול"],
-        ]
-
         response = MessageResponse(
             text=(
                 f"✅ רכב: {escape(saved_vehicle)}\n\n"
                 "📝 <b>שלב 4 מתוך 4</b>\n"
                 "בחר את קוד הלבוש שלך:"
             ),
-            keyboard=keyboard,
+            keyboard=_DRESS_CODE_KEYBOARD,
         )
         return (
             response,
@@ -305,18 +305,9 @@ class DriverStateHandler:
                 dress_code_value = msg
 
         if not dress_code_value:
-            keyboard = [
-                [DRESS_CODE_LABELS[DressCode.HASSIDIC.value]],
-                [DRESS_CODE_LABELS[DressCode.ULTRA_ORTHODOX.value]],
-                [DRESS_CODE_LABELS[DressCode.MODERN_ORTHODOX.value]],
-                [DRESS_CODE_LABELS[DressCode.RELIGIOUS_ELEGANT.value]],
-                [DRESS_CODE_LABELS[DressCode.MIXED.value]],
-                [DRESS_CODE_LABELS[DressCode.SECULAR.value]],
-                ["❌ ביטול"],
-            ]
             response = MessageResponse(
                 text="❌ בחירה לא תקינה. אנא בחר מהרשימה:",
-                keyboard=keyboard,
+                keyboard=_DRESS_CODE_KEYBOARD,
             )
             return response, DriverState.REGISTER_COLLECT_DRESS_CODE.value, {}
 
