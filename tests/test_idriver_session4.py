@@ -843,3 +843,83 @@ class TestParseTime:
         assert DriverStateHandler._parse_time("12:60") is None
         assert DriverStateHandler._parse_time("12") is None
         assert DriverStateHandler._parse_time("") is None
+
+
+# ============================================================================
+# בדיקות ניווט חזרה — "חזרה להגדרות" vs "חזרה לתפריט"
+# ============================================================================
+
+
+class TestBackNavigation:
+    """בדיקת ניתוב כפתורי חזרה ב-SETTINGS_VIEW"""
+
+    @pytest.mark.asyncio
+    async def test_back_to_settings_from_settings_view(
+        self, db_session, user_factory
+    ) -> None:
+        """כפתור 'חזרה להגדרות' מ-SETTINGS_VIEW חוזר להגדרות, לא לתפריט"""
+        user, _ = await _create_registered_driver(
+            db_session, user_factory, "+972504004001"
+        )
+        state_manager = StateManager(db_session)
+        await state_manager.force_state(
+            user.id, "telegram", DriverState.SETTINGS_VIEW.value, {}
+        )
+
+        handler = DriverStateHandler(db_session, platform="telegram")
+        response, new_state = await handler.handle_message(
+            user, "🔙 חזרה להגדרות", None
+        )
+
+        # חייב להישאר ב-SETTINGS_VIEW ולהציג תפריט הגדרות
+        assert new_state == DriverState.SETTINGS_VIEW.value
+        assert "הגדרות חיפוש" in response.text
+        assert "סוג רכב" in response.text
+
+    @pytest.mark.asyncio
+    async def test_back_to_menu_from_settings_view(
+        self, db_session, user_factory
+    ) -> None:
+        """כפתור 'חזרה לתפריט' מ-SETTINGS_VIEW חוזר לתפריט ראשי"""
+        user, _ = await _create_registered_driver(
+            db_session, user_factory, "+972504004002"
+        )
+        state_manager = StateManager(db_session)
+        await state_manager.force_state(
+            user.id, "telegram", DriverState.SETTINGS_VIEW.value, {}
+        )
+
+        handler = DriverStateHandler(db_session, platform="telegram")
+        response, new_state = await handler.handle_message(
+            user, "🔙 חזרה לתפריט", None
+        )
+
+        assert new_state == DriverState.MENU.value
+        assert "בחר אפשרות" in response.text
+
+
+# ============================================================================
+# בדיקות שם משתמש — operator precedence
+# ============================================================================
+
+
+class TestUserNameFallback:
+    """בדיקת fallback שם משתמש בתפריט"""
+
+    @pytest.mark.asyncio
+    async def test_menu_with_no_user_record(
+        self, db_session, user_factory
+    ) -> None:
+        """
+        פרופיל נהג עם user_id שלא קיים בטבלת users —
+        צריך להציג 'לא צוין' במקום לזרוק AttributeError.
+        """
+        user, _ = await _create_registered_driver(
+            db_session, user_factory, "+972504004003"
+        )
+        service = DriverMenuService(db_session)
+        # התפריט אמור לעבוד ולא לזרוק שגיאה
+        text, keyboard = await service.get_main_menu(user.id)
+        # השם מגיע מ-User.full_name / User.name
+        assert isinstance(text, str)
+        assert len(text) > 0

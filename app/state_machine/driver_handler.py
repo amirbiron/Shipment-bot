@@ -692,7 +692,11 @@ class DriverStateHandler:
         """
         msg = message.strip()
 
-        # חזרה לתפריט ראשי
+        # חזרה להגדרות (כפתור "🔙 חזרה להגדרות" אחרי עדכון הגדרה)
+        if "להגדרות" in msg:
+            return await self._build_settings_menu(user)
+
+        # חזרה לתפריט ראשי (כפתור "🔙 חזרה לתפריט")
         if "חזרה" in msg or "תפריט" in msg:
             return await self._build_main_menu(user)
 

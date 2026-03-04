@@ -106,17 +106,13 @@ class DriverMenuService:
 
         settings = await self._get_or_create_settings(user_id)
 
-        # שם
-        user_result = await self.db.execute(
-            select(DriverProfile.user).where(DriverProfile.user_id == user_id)
-        )
-        # שליפת שם דרך ה-profile
+        # שליפת שם דרך טבלת משתמשים
         from app.db.models.user import User
         user_result = await self.db.execute(
             select(User).where(User.id == user_id)
         )
         user = user_result.scalar_one_or_none()
-        name = user.full_name or user.name or "לא צוין" if user else "לא צוין"
+        name = (user.full_name or user.name or "לא צוין") if user else "לא צוין"
 
         greeting = _get_greeting()
 
