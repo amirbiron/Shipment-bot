@@ -141,6 +141,9 @@ class WhatsAppMessage(BaseModel):
     media_type: Optional[str] = None
     # סוג MIME של המדיה (למשל image/jpeg) - לזיהוי מסמכים שהם בעצם תמונות
     mime_type: Optional[str] = None
+    # מיקום GPS — לחיפוש נסיעות לפי מיקום (iDriver סשן 5)
+    location_latitude: Optional[float] = None
+    location_longitude: Optional[float] = None
 
 
 class WhatsAppWebhookPayload(BaseModel):
@@ -1002,7 +1005,11 @@ async def whatsapp_webhook(
                     photo_file_id = None
             else:
                 photo_file_id = None
-    
+
+            # מיקום GPS (iDriver סשן 5 — חיפוש לפי מיקום)
+            location_lat: float | None = message.location_latitude
+            location_lng: float | None = message.location_longitude
+
             logger.debug(
                 "WhatsApp message received",
                 extra_data={
@@ -1014,8 +1021,8 @@ async def whatsapp_webhook(
                 },
             )
     
-            # Skip empty messages
-            if not text and not photo_file_id:
+            # Skip empty messages (מיקום GPS גם נחשב תוכן — לחיפוש נסיעות)
+            if not text and not photo_file_id and location_lat is None:
                 continue
     
             # בדיקה אם ההודעה מגיעה מקבוצה (group ID מסתיים ב-@g.us)
@@ -1678,7 +1685,10 @@ async def whatsapp_webhook(
                         user.id, "whatsapp", DriverState.INITIAL.value, context={}
                     )
                 _driver_handler = _DH(db, platform="whatsapp")
-                response, new_state = await _driver_handler.handle_message(user, text, None)
+                response, new_state = await _driver_handler.handle_message(
+                    user, text, None,
+                    location_lat=location_lat, location_lng=location_lng,
+                )
                 background_tasks.add_task(
                     send_whatsapp_message, reply_to, response.text, response.keyboard
                 )

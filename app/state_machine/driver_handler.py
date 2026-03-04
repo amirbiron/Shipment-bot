@@ -1,5 +1,5 @@
 """
-Driver State Handler — זרימת רישום, אימות, תפריט והגדרות נהג (iDriver סשנים 2-4)
+Driver State Handler — זרימת רישום, אימות, תפריט, הגדרות וחיפוש נהג (iDriver סשנים 2-5)
 
 מנהל את מכונת המצבים של רישום נהג חדש:
 1. REGISTER_COLLECT_NAME — שם מלא
@@ -21,6 +21,11 @@ Driver State Handler — זרימת רישום, אימות, תפריט והגד�
 13. SETTINGS_UPCOMING_TIMEFRAME — מסגרת זמן
 14. SETTINGS_FUTURE_ONLY_MODE — חיפוש עתידי בלבד
 15. SETTINGS_START_TIME — שעת התחלה לחיפוש עתידי
+
+חיפוש נסיעות (סשן 5):
+16. SEARCH_VIEW_ACTIVE — צפייה בחיפושים פעילים
+17. SEARCH_MANAGE — ניהול (מחיקת) חיפוש בודד
+18. SEARCH_CREATE_ORIGIN — המתנה לשיתוף מיקום GPS
 """
 
 from datetime import time as time_type
@@ -50,6 +55,12 @@ from app.domain.services.driver_menu_service import (
     TIMEFRAME_LABELS,
     TIMEFRAME_BY_LABEL,
 )
+from app.domain.services.driver_search_service import DriverSearchService
+from app.domain.services.city_abbreviation_service import (
+    CityAbbreviationService,
+    ParsedSearchCommand,
+)
+from app.db.models.driver_search import MAX_ACTIVE_SEARCHES_PER_USER
 from sqlalchemy import select
 from app.core.exceptions import ValidationException, NotFoundException
 from app.core.logging import get_logger
@@ -91,11 +102,10 @@ _REGISTRATION_CONTEXT_KEYS = {
 
 class DriverStateHandler:
     """
-    Handler לזרימת רישום, אימות, תפריט והגדרות נהג.
+    Handler לזרימת רישום, אימות, תפריט, הגדרות וחיפוש נהג.
 
     מטפל בשלבי הרישום (סשן 2), אימות חרדי (סשן 3),
-    תפריט ראשי והגדרות חיפוש (סשן 4).
-    שלבים נוספים (חיפוש, מנוי) יתווספו בסשנים הבאים.
+    תפריט ראשי והגדרות חיפוש (סשן 4), וחיפוש נסיעות (סשן 5).
     """
 
     def __init__(self, db: AsyncSession, platform: str = "telegram"):
@@ -105,6 +115,8 @@ class DriverStateHandler:
         self.registration_service = DriverRegistrationService(db)
         self.verification_service = DriverVerificationService(db)
         self.menu_service = DriverMenuService(db)
+        self.search_service = DriverSearchService(db)
+        self.city_service = CityAbbreviationService()
 
     def _is_registration_flow_state(self, state: str) -> bool:
         """בודק אם המצב שייך לזרימת רישום או אימות (לניקוי קונטקסט)"""
@@ -114,8 +126,17 @@ class DriverStateHandler:
         """בודק אם המצב שייך לזרימת הגדרות (לניקוי קונטקסט)"""
         return state.startswith("DRIVER.SETTINGS.")
 
+    def _is_search_flow_state(self, state: str) -> bool:
+        """בודק אם המצב שייך לזרימת חיפוש (לניקוי קונטקסט)"""
+        return state.startswith("DRIVER.SEARCH.")
+
     async def handle_message(
-        self, user: User, message: str, photo_file_id: str | None = None
+        self,
+        user: User,
+        message: str,
+        photo_file_id: str | None = None,
+        location_lat: float | None = None,
+        location_lng: float | None = None,
     ) -> Tuple[MessageResponse, str]:
         """
         עיבוד הודעה נכנסת מנהג.
@@ -124,6 +145,8 @@ class DriverStateHandler:
             user: אובייקט המשתמש
             message: טקסט ההודעה
             photo_file_id: מזהה תמונה (בשימוש בשלבי אימות — סשן 3)
+            location_lat: קו רוחב (חיפוש לפי מיקום — סשן 5)
+            location_lng: קו אורך (חיפוש לפי מיקום — סשן 5)
 
         Returns:
             tuple של (תגובה, מצב חדש)
@@ -134,7 +157,10 @@ class DriverStateHandler:
 
         handler = self._get_handler(current_state)
         response, new_state, context_update = await handler(
-            user, message, context, photo_file_id=photo_file_id
+            user, message, context,
+            photo_file_id=photo_file_id,
+            location_lat=location_lat,
+            location_lng=location_lng,
         )
 
         # ניקוי קונטקסט רישום בחזרה ל-MENU או ל-INITIAL (ביטול)
@@ -203,6 +229,10 @@ class DriverStateHandler:
             DriverState.SETTINGS_UPCOMING_TIMEFRAME.value: self._handle_settings_timeframe,
             DriverState.SETTINGS_FUTURE_ONLY_MODE.value: self._handle_settings_future_only,
             DriverState.SETTINGS_START_TIME.value: self._handle_settings_start_time,
+            # חיפוש נסיעות (סשן 5)
+            DriverState.SEARCH_VIEW_ACTIVE.value: self._handle_search_view_active,
+            DriverState.SEARCH_MANAGE.value: self._handle_search_manage,
+            DriverState.SEARCH_CREATE_ORIGIN.value: self._handle_search_create_location,
         }
         return handlers.get(state, self._handle_unknown)
 
@@ -644,35 +674,80 @@ class DriverStateHandler:
         self, user: User, message: str, context: dict, **kwargs: object
     ) -> Tuple[MessageResponse, str, dict]:
         """
-        תפריט ראשי — ניתוב לפי בחירת כפתור.
+        תפריט ראשי — ניתוב לפי בחירת כפתור או פקודת חיפוש.
 
         כפתורים:
         - 🛠 הגדרות חיפוש → SETTINGS_VIEW
+        - 🔍 חיפושים פעילים → SEARCH_VIEW_ACTIVE
         - 📖 הוראות שימוש → הודעת עזרה (נשאר ב-MENU)
         - ת / תפריט → רענון התפריט
+
+        פקודות טקסט:
+        - "פ <יעד>" → חיפוש ליעד
+        - "פ <מוצא> <יעד>" → חיפוש ממוצא ליעד
+        - "פ א <יעד>" → חיפוש אזורי
+        - "פ מיקום" → חיפוש לפי מיקום GPS
+        - "מילון" → רשימת קיצורי ערים
         """
         msg = message.strip()
+
+        # פקודת חיפוש — "פ ..."
+        if self.city_service.is_search_command(msg):
+            return await self._handle_search_command(user, msg)
 
         # ניתוב להגדרות חיפוש
         if "הגדרות" in msg:
             return await self._build_settings_menu(user)
 
+        # צפייה בחיפושים פעילים
+        if "חיפושים" in msg or "🔍" in msg:
+            return await self._build_search_view(user)
+
+        # מילון קיצורי ערים
+        if msg == "מילון" or "מילון" in msg:
+            return self._show_abbreviations_help()
+
         # הוראות שימוש
-        if "הוראות" in msg or "עזרה" in msg:
-            response = MessageResponse(
-                text=(
-                    "📖 <b>הוראות שימוש</b>\n\n"
-                    "🔹 <b>תפריט</b> — שלח 'ת' או 'תפריט' לפתיחת התפריט הראשי\n"
-                    "🔹 <b>הגדרות</b> — שנה סוג רכב, סוג נסיעה, מסגרת זמן ועוד\n"
-                    "🔹 <b>חיפוש</b> — שלח 'פ' ואחריו יעד לחיפוש נסיעות\n\n"
-                    "📋 לחזרה לתפריט שלח 'ת'"
-                ),
-                keyboard=[["🔙 חזרה לתפריט"]],
-            )
-            return response, DriverState.MENU.value, {}
+        if "הוראות" in msg or "עזרה" in msg or "מדריך" in msg:
+            return self._show_help()
 
         # ברירת מחדל — רענון תפריט ראשי
         return await self._build_main_menu(user)
+
+    def _show_help(self) -> Tuple[MessageResponse, str, dict]:
+        """הצגת הוראות שימוש"""
+        response = MessageResponse(
+            text=(
+                "📖 <b>הוראות שימוש</b>\n\n"
+                "🔹 <b>תפריט</b> — שלח 'ת' או 'תפריט' לפתיחת התפריט הראשי\n"
+                "🔹 <b>הגדרות</b> — שנה סוג רכב, סוג נסיעה, מסגרת זמן ועוד\n\n"
+                "🔍 <b>חיפוש נסיעות</b>\n"
+                "🔹 <b>פ ים</b> — חיפוש נסיעות לירושלים\n"
+                "🔹 <b>פ בב ים</b> — חיפוש מבני ברק לירושלים\n"
+                "🔹 <b>פ א טב</b> — חיפוש אזורי לטבריה\n"
+                "🔹 <b>פ מיקום</b> — חיפוש לפי שיתוף מיקום GPS\n\n"
+                "📋 <b>ניהול חיפושים</b>\n"
+                "🔹 <b>חיפושים</b> — צפייה בחיפושים פעילים\n"
+                "🔹 <b>מילון</b> — רשימת קיצורי ערים\n\n"
+                "📋 לחזרה לתפריט שלח 'ת'"
+            ),
+            keyboard=[["🔙 חזרה לתפריט"]],
+        )
+        return response, DriverState.MENU.value, {}
+
+    def _show_abbreviations_help(self) -> Tuple[MessageResponse, str, dict]:
+        """הצגת מילון קיצורי ערים"""
+        abbreviations = self.city_service.get_abbreviations_help()
+        response = MessageResponse(
+            text=(
+                "📚 <b>מילון קיצורי ערים</b>\n\n"
+                f"<pre>{abbreviations}</pre>\n\n"
+                "💡 אפשר גם לכתוב את שם העיר המלא.\n"
+                "📋 לחזרה לתפריט שלח 'ת'"
+            ),
+            keyboard=[["🔙 חזרה לתפריט"]],
+        )
+        return response, DriverState.MENU.value, {}
 
     # ==================== סשן 4: הגדרות חיפוש ====================
 
@@ -1021,6 +1096,282 @@ class DriverStateHandler:
         if not (0 <= hour <= 23 and 0 <= minute <= 59):
             return None
         return time_type(hour, minute)
+
+    # ==================== סשן 5: חיפוש נסיעות ====================
+
+    async def _handle_search_command(
+        self, user: User, text: str
+    ) -> Tuple[MessageResponse, str, dict]:
+        """
+        טיפול בפקודת חיפוש מהתפריט הראשי.
+
+        מפרסר את הפקודה ויוצר חיפוש חדש מיידית.
+        אם הפקודה היא "פ מיקום" — עובר למצב המתנה למיקום GPS.
+        """
+        parsed = self.city_service.parse_search_command(text)
+
+        if not parsed:
+            # פקודה לא תקינה — הצגת עזרה
+            response = MessageResponse(
+                text=(
+                    "❌ פקודת חיפוש לא תקינה.\n\n"
+                    "🔍 <b>דוגמאות לחיפוש:</b>\n"
+                    "• <b>פ ים</b> — חיפוש לירושלים\n"
+                    "• <b>פ בב ים</b> — מבני ברק לירושלים\n"
+                    "• <b>פ א טב</b> — אזור טבריה\n"
+                    "• <b>פ מיקום</b> — חיפוש לפי מיקום GPS\n\n"
+                    "💡 שלח 'מילון' לרשימת קיצורי ערים"
+                ),
+                keyboard=[["🔙 חזרה לתפריט"]],
+            )
+            return response, DriverState.MENU.value, {}
+
+        # חיפוש לפי מיקום — מעבר למצב המתנה לשיתוף מיקום
+        if parsed.is_location_search:
+            response = MessageResponse(
+                text=(
+                    "📍 <b>חיפוש לפי מיקום</b>\n\n"
+                    "שתף את המיקום שלך כדי לחפש נסיעות באזור.\n"
+                    "לחץ על סמל הצמד (📎) ובחר 'מיקום'."
+                ),
+                keyboard=[["❌ ביטול"]],
+            )
+            return response, DriverState.SEARCH_CREATE_ORIGIN.value, {}
+
+        # חיפוש רגיל / אזורי — יצירה מיידית
+        origin = parsed.origin or ""
+        try:
+            search = await self.search_service.create_search(
+                user_id=user.id,
+                origin_city=origin,
+                destination_city=parsed.destination,
+                is_area_search=parsed.is_area_search,
+            )
+        except ValidationException as e:
+            response = MessageResponse(
+                text=f"❌ {e.message}",
+                keyboard=[["🔍 חיפושים פעילים"], ["🔙 חזרה לתפריט"]],
+            )
+            return response, DriverState.MENU.value, {}
+
+        # הצגת אישור + סיכום
+        summary = DriverSearchService.format_search_summary(search)
+        active_count = await self.search_service.get_active_search_count(user.id)
+        area_text = " (אזורי)" if parsed.is_area_search else ""
+
+        response = MessageResponse(
+            text=(
+                f"✅ <b>חיפוש חדש נוסף!</b>{escape(area_text)}\n\n"
+                f"{summary}\n\n"
+                f"📊 סה״כ חיפושים פעילים: {active_count}/{MAX_ACTIVE_SEARCHES_PER_USER}\n\n"
+                "💡 להוספת חיפוש נוסף — שלח 'פ <יעד>'\n"
+                "📋 לחזרה לתפריט שלח 'ת'"
+            ),
+            keyboard=[["🔍 חיפושים פעילים"], ["🔙 חזרה לתפריט"]],
+        )
+        return response, DriverState.MENU.value, {}
+
+    async def _build_search_view(
+        self, user: User
+    ) -> Tuple[MessageResponse, str, dict]:
+        """בניית תצוגת חיפושים פעילים"""
+        searches = await self.search_service.get_active_searches(user.id)
+        searches_text = DriverSearchService.format_searches_list(searches)
+
+        if not searches:
+            response = MessageResponse(
+                text=(
+                    "🔍 <b>חיפושים פעילים</b>\n\n"
+                    "אין חיפושים פעילים כרגע.\n\n"
+                    "💡 להוספת חיפוש — שלח 'פ <יעד>'\n"
+                    "לדוגמה: 'פ ים' לחיפוש לירושלים"
+                ),
+                keyboard=[["🔙 חזרה לתפריט"]],
+            )
+            return response, DriverState.MENU.value, {}
+
+        keyboard = [["🗑 מחק חיפוש"], ["🗑 מחק הכל"]]
+        keyboard.append(["🔙 חזרה לתפריט"])
+
+        response = MessageResponse(
+            text=(
+                f"🔍 <b>חיפושים פעילים ({len(searches)}/{MAX_ACTIVE_SEARCHES_PER_USER})</b>\n\n"
+                f"{searches_text}\n\n"
+                "💡 להוספת חיפוש — שלח 'פ <יעד>'"
+            ),
+            keyboard=keyboard,
+        )
+        return response, DriverState.SEARCH_VIEW_ACTIVE.value, {}
+
+    async def _handle_search_view_active(
+        self, user: User, message: str, context: dict, **kwargs: object
+    ) -> Tuple[MessageResponse, str, dict]:
+        """
+        מצב צפייה בחיפושים — ניתוב לפי בחירת כפתור.
+        """
+        msg = message.strip()
+
+        # חזרה לתפריט
+        if "חזרה" in msg or "תפריט" in msg:
+            return await self._build_main_menu(user)
+
+        # פקודת חיפוש חדש מתוך מסך החיפושים
+        if self.city_service.is_search_command(msg):
+            return await self._handle_search_command(user, msg)
+
+        # מחיקת כל החיפושים
+        if "מחק הכל" in msg:
+            count = await self.search_service.delete_all_searches(user.id)
+            if count == 0:
+                response = MessageResponse(
+                    text="❌ אין חיפושים פעילים למחיקה.",
+                    keyboard=[["🔙 חזרה לתפריט"]],
+                )
+                return response, DriverState.MENU.value, {}
+            response = MessageResponse(
+                text=f"✅ {count} חיפושים נמחקו בהצלחה.",
+                keyboard=[["🔙 חזרה לתפריט"]],
+            )
+            return response, DriverState.MENU.value, {}
+
+        # מחיקת חיפוש בודד — הצגת רשימה לבחירה
+        if "מחק" in msg:
+            return await self._build_search_delete_menu(user)
+
+        # ברירת מחדל — רענון תצוגת חיפושים
+        return await self._build_search_view(user)
+
+    async def _build_search_delete_menu(
+        self, user: User
+    ) -> Tuple[MessageResponse, str, dict]:
+        """בניית תפריט מחיקת חיפוש — הצגת רשימה ממוספרת לבחירה"""
+        searches = await self.search_service.get_active_searches(user.id)
+        if not searches:
+            response = MessageResponse(
+                text="❌ אין חיפושים פעילים למחיקה.",
+                keyboard=[["🔙 חזרה לתפריט"]],
+            )
+            return response, DriverState.MENU.value, {}
+
+        keyboard = []
+        for i, search in enumerate(searches, 1):
+            summary = DriverSearchService.format_search_summary(search)
+            keyboard.append([f"🗑 {i}. {summary}"])
+
+        keyboard.append(["❌ ביטול"])
+
+        response = MessageResponse(
+            text="🗑 <b>בחר חיפוש למחיקה:</b>",
+            keyboard=keyboard,
+        )
+        # שמירת מזהי חיפושים בקונטקסט לשימוש במצב SEARCH_MANAGE
+        search_ids = {str(i): search.id for i, search in enumerate(searches, 1)}
+        return response, DriverState.SEARCH_MANAGE.value, {"search_ids": search_ids}
+
+    async def _handle_search_manage(
+        self, user: User, message: str, context: dict, **kwargs: object
+    ) -> Tuple[MessageResponse, str, dict]:
+        """
+        מצב ניהול חיפוש — מחיקת חיפוש לפי בחירת מספר.
+        """
+        msg = message.strip()
+
+        # ביטול
+        if "ביטול" in msg:
+            return await self._build_search_view(user)
+
+        # חזרה לתפריט
+        if "חזרה" in msg or "תפריט" in msg:
+            return await self._build_main_menu(user)
+
+        # ניסיון לזהות מספר חיפוש מתוך טקסט הכפתור
+        search_ids: dict[str, int] = context.get("search_ids", {})
+        selected_index = self._extract_search_index(msg)
+
+        if selected_index and str(selected_index) in search_ids:
+            search_id = search_ids[str(selected_index)]
+            try:
+                await self.search_service.delete_search(user.id, search_id)
+                response = MessageResponse(
+                    text="✅ החיפוש נמחק בהצלחה.",
+                    keyboard=[["🔍 חיפושים פעילים"], ["🔙 חזרה לתפריט"]],
+                )
+                return response, DriverState.SEARCH_VIEW_ACTIVE.value, {}
+            except (NotFoundException, ValidationException) as e:
+                err_msg = e.message if hasattr(e, "message") else str(e)
+                response = MessageResponse(
+                    text=f"❌ {err_msg}",
+                    keyboard=[["🔍 חיפושים פעילים"], ["🔙 חזרה לתפריט"]],
+                )
+                return response, DriverState.SEARCH_VIEW_ACTIVE.value, {}
+
+        # בחירה לא מוכרת — הצגת תפריט מחיקה מחדש
+        return await self._build_search_delete_menu(user)
+
+    @staticmethod
+    def _extract_search_index(text: str) -> int | None:
+        """חילוץ מספר חיפוש מטקסט כפתור (למשל '🗑 1. ...' → 1)"""
+        import re
+        match = re.search(r"(\d+)", text)
+        if match:
+            return int(match.group(1))
+        return None
+
+    async def _handle_search_create_location(
+        self, user: User, message: str, context: dict, **kwargs: object
+    ) -> Tuple[MessageResponse, str, dict]:
+        """
+        מצב המתנה למיקום GPS — מצפה לקבל קואורדינטות מיקום.
+
+        הקואורדינטות מועברות דרך kwargs (location_lat, location_lng)
+        מה-webhook handler.
+        """
+        location_lat: float | None = kwargs.get("location_lat")
+        location_lng: float | None = kwargs.get("location_lng")
+
+        # ביטול
+        if message and "ביטול" in message.strip():
+            return await self._build_main_menu(user)
+
+        if location_lat is None or location_lng is None:
+            # לא התקבל מיקום — הנחיה חוזרת
+            response = MessageResponse(
+                text=(
+                    "📍 <b>חיפוש לפי מיקום</b>\n\n"
+                    "לא התקבל מיקום.\n"
+                    "שתף את המיקום שלך דרך סמל הצמד (📎) ← 'מיקום'.\n\n"
+                    "💡 לחלופין, שלח פקודת חיפוש רגילה: 'פ <יעד>'"
+                ),
+                keyboard=[["❌ ביטול"]],
+            )
+            return response, DriverState.SEARCH_CREATE_ORIGIN.value, {}
+
+        # יצירת חיפוש מיקום
+        try:
+            search = await self.search_service.create_location_search(
+                user_id=user.id,
+                latitude=location_lat,
+                longitude=location_lng,
+            )
+        except ValidationException as e:
+            response = MessageResponse(
+                text=f"❌ {e.message}",
+                keyboard=[["🔍 חיפושים פעילים"], ["🔙 חזרה לתפריט"]],
+            )
+            return response, DriverState.MENU.value, {}
+
+        summary = DriverSearchService.format_search_summary(search)
+        active_count = await self.search_service.get_active_search_count(user.id)
+
+        response = MessageResponse(
+            text=(
+                "✅ <b>חיפוש לפי מיקום נוסף!</b>\n\n"
+                f"{summary}\n\n"
+                f"📊 סה״כ חיפושים פעילים: {active_count}/{MAX_ACTIVE_SEARCHES_PER_USER}"
+            ),
+            keyboard=[["🔍 חיפושים פעילים"], ["🔙 חזרה לתפריט"]],
+        )
+        return response, DriverState.MENU.value, {}
 
     # ==================== fallback ====================
 

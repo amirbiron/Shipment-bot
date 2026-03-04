@@ -428,6 +428,9 @@ class _InboundTelegramEvent:
     name: str | None
     is_callback: bool
     callback_query_id: str | None
+    # שיתוף מיקום GPS (סשן 5 — חיפוש לפי מיקום)
+    location_lat: float | None = None
+    location_lng: float | None = None
 
 
 def _queue_response_send(
@@ -515,6 +518,13 @@ def _parse_inbound_event(
             if message.from_user.last_name:
                 name += f" {message.from_user.last_name}"
 
+        # שיתוף מיקום GPS (סשן 5)
+        location_lat = None
+        location_lng = None
+        if message.location:
+            location_lat = message.location.latitude
+            location_lng = message.location.longitude
+
         return _InboundTelegramEvent(
             send_chat_id=send_chat_id,
             telegram_user_id=telegram_user_id,
@@ -523,6 +533,8 @@ def _parse_inbound_event(
             name=name,
             is_callback=False,
             callback_query_id=None,
+            location_lat=location_lat,
+            location_lng=location_lng,
         )
 
     return None
@@ -767,6 +779,13 @@ class TelegramDocument(BaseModel):
     mime_type: Optional[str] = None
 
 
+class TelegramLocation(BaseModel):
+    """מודל למיקום GPS שנשלח בטלגרם (סשן 5 — חיפוש לפי מיקום)"""
+
+    latitude: float
+    longitude: float
+
+
 class TelegramMessage(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -776,6 +795,7 @@ class TelegramMessage(BaseModel):
     text: Optional[str] = None
     photo: Optional[List[TelegramPhotoSize]] = None
     document: Optional[TelegramDocument] = None
+    location: Optional[TelegramLocation] = None
     date: int
 
 
@@ -1211,6 +1231,8 @@ async def telegram_webhook(
     text = event.text or ""
     photo_file_id = event.photo_file_id
     name = event.name
+    location_lat = event.location_lat
+    location_lng = event.location_lng
 
     # פתיחת callback_data קצר (btn:*) לטקסט הכפתור המלא — כדי שה-state machine
     # ימשיך לעבוד על "טקסט" כמו בהודעות רגילות.
@@ -1236,8 +1258,8 @@ async def telegram_webhook(
             )
             return {"ok": True, "expired_inline_button": True}
 
-    # Skip if no content
-    if not text and not photo_file_id:
+    # Skip if no content (מיקום GPS גם נחשב תוכן — לחיפוש נסיעות)
+    if not text and not photo_file_id and location_lat is None:
         return {"ok": True}
 
     if not send_chat_id or not telegram_user_id:
@@ -2107,7 +2129,10 @@ async def telegram_webhook(
                 user.id, "telegram", DriverState.INITIAL.value, context={}
             )
         handler = DriverStateHandler(db, platform="telegram")
-        response, new_state = await handler.handle_message(user, text, photo_file_id)
+        response, new_state = await handler.handle_message(
+            user, text, photo_file_id,
+            location_lat=location_lat, location_lng=location_lng,
+        )
         _queue_response_send(background_tasks, send_chat_id, response)
         return {"ok": True, "new_state": new_state}
 
