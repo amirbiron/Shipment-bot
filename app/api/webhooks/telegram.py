@@ -289,6 +289,26 @@ async def _clear_pending_rejection(admin_chat_id: str) -> None:
         )
 
 
+def _build_driver_rejection_context(
+    user: User,
+    profile: object,
+) -> dict:
+    """בונה קונטקסט רישום מפרופיל נהג קיים — כדי שכרטיס הנהג יוצג תקין אחרי דחייה."""
+    from datetime import date as _date
+
+    ctx: dict = {
+        "reg_name": user.full_name or user.name or "לא צוין",
+    }
+    if hasattr(profile, "birth_date") and profile.birth_date:
+        today = _date.today()
+        bd = profile.birth_date
+        age = today.year - bd.year - ((today.month, today.day) < (bd.month, bd.day))
+        ctx["reg_age"] = str(age)
+    if hasattr(profile, "vehicle_description") and profile.vehicle_description:
+        ctx["reg_vehicle"] = profile.vehicle_description
+    return ctx
+
+
 _SenderButtonHandler: TypeAlias = Callable[
     [User, AsyncSession, StateManager, str, str | None],
     Awaitable[tuple[MessageResponse, str | None]],
@@ -1333,14 +1353,17 @@ async def telegram_webhook(
                             f"⚠️ שגיאת מערכת — הדחייה בוצעה ללא הערה.\n{result.message}",
                         )
                         if result.success and result.user and result.profile:
-                            # עדכון מצב הנהג חזרה ל-VERIFY_COLLECT_SELFIE
+                            # עדכון מצב הנהג חזרה ל-VERIFY_COLLECT_SELFIE עם קונטקסט רישום
+                            rej_ctx = _build_driver_rejection_context(
+                                result.user, result.profile
+                            )
                             state_manager = StateManager(db)
                             for plat in ("telegram", "whatsapp"):
                                 await state_manager.force_state(
                                     driver_user_id,
                                     plat,
                                     DriverState.VERIFY_COLLECT_SELFIE.value,
-                                    context={},
+                                    context=rej_ctx,
                                 )
 
                             # הודעה לנהג
@@ -1349,6 +1372,18 @@ async def telegram_webhook(
                                     send_telegram_message,
                                     str(result.user.telegram_chat_id),
                                     "😔 <b>האימות שלך נדחה.</b>\nתוכל לנסות שוב.",
+                                )
+                            elif (
+                                result.user.phone_number
+                                and not result.user.phone_number.startswith("tg:")
+                                and not result.user.phone_number.endswith("@g.us")
+                            ):
+                                from app.api.webhooks.whatsapp import send_whatsapp_message
+
+                                background_tasks.add_task(
+                                    send_whatsapp_message,
+                                    result.user.phone_number,
+                                    "😔 *האימות שלך נדחה.*\nתוכל לנסות שוב.",
                                 )
 
                         return {
@@ -1480,14 +1515,17 @@ async def telegram_webhook(
             )
 
             if result.success and result.user and result.profile:
-                # עדכון מצב הנהג חזרה ל-VERIFY_COLLECT_SELFIE
+                # עדכון מצב הנהג חזרה ל-VERIFY_COLLECT_SELFIE עם קונטקסט רישום
+                rej_ctx = _build_driver_rejection_context(
+                    result.user, result.profile
+                )
                 state_manager_rej = StateManager(db)
                 for plat in ("telegram", "whatsapp"):
                     await state_manager_rej.force_state(
                         target_id,
                         plat,
                         DriverState.VERIFY_COLLECT_SELFIE.value,
-                        context={},
+                        context=rej_ctx,
                     )
 
                 # הודעה לנהג
