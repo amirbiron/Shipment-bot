@@ -1436,7 +1436,7 @@ async def whatsapp_webhook(
     
     
                 if "חזרה לתפריט" in text and (
-                    user.role not in (UserRole.COURIER, UserRole.STATION_OWNER)
+                    user.role not in (UserRole.COURIER, UserRole.STATION_OWNER, UserRole.DRIVER)
                     or _admin_root_menu
                 ):
                     # כפתור "חזרה לתפריט" - שולחים רגילים חוזרים לתפריט הראשי
@@ -1614,6 +1614,21 @@ async def whatsapp_webhook(
                                 user.id, "whatsapp", CourierState.MENU.value, context={}
                             )
                             handler = CourierStateHandler(db, platform="whatsapp")
+                            response, new_state = await handler.handle_message(
+                                user, "תפריט", None
+                            )
+                        elif user.role == UserRole.DRIVER:
+                            # סשן 9: נהג-סדרן חוזר לתפריט נהג (לא סדרן)
+                            from app.state_machine.driver_handler import DriverStateHandler
+                            from app.domain.services.driver_session_service import DriverSessionService
+
+                            session_service = DriverSessionService(db)
+                            await session_service.touch_session(user.id)
+
+                            await state_manager.force_state(
+                                user.id, "whatsapp", DriverState.INITIAL.value, context={}
+                            )
+                            handler = DriverStateHandler(db, platform="whatsapp")
                             response, new_state = await handler.handle_message(
                                 user, "תפריט", None
                             )

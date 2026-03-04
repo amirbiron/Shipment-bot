@@ -1880,9 +1880,11 @@ async def telegram_webhook(
     current_state = await state_manager.get_current_state(user.id, "telegram")
 
     # "חזרה לתפריט" מתנהג כמו לחיצה על # (כולל איפוס state) — גם אם המשתמש הגיע עם state תקוע
+    # סשן 9: DRIVER מוחרג כי נהג-סדרן מנוהל דרך בלוק DISPATCHER למטה
     if "חזרה לתפריט" in text and user.role not in (
         UserRole.COURIER,
         UserRole.STATION_OWNER,
+        UserRole.DRIVER,
     ):
         response, new_state = await _route_to_role_menu(user, db, state_manager)
         _queue_response_send(background_tasks, send_chat_id, response)
@@ -2084,6 +2086,21 @@ async def telegram_webhook(
                         user.id, "telegram", CourierState.MENU.value, context={}
                     )
                     handler = CourierStateHandler(db)
+                    response, new_state = await handler.handle_message(
+                        user, "תפריט", None
+                    )
+                elif user.role == UserRole.DRIVER:
+                    # סשן 9: נהג-סדרן חוזר לתפריט נהג (לא סדרן)
+                    from app.state_machine.driver_handler import DriverStateHandler
+                    from app.domain.services.driver_session_service import DriverSessionService
+
+                    session_service = DriverSessionService(db)
+                    await session_service.touch_session(user.id)
+
+                    await state_manager.force_state(
+                        user.id, "telegram", DriverState.INITIAL.value, context={}
+                    )
+                    handler = DriverStateHandler(db, platform="telegram")
                     response, new_state = await handler.handle_message(
                         user, "תפריט", None
                     )
