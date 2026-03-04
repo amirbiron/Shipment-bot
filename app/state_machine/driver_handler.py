@@ -1687,11 +1687,15 @@ class DriverStateHandler:
             )
             return response, DriverState.MENU.value, {}
 
-        # בניית טקסט סטטוס
+        # בניית טקסט סטטוס — שימוש ב-is_active כדי לא להציג "פגה" בשעות האחרונות
         if status_info["is_trial"]:
             days = status_info["days_remaining"]
-            if days is not None and days > 0:
-                status_text = f"🆓 <b>שבוע ניסיון</b> — נותרו {days} ימים"
+            if status_info["is_active"]:
+                if days is not None and days > 0:
+                    status_text = f"🆓 <b>שבוע ניסיון</b> — נותרו {days} ימים"
+                else:
+                    # פחות מ-24 שעות אבל עדיין פעיל
+                    status_text = "🆓 <b>שבוע ניסיון</b> — יום אחרון!"
             else:
                 status_text = "⚠️ <b>תקופת הניסיון פגה</b>"
         elif status_info["status"] == DriverSubscriptionStatus.ACTIVE.value:
@@ -1839,14 +1843,31 @@ class DriverStateHandler:
 
     @staticmethod
     def _parse_subscription_choice(text: str) -> int | None:
-        """מיפוי בחירת חבילה לחודשים"""
-        if "שנתי" in text or "12" in text:
+        """
+        מיפוי בחירת חבילה לחודשים — מעוגן לפורמט הכפתורים בלבד.
+
+        מתאים רק לטקסטים של כפתורים מוגדרים ("📦 חודש אחד", "📦 3 חודשים" וכו').
+        טקסט חופשי שמכיל ספרות (כמו "16") לא יתפרש בטעות.
+        """
+        # התאמה מדויקת לטקסט כפתור
+        _CHOICE_MAP = {
+            "📦 שנתי": 12,
+            "📦 6 חודשים": 6,
+            "📦 3 חודשים": 3,
+            "📦 חודש אחד": 1,
+        }
+        for label, months in _CHOICE_MAP.items():
+            if text == label:
+                return months
+
+        # fallback — מילות מפתח ייחודיות (לא ספרות בודדות)
+        if "שנתי" in text:
             return 12
-        if "6" in text:
+        if "6 חודשים" in text:
             return 6
-        if "3" in text:
+        if "3 חודשים" in text:
             return 3
-        if "חודש" in text or "1" in text:
+        if "חודש אחד" in text:
             return 1
         return None
 

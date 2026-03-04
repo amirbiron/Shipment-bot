@@ -485,6 +485,49 @@ class TestDriverSubscriptionHandler:
         assert "פג תוקף" not in response.text
 
     @pytest.mark.asyncio
+    async def test_trial_last_day_shows_active(self, db_session, user_factory):
+        """trial ביום האחרון (פחות מ-24 שעות) — מציג 'יום אחרון' ולא 'פגה'"""
+        user, profile = await _create_registered_driver(
+            db_session, user_factory, phone="+972505008030",
+            # פחות מיום אבל עדיין עתידי
+            trial_days_remaining=0,
+        )
+        # לוודא שה-trial עדיין פעיל — מגדירים תפוגה עם שעות (לא ימים שלמים)
+        now = datetime.utcnow()
+        profile.trial_expires_at = now + timedelta(hours=10)
+        await db_session.commit()
+
+        handler = DriverStateHandler(db_session, platform="telegram")
+
+        from app.state_machine.manager import StateManager
+        sm = StateManager(db_session)
+        await sm.force_state(user.id, "telegram", DriverState.MENU.value, {})
+
+        response, new_state = await handler.handle_message(user, "💳 מנוי")
+
+        assert new_state == DriverState.SUBSCRIPTION_VIEW.value
+        assert "פגה" not in response.text
+        assert "יום אחרון" in response.text
+
+    @pytest.mark.asyncio
+    async def test_digit_in_freetext_rejected(self, db_session, user_factory):
+        """טקסט חופשי עם ספרות (כמו '16') — לא מתפרש כחבילה"""
+        user, _ = await _create_registered_driver(
+            db_session, user_factory, phone="+972505008031"
+        )
+        handler = DriverStateHandler(db_session, platform="telegram")
+
+        from app.state_machine.manager import StateManager
+        sm = StateManager(db_session)
+        await sm.force_state(user.id, "telegram", DriverState.SUBSCRIPTION_VIEW.value, {})
+
+        # "16" לא צריך להתפרש כ-6 חודשים
+        response, new_state = await handler.handle_message(user, "16")
+
+        assert new_state == DriverState.SUBSCRIPTION_VIEW.value
+        assert "לא תקינה" in response.text
+
+    @pytest.mark.asyncio
     async def test_invalid_subscription_choice(self, db_session, user_factory):
         """בחירת חבילה לא תקינה — הודעת שגיאה"""
         user, _ = await _create_registered_driver(
