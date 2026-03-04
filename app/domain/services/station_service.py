@@ -2126,3 +2126,145 @@ class StationService:
             "cancelled": row[2] or 0,
             "open": row[3] or 0,
         }
+
+    # ==================== נסיעות סדרן (סשן 9) ====================
+
+    async def create_dispatcher_ride(
+        self,
+        station_id: int,
+        dispatcher_id: int,
+        origin_city: str,
+        destination_city: str,
+        seats: int,
+        price: float,
+        description: str | None = None,
+        is_delivery: bool = False,
+    ) -> "DispatcherRide":
+        """
+        יצירת נסיעה חדשה שמפרסם סדרן.
+
+        Args:
+            station_id: מזהה התחנה
+            dispatcher_id: מזהה הסדרן
+            origin_city: עיר מוצא
+            destination_city: עיר יעד
+            seats: מספר מקומות
+            price: מחיר בש"ח
+            description: תיאור (אופציונלי)
+            is_delivery: האם זה משלוח (לא נסיעה)
+
+        Returns:
+            הנסיעה שנוצרה
+
+        Raises:
+            ValidationException: אם הסדרן לא מורשה לתחנה
+        """
+        from app.db.models.dispatcher_ride import DispatcherRide, DispatcherRideStatus
+
+        # בדיקת הרשאת סדרן
+        if not await self.is_dispatcher_of_station(dispatcher_id, station_id):
+            raise ValidationException("אין הרשאה לפרסם נסיעות בתחנה זו")
+
+        # ולידציה בסיסית
+        if seats <= 0 or seats > 50:
+            raise ValidationException("מספר מקומות חייב להיות בין 1 ל-50")
+        if price <= 0:
+            raise ValidationException("המחיר חייב להיות חיובי")
+
+        ride = DispatcherRide(
+            dispatcher_id=dispatcher_id,
+            station_id=station_id,
+            origin_city=origin_city,
+            destination_city=destination_city,
+            seats=seats,
+            price=Decimal(str(price)),
+            description=description,
+            is_delivery=is_delivery,
+            status=DispatcherRideStatus.OPEN.value,
+        )
+        self.db.add(ride)
+        await self.db.commit()
+        await self.db.refresh(ride)
+
+        logger.info(
+            "נסיעת סדרן נוצרה",
+            extra_data={
+                "ride_id": ride.id,
+                "station_id": station_id,
+                "dispatcher_id": dispatcher_id,
+                "origin": origin_city,
+                "destination": destination_city,
+            },
+        )
+        return ride
+
+    async def get_station_active_rides(
+        self, station_id: int
+    ) -> list["DispatcherRide"]:
+        """
+        שליפת נסיעות פעילות של תחנה (פתוחות ונתפסות).
+
+        Args:
+            station_id: מזהה התחנה
+
+        Returns:
+            רשימת נסיעות פעילות
+        """
+        from app.db.models.dispatcher_ride import (
+            DispatcherRide,
+            ACTIVE_RIDE_STATUSES,
+        )
+
+        result = await self.db.execute(
+            select(DispatcherRide)
+            .where(
+                DispatcherRide.station_id == station_id,
+                DispatcherRide.status.in_(
+                    [s.value for s in ACTIVE_RIDE_STATUSES]
+                ),
+            )
+            .order_by(DispatcherRide.created_at.desc())
+        )
+        return list(result.scalars().all())
+
+    async def get_open_rides_for_search(
+        self,
+        origin_city: str | None = None,
+        destination_city: str | None = None,
+    ) -> list["DispatcherRide"]:
+        """
+        שליפת נסיעות פתוחות לפי מוצא/יעד — לשימוש ע"י מערכת חיפוש נהגים.
+
+        Args:
+            origin_city: סינון לפי עיר מוצא (אופציונלי)
+            destination_city: סינון לפי עיר יעד (אופציונלי)
+
+        Returns:
+            רשימת נסיעות פתוחות שתואמות את הסינון
+        """
+        from app.db.models.dispatcher_ride import (
+            DispatcherRide,
+            DispatcherRideStatus,
+        )
+
+        conditions = [
+            DispatcherRide.status == DispatcherRideStatus.OPEN.value,
+        ]
+
+        if origin_city is not None:
+            conditions.append(
+                DispatcherRide.origin_city.ilike(f"%{origin_city}%")
+            )
+
+        if destination_city is not None:
+            conditions.append(
+                DispatcherRide.destination_city.ilike(f"%{destination_city}%")
+            )
+
+        result = await self.db.execute(
+            select(DispatcherRide)
+            .where(*conditions)
+            .order_by(DispatcherRide.created_at.desc())
+            .limit(20)
+        )
+        return list(result.scalars().all())

@@ -1,15 +1,18 @@
 """
-Dispatcher State Handler - תפריט סדרן היברידי [שלב 3.2]
+Dispatcher State Handler - תפריט סדרן היברידי [שלב 3.2 + סשן 9]
 
 סדרן הוא משתמש עם הרשאות ניהול ברמת תחנה.
-יכול להיות שליח (COURIER) או כל תפקיד אחר שנוסף כסדרן דרך הפאנל.
+יכול להיות שליח (COURIER), נהג (DRIVER) או כל תפקיד אחר שנוסף כסדרן דרך הפאנל.
 תפריט סדרן ייעודי עם:
 - הוספת משלוח (טופס הזנת פרטים)
 - משלוחים פעילים של התחנה
 - היסטוריית משלוחים
 - הוספת חיוב ידני
+- פרסום נסיעה למערכת ההפצה (סשן 9)
+- צפייה בנסיעות פעילות (סשן 9)
 """
 
+import re
 from typing import Tuple
 from html import escape
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,9 +22,11 @@ from app.state_machine.manager import StateManager
 from app.state_machine.handlers import MessageResponse
 from app.db.models.user import User
 from app.db.models.delivery import DeliveryStatus
+from app.db.models.dispatcher_ride import DispatcherRideStatus
 from app.domain.services.station_service import StationService
 from app.domain.services.delivery_service import DeliveryService
 from app.core.logging import get_logger
+from app.core.validation import TextSanitizer
 
 logger = get_logger(__name__)
 
@@ -63,6 +68,14 @@ class DispatcherStateHandler:
         "charge_description",
     }
 
+    # סשן 9: מפתחות קונטקסט של פרסום נסיעה — מנוקים בחזרה ל-MENU
+    _POST_RIDE_CONTEXT_KEYS = {
+        "ride_origin",
+        "ride_destination",
+        "ride_seats",
+        "ride_price",
+    }
+
     def _is_add_shipment_flow_state(self, state: str) -> bool:
         """בודק אם המצב שייך לזרימת הוספת משלוח"""
         return state.startswith("DISPATCHER.ADD_SHIPMENT.")
@@ -71,11 +84,17 @@ class DispatcherStateHandler:
         """בודק אם המצב שייך לזרימת חיוב ידני"""
         return state.startswith("DISPATCHER.MANUAL_CHARGE.")
 
+    def _is_post_ride_flow_state(self, state: str) -> bool:
+        """בודק אם המצב שייך לזרימת פרסום נסיעה (סשן 9)"""
+        return state.startswith("DISPATCHER.POST_RIDE.")
+
     def _is_multi_step_flow_state(self, state: str) -> bool:
         """בודק אם המצב שייך לזרימה רב-שלבית"""
-        return self._is_add_shipment_flow_state(
-            state
-        ) or self._is_manual_charge_flow_state(state)
+        return (
+            self._is_add_shipment_flow_state(state)
+            or self._is_manual_charge_flow_state(state)
+            or self._is_post_ride_flow_state(state)
+        )
 
     async def handle_message(
         self, user: User, message: str, photo_file_id: str = None
@@ -93,7 +112,9 @@ class DispatcherStateHandler:
             current_state
         ):
             keys_to_clean = (
-                self._SHIPMENT_CONTEXT_KEYS | self._MANUAL_CHARGE_CONTEXT_KEYS
+                self._SHIPMENT_CONTEXT_KEYS
+                | self._MANUAL_CHARGE_CONTEXT_KEYS
+                | self._POST_RIDE_CONTEXT_KEYS
             )
             clean_context = {k: v for k, v in context.items() if k not in keys_to_clean}
             if context_update:
@@ -155,6 +176,14 @@ class DispatcherStateHandler:
             DispatcherState.MANUAL_CHARGE_AMOUNT.value: self._handle_manual_charge_amount,
             DispatcherState.MANUAL_CHARGE_DESCRIPTION.value: self._handle_manual_charge_description,
             DispatcherState.MANUAL_CHARGE_CONFIRM.value: self._handle_manual_charge_confirm,
+            # סשן 9: פרסום נסיעה
+            DispatcherState.POST_RIDE_ORIGIN.value: self._handle_post_ride_origin,
+            DispatcherState.POST_RIDE_DESTINATION.value: self._handle_post_ride_destination,
+            DispatcherState.POST_RIDE_SEATS.value: self._handle_post_ride_seats,
+            DispatcherState.POST_RIDE_PRICE.value: self._handle_post_ride_price,
+            DispatcherState.POST_RIDE_CONFIRM.value: self._handle_post_ride_confirm,
+            # סשן 9: צפייה בנסיעות
+            DispatcherState.VIEW_POSTED_RIDES.value: self._handle_view_posted_rides,
         }
         return handlers.get(state, self._handle_unknown)
 
@@ -169,6 +198,7 @@ class DispatcherStateHandler:
             f"🏪 <b>תפריט סדרן - {escape(station_name)}</b>\n\n" "בחר פעולה:",
             keyboard=[
                 ["➕ הוספת משלוח", "📦 משלוחים פעילים"],
+                ["🚗 פרסום נסיעה", "🛣 נסיעות פעילות"],
                 ["📋 היסטוריית משלוחים", "💳 חיוב ידני"],
                 ["🔙 חזרה לתפריט ראשי"],
             ],
@@ -196,6 +226,17 @@ class DispatcherStateHandler:
                 "💳 <b>הוספת חיוב ידני</b>\n\n" "הזן את שם הנהג:"
             )
             return response, DispatcherState.MANUAL_CHARGE_DRIVER_NAME.value, {}
+
+        if "פרסום נסיעה" in msg or "🚗" in msg:
+            response = MessageResponse(
+                "🚗 <b>פרסום נסיעה חדשה</b>\n\n"
+                "📍 <b>עיר מוצא:</b>\n"
+                "מאיפה יוצאים?"
+            )
+            return response, DispatcherState.POST_RIDE_ORIGIN.value, {}
+
+        if "נסיעות פעילות" in msg or "🛣" in msg:
+            return await self._show_posted_rides(user, context)
 
         return await self._show_menu(user, context)
 
@@ -411,6 +452,7 @@ class DispatcherStateHandler:
                 "המשלוח ישודר לנהגים.",
                 keyboard=[
                     ["➕ הוספת משלוח", "📦 משלוחים פעילים"],
+                    ["🚗 פרסום נסיעה", "🛣 נסיעות פעילות"],
                     ["📋 היסטוריית משלוחים", "💳 חיוב ידני"],
                     ["🔙 חזרה לתפריט ראשי"],
                 ],
@@ -422,6 +464,7 @@ class DispatcherStateHandler:
                 "המשלוח בוטל.\n\n" "חזרה לתפריט סדרן.",
                 keyboard=[
                     ["➕ הוספת משלוח", "📦 משלוחים פעילים"],
+                    ["🚗 פרסום נסיעה", "🛣 נסיעות פעילות"],
                     ["📋 היסטוריית משלוחים", "💳 חיוב ידני"],
                     ["🔙 חזרה לתפריט ראשי"],
                 ],
@@ -613,6 +656,7 @@ class DispatcherStateHandler:
                 f"💰 סכום: {amount:.0f} ₪\n",
                 keyboard=[
                     ["➕ הוספת משלוח", "📦 משלוחים פעילים"],
+                    ["🚗 פרסום נסיעה", "🛣 נסיעות פעילות"],
                     ["📋 היסטוריית משלוחים", "💳 חיוב ידני"],
                     ["🔙 חזרה לתפריט ראשי"],
                 ],
@@ -624,6 +668,7 @@ class DispatcherStateHandler:
                 "החיוב בוטל.\n\n" "חזרה לתפריט סדרן.",
                 keyboard=[
                     ["➕ הוספת משלוח", "📦 משלוחים פעילים"],
+                    ["🚗 פרסום נסיעה", "🛣 נסיעות פעילות"],
                     ["📋 היסטוריית משלוחים", "💳 חיוב ידני"],
                     ["🔙 חזרה לתפריט ראשי"],
                 ],
@@ -635,6 +680,285 @@ class DispatcherStateHandler:
             keyboard=[["✅ אישור", "❌ ביטול"]],
         )
         return response, DispatcherState.MANUAL_CHARGE_CONFIRM.value, {}
+
+    # ==================== פרסום נסיעה (סשן 9) ====================
+
+    async def _handle_post_ride_origin(
+        self, user: User, message: str, context: dict
+    ) -> Tuple[MessageResponse, str, dict]:
+        """עיר מוצא לנסיעה"""
+        if "חזרה" in message:
+            return await self._show_menu(user, context)
+
+        city = message.strip()
+        if len(city) < 2:
+            response = MessageResponse("שם העיר קצר מדי. אנא הזן שם עיר תקין:")
+            return response, DispatcherState.POST_RIDE_ORIGIN.value, {}
+
+        # ולידציית בטיחות
+        is_safe, _pattern = TextSanitizer.check_for_injection(city)
+        if not is_safe:
+            response = MessageResponse("קלט לא תקין. אנא הזן שם עיר:")
+            return response, DispatcherState.POST_RIDE_ORIGIN.value, {}
+
+        # ניסיון זיהוי קיצור עיר דרך CityAbbreviationService
+        from app.domain.services.city_abbreviation_service import (
+            CityAbbreviationService,
+        )
+
+        resolved = CityAbbreviationService.resolve_or_raw(city)
+
+        response = MessageResponse(
+            f"📍 מוצא: {escape(resolved)} ✓\n\n"
+            "🎯 <b>עיר יעד:</b>\n"
+            "לאן נוסעים?"
+        )
+        return (
+            response,
+            DispatcherState.POST_RIDE_DESTINATION.value,
+            {"ride_origin": resolved},
+        )
+
+    async def _handle_post_ride_destination(
+        self, user: User, message: str, context: dict
+    ) -> Tuple[MessageResponse, str, dict]:
+        """עיר יעד לנסיעה"""
+        if "חזרה" in message:
+            return await self._show_menu(user, context)
+
+        city = message.strip()
+        if len(city) < 2:
+            response = MessageResponse("שם העיר קצר מדי. אנא הזן שם עיר תקין:")
+            return response, DispatcherState.POST_RIDE_DESTINATION.value, {}
+
+        is_safe, _pattern = TextSanitizer.check_for_injection(city)
+        if not is_safe:
+            response = MessageResponse("קלט לא תקין. אנא הזן שם עיר:")
+            return response, DispatcherState.POST_RIDE_DESTINATION.value, {}
+
+        from app.domain.services.city_abbreviation_service import (
+            CityAbbreviationService,
+        )
+
+        resolved = CityAbbreviationService.resolve_or_raw(city)
+
+        response = MessageResponse(
+            f"📍 מוצא: {escape(context.get('ride_origin', ''))} ✓\n"
+            f"🎯 יעד: {escape(resolved)} ✓\n\n"
+            "👥 <b>מספר מקומות פנויים:</b>"
+        )
+        return (
+            response,
+            DispatcherState.POST_RIDE_SEATS.value,
+            {"ride_destination": resolved},
+        )
+
+    async def _handle_post_ride_seats(
+        self, user: User, message: str, context: dict
+    ) -> Tuple[MessageResponse, str, dict]:
+        """מספר מקומות פנויים"""
+        if "חזרה" in message:
+            return await self._show_menu(user, context)
+
+        numbers = re.findall(r"\d+", message.strip())
+        if not numbers:
+            response = MessageResponse("אנא הזן מספר תקין (מספר מקומות).")
+            return response, DispatcherState.POST_RIDE_SEATS.value, {}
+
+        seats = int(numbers[0])
+        if seats <= 0 or seats > 50:
+            response = MessageResponse("מספר מקומות חייב להיות בין 1 ל-50.")
+            return response, DispatcherState.POST_RIDE_SEATS.value, {}
+
+        response = MessageResponse(
+            f"👥 מקומות: {seats} ✓\n\n"
+            "💰 <b>מחיר הנסיעה:</b>\n"
+            "כמה עולה? (מספר בלבד, בשקלים)"
+        )
+        return (
+            response,
+            DispatcherState.POST_RIDE_PRICE.value,
+            {"ride_seats": seats},
+        )
+
+    async def _handle_post_ride_price(
+        self, user: User, message: str, context: dict
+    ) -> Tuple[MessageResponse, str, dict]:
+        """מחיר הנסיעה"""
+        if "חזרה" in message:
+            return await self._show_menu(user, context)
+
+        numbers = re.findall(r"\d+\.?\d*", message.strip())
+        if not numbers:
+            response = MessageResponse("אנא הזן סכום תקין (מספר בלבד).")
+            return response, DispatcherState.POST_RIDE_PRICE.value, {}
+
+        price = float(numbers[0])
+        if price <= 0:
+            response = MessageResponse("הסכום חייב להיות חיובי.")
+            return response, DispatcherState.POST_RIDE_PRICE.value, {}
+
+        origin = context.get("ride_origin", "לא צוין")
+        destination = context.get("ride_destination", "לא צוין")
+        seats = context.get("ride_seats", 0)
+
+        summary = (
+            "🚗 <b>סיכום הנסיעה:</b>\n\n"
+            f"📍 מוצא: {escape(origin)}\n"
+            f"🎯 יעד: {escape(destination)}\n"
+            f"👥 מקומות: {seats}\n"
+            f"💰 מחיר: {price:.0f} ₪\n\n"
+            "לאשר ולפרסם?"
+        )
+
+        response = MessageResponse(
+            summary, keyboard=[["✅ אישור ופרסום", "❌ ביטול"]]
+        )
+        return (
+            response,
+            DispatcherState.POST_RIDE_CONFIRM.value,
+            {"ride_price": price},
+        )
+
+    async def _handle_post_ride_confirm(
+        self, user: User, message: str, context: dict
+    ) -> Tuple[MessageResponse, str, dict]:
+        """אישור או ביטול פרסום נסיעה"""
+        if "אישור" in message or "✅" in message:
+            origin = context.get("ride_origin", "")
+            destination = context.get("ride_destination", "")
+            seats = context.get("ride_seats", 1)
+            price = context.get("ride_price", 0)
+
+            # יצירת הנסיעה ב-DB + הפצה לקבוצות
+            ride = await self.station_service.create_dispatcher_ride(
+                station_id=self.station_id,
+                dispatcher_id=user.id,
+                origin_city=origin,
+                destination_city=destination,
+                seats=int(seats),
+                price=float(price),
+            )
+
+            # הפצה לקבוצות רלוונטיות
+            sent_count, total_groups = await self._broadcast_ride(
+                user, origin, destination, int(seats), float(price)
+            )
+
+            broadcast_text = ""
+            if total_groups > 0:
+                broadcast_text = f"\n📡 פורסם ב-{sent_count}/{total_groups} קבוצות."
+            else:
+                broadcast_text = "\n📡 לא נמצאו קבוצות רלוונטיות לפרסום."
+
+            response = MessageResponse(
+                "הנסיעה פורסמה בהצלחה! 🎉\n\n"
+                f"📍 מ: {escape(origin)}\n"
+                f"🎯 אל: {escape(destination)}\n"
+                f"👥 מקומות: {seats}\n"
+                f"💰 מחיר: {price:.0f} ₪"
+                f"{broadcast_text}",
+                keyboard=[
+                    ["➕ הוספת משלוח", "📦 משלוחים פעילים"],
+                    ["🚗 פרסום נסיעה", "🛣 נסיעות פעילות"],
+                    ["📋 היסטוריית משלוחים", "💳 חיוב ידני"],
+                    ["🔙 חזרה לתפריט ראשי"],
+                ],
+            )
+            return response, DispatcherState.MENU.value, {}
+
+        if "ביטול" in message or "❌" in message:
+            response = MessageResponse(
+                "הפרסום בוטל.\n\n" "חזרה לתפריט סדרן.",
+                keyboard=[
+                    ["➕ הוספת משלוח", "📦 משלוחים פעילים"],
+                    ["🚗 פרסום נסיעה", "🛣 נסיעות פעילות"],
+                    ["📋 היסטוריית משלוחים", "💳 חיוב ידני"],
+                    ["🔙 חזרה לתפריט ראשי"],
+                ],
+            )
+            return response, DispatcherState.MENU.value, {}
+
+        response = MessageResponse(
+            "אנא בחר:\n" "1. ✅ אישור ופרסום\n" "2. ❌ ביטול",
+            keyboard=[["✅ אישור ופרסום", "❌ ביטול"]],
+        )
+        return response, DispatcherState.POST_RIDE_CONFIRM.value, {}
+
+    async def _broadcast_ride(
+        self,
+        user: User,
+        origin: str,
+        destination: str,
+        seats: int,
+        price: float,
+    ) -> tuple[int, int]:
+        """הפצת נסיעה לקבוצות רלוונטיות דרך RidePostingService"""
+        try:
+            from app.domain.services.ride_posting_service import (
+                ParsedRidePosting,
+                RidePostingService,
+            )
+
+            posting = ParsedRidePosting(
+                origin=origin,
+                destination=destination,
+                seats=seats,
+                price=price,
+            )
+            ride_service = RidePostingService(self.db)
+            _success, _msg, sent_count, total_groups = await ride_service.post_ride(
+                user, posting
+            )
+            return sent_count, total_groups
+        except Exception as e:
+            logger.error(
+                "כשלון בהפצת נסיעה לקבוצות",
+                extra_data={"user_id": user.id, "error": str(e)},
+                exc_info=True,
+            )
+            return 0, 0
+
+    # ==================== צפייה בנסיעות (סשן 9) ====================
+
+    async def _show_posted_rides(
+        self, user: User, context: dict
+    ) -> Tuple[MessageResponse, str, dict]:
+        """הצגת נסיעות פעילות שפרסם הסדרן"""
+        rides = await self.station_service.get_station_active_rides(self.station_id)
+
+        if not rides:
+            response = MessageResponse(
+                "🛣 <b>נסיעות פעילות</b>\n\n" "אין נסיעות פעילות כרגע.",
+                keyboard=[["🔙 חזרה לתפריט סדרן"]],
+            )
+            return response, DispatcherState.VIEW_POSTED_RIDES.value, {}
+
+        status_map = {
+            DispatcherRideStatus.OPEN.value: "🟢 פתוחה",
+            DispatcherRideStatus.TAKEN.value: "🟠 נתפסה",
+        }
+
+        text = "🛣 <b>נסיעות פעילות</b>\n\n"
+        for ride in rides[:10]:
+            status_text = status_map.get(ride.status, ride.status)
+            text += (
+                f"#{ride.id} | {status_text}\n"
+                f"  📍 {escape(ride.origin_city)} → {escape(ride.destination_city)}\n"
+                f"  👥 {ride.seats} מק' | 💰 {ride.price:.0f} ₪\n\n"
+            )
+
+        response = MessageResponse(text, keyboard=[["🔙 חזרה לתפריט סדרן"]])
+        return response, DispatcherState.VIEW_POSTED_RIDES.value, {}
+
+    async def _handle_view_posted_rides(
+        self, user: User, message: str, context: dict
+    ) -> Tuple[MessageResponse, str, dict]:
+        """צפייה בנסיעות שפרסם הסדרן"""
+        if "חזרה" in message:
+            return await self._show_menu(user, context)
+
+        return await self._show_posted_rides(user, context)
 
     # ==================== Unknown ====================
 

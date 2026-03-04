@@ -91,6 +91,12 @@ DISPATCHER_LABELS: dict[str, str] = {
     DispatcherState.MANUAL_CHARGE_AMOUNT.value: "סכום חיוב",
     DispatcherState.MANUAL_CHARGE_DESCRIPTION.value: "תיאור חיוב",
     DispatcherState.MANUAL_CHARGE_CONFIRM.value: "אישור חיוב",
+    DispatcherState.POST_RIDE_ORIGIN.value: "מוצא נסיעה",
+    DispatcherState.POST_RIDE_DESTINATION.value: "יעד נסיעה",
+    DispatcherState.POST_RIDE_SEATS.value: "מספר מקומות",
+    DispatcherState.POST_RIDE_PRICE.value: "מחיר נסיעה",
+    DispatcherState.POST_RIDE_CONFIRM.value: "אישור נסיעה",
+    DispatcherState.VIEW_POSTED_RIDES.value: "נסיעות פעילות",
 }
 
 STATION_OWNER_LABELS: dict[str, str] = {

@@ -539,6 +539,55 @@ async def run_migration_012(conn: AsyncConnection) -> None:
     """))
 
 
+async def run_migration_013(conn: AsyncConnection) -> None:
+    """מיגרציה 013 — iDriver סשן 9: טבלת נסיעות סדרן (dispatcher_rides).
+
+    נסיעות שסדרן מפרסם למערכת ההפצה ומופיעות בתוצאות חיפוש נהגים.
+    """
+    await conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS dispatcher_rides (
+            id SERIAL PRIMARY KEY,
+            dispatcher_id BIGINT NOT NULL REFERENCES users(id),
+            station_id INTEGER NOT NULL REFERENCES stations(id),
+
+            origin_city VARCHAR(100) NOT NULL,
+            destination_city VARCHAR(100) NOT NULL,
+
+            seats INTEGER NOT NULL,
+            price NUMERIC(10, 2) NOT NULL,
+            description TEXT,
+
+            is_delivery BOOLEAN DEFAULT FALSE NOT NULL,
+
+            status VARCHAR(50) DEFAULT 'open' NOT NULL,
+
+            taken_by_user_id BIGINT REFERENCES users(id),
+            taken_at TIMESTAMP,
+
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW()
+        );
+    """))
+
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_dispatcher_rides_dispatcher
+        ON dispatcher_rides(dispatcher_id);
+    """))
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_dispatcher_rides_station
+        ON dispatcher_rides(station_id);
+    """))
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_dispatcher_rides_status
+        ON dispatcher_rides(status);
+    """))
+    # אינדקס מורכב לחיפוש נסיעות פתוחות לפי מוצא/יעד
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS idx_dispatcher_rides_open_cities
+        ON dispatcher_rides(origin_city, destination_city) WHERE status = 'open';
+    """))
+
+
 async def run_all_migrations(conn: AsyncConnection) -> None:
     """הרצת כל המיגרציות ברצף (ללא ALTER TYPE — ראה add_enum_values)."""
     logger.info("Running migration 001...")
@@ -565,3 +614,5 @@ async def run_all_migrations(conn: AsyncConnection) -> None:
     await run_migration_011(conn)
     logger.info("Running migration 012...")
     await run_migration_012(conn)
+    logger.info("Running migration 013...")
+    await run_migration_013(conn)

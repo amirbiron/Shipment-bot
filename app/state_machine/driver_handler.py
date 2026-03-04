@@ -73,6 +73,7 @@ from app.domain.services.pricing_service import PricingService
 from app.domain.services.driver_subscription_service import DriverSubscriptionService
 from app.db.models.driver_search import MAX_ACTIVE_SEARCHES_PER_USER, DriverSearchStatus
 from sqlalchemy import select
+from app.domain.services.station_service import StationService
 from app.core.exceptions import ValidationException, NotFoundException
 from app.core.logging import get_logger
 
@@ -1382,7 +1383,7 @@ class DriverStateHandler:
     async def _build_search_view(
         self, user: User
     ) -> Tuple[MessageResponse, str, dict]:
-        """בניית תצוגת חיפושים פעילים"""
+        """בניית תצוגת חיפושים פעילים — כולל נסיעות סדרן תואמות (סשן 9)"""
         searches = await self.search_service.get_active_searches(user.id)
         searches_text = DriverSearchService.format_searches_list(searches)
 
@@ -1398,18 +1399,64 @@ class DriverStateHandler:
             )
             return response, DriverState.MENU.value, {}
 
+        # סשן 9: שליפת נסיעות סדרן תואמות לחיפושים הפעילים
+        dispatcher_rides_text = await self._get_matching_dispatcher_rides(searches)
+
         keyboard = [["🗑 מחק חיפוש"], ["🗑 מחק הכל"]]
         keyboard.append(["🔙 חזרה לתפריט"])
 
+        text_parts = [
+            f"🔍 <b>חיפושים פעילים ({len(searches)}/{MAX_ACTIVE_SEARCHES_PER_USER})</b>\n\n"
+            f"{searches_text}",
+        ]
+        if dispatcher_rides_text:
+            text_parts.append(
+                f"\n\n🚗 <b>נסיעות סדרן תואמות:</b>\n{dispatcher_rides_text}"
+            )
+        text_parts.append("\n\n💡 להוספת חיפוש — שלח 'פ <יעד>'")
+
         response = MessageResponse(
-            text=(
-                f"🔍 <b>חיפושים פעילים ({len(searches)}/{MAX_ACTIVE_SEARCHES_PER_USER})</b>\n\n"
-                f"{searches_text}\n\n"
-                "💡 להוספת חיפוש — שלח 'פ <יעד>'"
-            ),
+            text="".join(text_parts),
             keyboard=keyboard,
         )
         return response, DriverState.SEARCH_VIEW_ACTIVE.value, {}
+
+    async def _get_matching_dispatcher_rides(
+        self, searches: list
+    ) -> str:
+        """
+        שליפת נסיעות סדרן שתואמות לחיפושים הפעילים של הנהג (סשן 9).
+
+        Args:
+            searches: רשימת חיפושים פעילים של הנהג
+
+        Returns:
+            טקסט מפורמט של נסיעות תואמות, או מחרוזת ריקה אם אין
+        """
+        station_service = StationService(self.db)
+        seen_ids: set[int] = set()
+        matching_rides = []
+
+        for search in searches:
+            rides = await station_service.get_open_rides_for_search(
+                origin_city=search.origin_city if search.origin_city != "מיקום נוכחי" else None,
+                destination_city=search.destination_city if search.destination_city != "אזור מיקום" else None,
+            )
+            for ride in rides:
+                if ride.id not in seen_ids:
+                    seen_ids.add(ride.id)
+                    matching_rides.append(ride)
+
+        if not matching_rides:
+            return ""
+
+        lines = []
+        for i, ride in enumerate(matching_rides[:10], 1):
+            lines.append(
+                f"{i}. {escape(ride.origin_city)} → {escape(ride.destination_city)} | "
+                f"👥 {ride.seats} | 💰 {ride.price:.0f} ₪"
+            )
+        return "\n".join(lines)
 
     async def _handle_search_view_active(
         self, user: User, message: str, context: dict, **kwargs: object

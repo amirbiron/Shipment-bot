@@ -1170,13 +1170,21 @@ async def _route_to_role_menu(
         return await _sender_fallback(user, db, state_manager)
 
     if user.role == UserRole.DRIVER:
-        # iDriver — ניתוב נהג ל-handler (סשנים 2-6)
         from app.state_machine.driver_handler import DriverStateHandler
         from app.domain.services.driver_session_service import DriverSessionService
 
-        # סשן 6: עדכון פעילות אחרונה
+        # סשן 6: עדכון פעילות אחרונה — גם לנהג-סדרן
         session_service = DriverSessionService(db)
         await session_service.touch_session(user.id)
+
+        # סשן 9: בדיקה אם הנהג הוא גם סדרן פעיל בתחנה
+        dispatcher_station = await _get_dispatcher_station(user, db)
+        if dispatcher_station is not None:
+            await state_manager.force_state(
+                user.id, "telegram", DispatcherState.MENU.value, context={}
+            )
+            handler = DispatcherStateHandler(db, dispatcher_station.id)
+            return await handler.handle_message(user, "תפריט", None)
 
         # נהג רשום → ישירות לתפריט; לא רשום → _handle_initial ינתב לרישום
         await state_manager.force_state(
@@ -1871,10 +1879,16 @@ async def telegram_webhook(
     current_state = await state_manager.get_current_state(user.id, "telegram")
 
     # "חזרה לתפריט" מתנהג כמו לחיצה על # (כולל איפוס state) — גם אם המשתמש הגיע עם state תקוע
+    # סשן 9: DRIVER בזרימת סדרן מוחרג — מנוהל דרך בלוק DISPATCHER למטה
+    _driver_in_dispatcher_flow = (
+        user.role == UserRole.DRIVER
+        and isinstance(current_state, str)
+        and current_state.startswith("DISPATCHER.")
+    )
     if "חזרה לתפריט" in text and user.role not in (
         UserRole.COURIER,
         UserRole.STATION_OWNER,
-    ):
+    ) and not _driver_in_dispatcher_flow:
         response, new_state = await _route_to_role_menu(user, db, state_manager)
         _queue_response_send(background_tasks, send_chat_id, response)
         return {"ok": True, "new_state": new_state, "reset": True}
@@ -2075,6 +2089,21 @@ async def telegram_webhook(
                         user.id, "telegram", CourierState.MENU.value, context={}
                     )
                     handler = CourierStateHandler(db)
+                    response, new_state = await handler.handle_message(
+                        user, "תפריט", None
+                    )
+                elif user.role == UserRole.DRIVER:
+                    # סשן 9: נהג-סדרן חוזר לתפריט נהג (לא סדרן)
+                    from app.state_machine.driver_handler import DriverStateHandler
+                    from app.domain.services.driver_session_service import DriverSessionService
+
+                    session_service = DriverSessionService(db)
+                    await session_service.touch_session(user.id)
+
+                    await state_manager.force_state(
+                        user.id, "telegram", DriverState.INITIAL.value, context={}
+                    )
+                    handler = DriverStateHandler(db, platform="telegram")
                     response, new_state = await handler.handle_message(
                         user, "תפריט", None
                     )

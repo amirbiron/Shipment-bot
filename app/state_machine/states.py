@@ -215,6 +215,16 @@ class DispatcherState(str, Enum):
     MANUAL_CHARGE_DESCRIPTION = "DISPATCHER.MANUAL_CHARGE.DESCRIPTION"
     MANUAL_CHARGE_CONFIRM = "DISPATCHER.MANUAL_CHARGE.CONFIRM"
 
+    # סשן 9: פרסום נסיעה למערכת ההפצה
+    POST_RIDE_ORIGIN = "DISPATCHER.POST_RIDE.ORIGIN"
+    POST_RIDE_DESTINATION = "DISPATCHER.POST_RIDE.DESTINATION"
+    POST_RIDE_SEATS = "DISPATCHER.POST_RIDE.SEATS"
+    POST_RIDE_PRICE = "DISPATCHER.POST_RIDE.PRICE"
+    POST_RIDE_CONFIRM = "DISPATCHER.POST_RIDE.CONFIRM"
+
+    # סשן 9: צפייה בנסיעות פעילות שפרסם הסדרן
+    VIEW_POSTED_RIDES = "DISPATCHER.VIEW_POSTED_RIDES"
+
 
 DISPATCHER_TRANSITIONS = {
     # תפריט סדרן ראשי
@@ -223,6 +233,8 @@ DISPATCHER_TRANSITIONS = {
         DispatcherState.VIEW_ACTIVE_SHIPMENTS,
         DispatcherState.VIEW_SHIPMENT_HISTORY,
         DispatcherState.MANUAL_CHARGE_DRIVER_NAME,
+        DispatcherState.POST_RIDE_ORIGIN,
+        DispatcherState.VIEW_POSTED_RIDES,
     ],
 
     # זרימת הוספת משלוח
@@ -245,6 +257,16 @@ DISPATCHER_TRANSITIONS = {
     DispatcherState.MANUAL_CHARGE_AMOUNT: [DispatcherState.MANUAL_CHARGE_DESCRIPTION, DispatcherState.MENU],
     DispatcherState.MANUAL_CHARGE_DESCRIPTION: [DispatcherState.MANUAL_CHARGE_CONFIRM, DispatcherState.MENU],
     DispatcherState.MANUAL_CHARGE_CONFIRM: [DispatcherState.MENU],
+
+    # סשן 9: זרימת פרסום נסיעה (כולל חזרה לתפריט מכל שלב)
+    DispatcherState.POST_RIDE_ORIGIN: [DispatcherState.POST_RIDE_DESTINATION, DispatcherState.MENU],
+    DispatcherState.POST_RIDE_DESTINATION: [DispatcherState.POST_RIDE_SEATS, DispatcherState.MENU],
+    DispatcherState.POST_RIDE_SEATS: [DispatcherState.POST_RIDE_PRICE, DispatcherState.MENU],
+    DispatcherState.POST_RIDE_PRICE: [DispatcherState.POST_RIDE_CONFIRM, DispatcherState.MENU],
+    DispatcherState.POST_RIDE_CONFIRM: [DispatcherState.MENU],
+
+    # סשן 9: צפייה בנסיעות
+    DispatcherState.VIEW_POSTED_RIDES: [DispatcherState.MENU],
 }
 
 

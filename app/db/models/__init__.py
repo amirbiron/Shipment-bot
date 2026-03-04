@@ -20,6 +20,7 @@ from app.db.models.driver_profile import DriverProfile
 from app.db.models.driver_search_settings import DriverSearchSettings
 from app.db.models.driver_search import DriverSearch
 from app.db.models.driver_session import DriverSession
+from app.db.models.dispatcher_ride import DispatcherRide
 
 __all__ = [
     "Delivery",
@@ -41,4 +42,5 @@ __all__ = [
     "DriverSearchSettings",
     "DriverSearch",
     "DriverSession",
+    "DispatcherRide",
 ]
