@@ -792,3 +792,150 @@ class TestDriverRegistrationFullFlow:
 
         response, state = await handler.handle_message(user, "דוד מלך", None)
         assert state == DriverState.REGISTER_COLLECT_BIRTH_DATE.value
+
+
+# ============================================================================
+# בדיקות תיקוני באגים — מצבים עתידיים ו-context cleanup
+# ============================================================================
+
+
+class TestPostRegistrationStability:
+    """בדיקות שמצבים אחרי רישום לא מחזירים לתחילת הרישום"""
+
+    @pytest.mark.asyncio
+    async def test_menu_state_does_not_restart_registration(
+        self, db_session, user_factory
+    ) -> None:
+        """נהג במצב MENU שולח הודעה — לא חוזר לרישום"""
+        user = await user_factory(
+            phone_number="+972502227111",
+            name="נהג בתפריט",
+            role=UserRole.DRIVER,
+        )
+        state_manager = StateManager(db_session)
+        await state_manager.force_state(
+            user.id, "telegram", DriverState.MENU.value, context={}
+        )
+
+        handler = DriverStateHandler(db_session, platform="telegram")
+        response, new_state = await handler.handle_message(user, "שלום", None)
+
+        # חייב להישאר ב-MENU, לא לחזור ל-REGISTER
+        assert new_state == DriverState.MENU.value
+        assert "בהקמה" in response.text
+        assert "שם המלא" not in response.text
+
+    @pytest.mark.asyncio
+    async def test_verify_state_does_not_restart_registration(
+        self, db_session, user_factory
+    ) -> None:
+        """נהג במצב VERIFY_COLLECT_SELFIE שולח הודעה — לא חוזר לרישום"""
+        user = await user_factory(
+            phone_number="+972502227112",
+            name="נהג באימות",
+            role=UserRole.DRIVER,
+        )
+        state_manager = StateManager(db_session)
+        await state_manager.force_state(
+            user.id, "telegram", DriverState.VERIFY_COLLECT_SELFIE.value, context={}
+        )
+
+        handler = DriverStateHandler(db_session, platform="telegram")
+        response, new_state = await handler.handle_message(user, "הנה תמונה", None)
+
+        # חייב להישאר ב-VERIFY, לא לחזור ל-REGISTER
+        assert new_state == DriverState.VERIFY_COLLECT_SELFIE.value
+        assert "בהקמה" in response.text
+
+    @pytest.mark.asyncio
+    async def test_unknown_state_does_not_restart_registration(
+        self, db_session, user_factory
+    ) -> None:
+        """מצב לא מוכר שומר על מצב נוכחי"""
+        user = await user_factory(
+            phone_number="+972502227113",
+            name="נהג מוזר",
+            role=UserRole.DRIVER,
+        )
+        state_manager = StateManager(db_session)
+        # מצב שלא קיים ב-_get_handler
+        await state_manager.force_state(
+            user.id, "telegram", DriverState.SETTINGS_VIEW.value, context={}
+        )
+
+        handler = DriverStateHandler(db_session, platform="telegram")
+        response, new_state = await handler.handle_message(user, "הגדרות", None)
+
+        assert new_state == DriverState.SETTINGS_VIEW.value
+        assert "בהקמה" in response.text
+
+    @pytest.mark.asyncio
+    async def test_full_flow_then_menu_message_stays(
+        self, db_session, user_factory
+    ) -> None:
+        """רישום מלא → MENU → הודעה נוספת → נשאר ב-MENU"""
+        user = await user_factory(
+            phone_number="+972502227114",
+            name="נהג end-to-end",
+            role=UserRole.DRIVER,
+        )
+        state_manager = StateManager(db_session)
+        await state_manager.force_state(
+            user.id, "telegram", DriverState.INITIAL.value, context={}
+        )
+        handler = DriverStateHandler(db_session, platform="telegram")
+
+        # רישום מלא
+        _, state = await handler.handle_message(user, "/start", None)
+        _, state = await handler.handle_message(user, "יוסי כהן", None)
+        _, state = await handler.handle_message(user, "01/01/1990", None)
+        _, state = await handler.handle_message(user, "טויוטה 2020", None)
+        _, state = await handler.handle_message(user, "חילוני", None)
+        assert state == DriverState.MENU.value
+
+        # הודעה נוספת — חייב להישאר ב-MENU
+        response, state = await handler.handle_message(user, "מה חדש?", None)
+        assert state == DriverState.MENU.value
+        assert "בהקמה" in response.text
+
+
+class TestCancelCleansContext:
+    """בדיקת ניקוי קונטקסט בביטול"""
+
+    @pytest.mark.asyncio
+    async def test_cancel_clears_registration_context(
+        self, db_session, user_factory
+    ) -> None:
+        """ביטול מ-dress code מנקה מפתחות רישום מהקונטקסט"""
+        user = await user_factory(
+            phone_number="+972502228111",
+            name="נהג ביטול",
+            role=UserRole.DRIVER,
+        )
+        state_manager = StateManager(db_session)
+        await state_manager.force_state(
+            user.id,
+            "telegram",
+            DriverState.REGISTER_COLLECT_DRESS_CODE.value,
+            context={
+                "reg_name": "ישראל",
+                "reg_age": "35",
+                "reg_vehicle": "טויוטה",
+                "reg_birth_date": "1990-01-01",
+                "some_other_key": "keep_me",
+            },
+        )
+
+        handler = DriverStateHandler(db_session, platform="telegram")
+        response, new_state = await handler.handle_message(user, "❌ ביטול", None)
+
+        assert new_state == DriverState.INITIAL.value
+
+        # וידוא שהקונטקסט נוקה ממפתחות רישום
+        context = await state_manager.get_context(user.id, "telegram")
+        assert "reg_name" not in context
+        assert "reg_age" not in context
+        assert "reg_vehicle" not in context
+        assert "reg_birth_date" not in context
+        # מפתחות אחרים נשמרים
+        assert context.get("some_other_key") == "keep_me"

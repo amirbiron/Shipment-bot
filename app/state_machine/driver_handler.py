@@ -87,9 +87,10 @@ class DriverStateHandler:
         handler = self._get_handler(current_state)
         response, new_state, context_update = await handler(user, message, context)
 
-        # ניקוי קונטקסט רישום בחזרה ל-MENU
-        if new_state == DriverState.MENU.value and self._is_registration_flow_state(
-            current_state
+        # ניקוי קונטקסט רישום בחזרה ל-MENU או ל-INITIAL (ביטול)
+        if (
+            new_state in (DriverState.MENU.value, DriverState.INITIAL.value)
+            and self._is_registration_flow_state(current_state)
         ):
             clean_context = {
                 k: v for k, v in context.items() if k not in _REGISTRATION_CONTEXT_KEYS
@@ -139,6 +140,11 @@ class DriverStateHandler:
             DriverState.REGISTER_COLLECT_BIRTH_DATE.value: self._handle_collect_birth_date,
             DriverState.REGISTER_COLLECT_VEHICLE.value: self._handle_collect_vehicle,
             DriverState.REGISTER_COLLECT_DRESS_CODE.value: self._handle_collect_dress_code,
+            # מצבים שהרישום מוביל אליהם — placeholder עד שהסשנים הבאים יממשו
+            DriverState.MENU.value: self._handle_post_registration_placeholder,
+            DriverState.VERIFY_COLLECT_SELFIE.value: self._handle_post_registration_placeholder,
+            DriverState.VERIFY_COLLECT_ID_DOCUMENT.value: self._handle_post_registration_placeholder,
+            DriverState.VERIFY_PENDING_APPROVAL.value: self._handle_post_registration_placeholder,
         }
         return handlers.get(state, self._handle_unknown)
 
@@ -357,14 +363,45 @@ class DriverStateHandler:
         )
         return response, DriverState.MENU.value, {}
 
+    # ==================== placeholder למצבים עתידיים ====================
+
+    async def _handle_post_registration_placeholder(
+        self, user: User, message: str, context: dict
+    ) -> Tuple[MessageResponse, str, dict]:
+        """
+        Placeholder למצבים שהרישום מוביל אליהם (MENU, VERIFY).
+        שומר על המצב הנוכחי ומציג הודעה — מונע חזרה לרישום.
+        יוחלף בסשנים הבאים.
+        """
+        current_state = await self.state_manager.get_current_state(
+            user.id, self.platform
+        )
+        response = MessageResponse(
+            text="🚗 המערכת בהקמה, נעדכן אותך בקרוב.",
+        )
+        return response, current_state, {}
+
     # ==================== fallback ====================
 
     async def _handle_unknown(
         self, user: User, message: str, context: dict
     ) -> Tuple[MessageResponse, str, dict]:
-        """מצב לא מוכר — חזרה למצב ראשוני"""
+        """
+        מצב לא מוכר — שומר על המצב הנוכחי ומציג הודעה.
+        לא מאפס לרישום כדי לא לאבד התקדמות.
+        """
+        current_state = await self.state_manager.get_current_state(
+            user.id, self.platform
+        )
         logger.warning(
             "מצב לא מוכר ב-DriverStateHandler",
-            extra_data={"user_id": user.id, "platform": self.platform},
+            extra_data={
+                "user_id": user.id,
+                "platform": self.platform,
+                "state": current_state,
+            },
         )
-        return await self._handle_initial(user, message, context)
+        response = MessageResponse(
+            text="🚗 המערכת בהקמה, נעדכן אותך בקרוב.",
+        )
+        return response, current_state, {}
