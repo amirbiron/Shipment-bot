@@ -13,6 +13,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import relationship
 
 from app.db.database import Base
+from app.db.models.driver_profile import VehicleCategory
 
 
 class TripTypeFilter(str, enum.Enum):
@@ -44,7 +45,7 @@ class DriverSearchSettings(Base):
     )
 
     # סינון לפי סוג רכב
-    vehicle_type_filter = Column(String(50), default="7_seater")
+    vehicle_type_filter = Column(String(50), default=VehicleCategory.SEVEN_SEATER.value)
 
     # סינון לפי סוג נסיעה
     trip_type_filter = Column(String(50), default=TripTypeFilter.ANY_DISTANCE.value)

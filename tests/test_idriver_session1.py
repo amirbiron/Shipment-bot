@@ -708,12 +708,16 @@ class TestDriverSearchSettingsUpdateSchema:
             update.validate_against_existing(
                 existing_future_only_enabled=True,
                 existing_upcoming_timeframe="all",
+                existing_future_only_start_time=time(18, 0),
             )
 
     @pytest.mark.unit
     def test_validate_against_existing_future_only_change_blocks_violation(self) -> None:
         """הפעלת future_only כש-DB מכיל timeframe שאינו all חייב להיכשל"""
-        update = DriverSearchSettingsUpdate(future_only_enabled=True)
+        update = DriverSearchSettingsUpdate(
+            future_only_enabled=True,
+            future_only_start_time=time(18, 0),
+        )
         with pytest.raises(ValueError, match="עתידי בלבד"):
             update.validate_against_existing(
                 existing_future_only_enabled=False,
@@ -729,6 +733,42 @@ class TestDriverSearchSettingsUpdateSchema:
             existing_future_only_enabled=False,
             existing_upcoming_timeframe="all",
         )
+
+    @pytest.mark.unit
+    def test_validate_against_existing_future_only_without_start_time_fails(self) -> None:
+        """הפעלת future_only ללא שעת התחלה (גם לא ב-DB) חייב להיכשל"""
+        update = DriverSearchSettingsUpdate(
+            future_only_enabled=True,
+            future_only_start_time=time(9, 0),
+        )
+        # שעת התחלה קיימת ב-DB — תקין
+        update.validate_against_existing(
+            existing_future_only_enabled=False,
+            existing_upcoming_timeframe="all",
+            existing_future_only_start_time=None,
+        )
+
+    @pytest.mark.unit
+    def test_validate_against_existing_future_only_uses_db_start_time(self) -> None:
+        """הפעלת future_only כש-DB מכיל שעת התחלה — תקין"""
+        update = DriverSearchSettingsUpdate(future_only_enabled=True)
+        # שעת התחלה לא בעדכון, אבל קיימת ב-DB — תקין
+        update.validate_against_existing(
+            existing_future_only_enabled=False,
+            existing_upcoming_timeframe="all",
+            existing_future_only_start_time=time(18, 0),
+        )
+
+    @pytest.mark.unit
+    def test_validate_against_existing_future_only_no_start_time_anywhere_fails(self) -> None:
+        """הפעלת future_only ללא שעת התחלה בשום מקום חייב להיכשל"""
+        update = DriverSearchSettingsUpdate(future_only_enabled=True)
+        with pytest.raises(ValueError, match="שעת התחלה"):
+            update.validate_against_existing(
+                existing_future_only_enabled=False,
+                existing_upcoming_timeframe="all",
+                existing_future_only_start_time=None,
+            )
 
 
 class TestDriverSearchCoordinateValidation:
