@@ -8,7 +8,7 @@
 """
 import pytest
 from datetime import date, datetime, timedelta
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 from app.db.models.user import User, UserRole
 from app.db.models.driver_profile import (
@@ -314,6 +314,23 @@ class TestRidePostingService:
         groups = await service.get_relevant_groups("תל אביב", "ירושלים")
         assert groups == []
 
+    @pytest.mark.asyncio
+    async def test_post_ride_returns_total_groups(self, db_session, user_factory) -> None:
+        """post_ride מחזיר גם sent_count וגם total_groups"""
+        user, _ = await _create_registered_driver(
+            db_session, user_factory, "+972505008001"
+        )
+        service = RidePostingService(db_session)
+        posting = ParsedRidePosting(
+            origin="בני ברק", destination="ירושלים", seats=5, price=150.0,
+        )
+        success, message, sent_count, total_groups = await service.post_ride(
+            user, posting
+        )
+        assert success is True
+        assert sent_count == 0
+        assert total_groups == 0
+
 
 # ============================================================================
 # בדיקות DriverStateHandler — זרימת מחירון ופרסום
@@ -406,8 +423,37 @@ class TestDriverRidePostingHandler:
             user, "בב ים 5 מק 150 ש״ח"
         )
         assert new_state == DriverState.MENU.value
-        # בלי קבוצות — מציג את ההודעה אבל ללא שליחה
-        assert "נסיעה חדשה" in response.text or "פורסם" in response.text
+        # בלי קבוצות — הודעה ברורה שלא נמצאו קבוצות
+        assert "לא נמצאו קבוצות" in response.text
+
+    @pytest.mark.asyncio
+    async def test_ride_posting_send_failure_distinct_message(
+        self, db_session, user_factory
+    ) -> None:
+        """כשקבוצות נמצאות אבל כל השליחות נכשלות — הודעת שגיאה, לא 'לא נמצאו קבוצות'"""
+        user, _ = await _create_registered_driver(
+            db_session, user_factory, "+972505007012"
+        )
+
+        handler = DriverStateHandler(db_session, platform="telegram")
+        await handler.state_manager.force_state(
+            user.id, "telegram", DriverState.MENU.value, context={}
+        )
+
+        # מדמה מצב שבו יש קבוצות אבל כולן נכשלות
+        with patch.object(
+            handler.ride_posting_service,
+            "post_ride",
+            return_value=(True, "הודעת נסיעה", 0, 3),
+        ):
+            response, new_state = await handler.handle_message(
+                user, "בב ים 5 מק 150 ש״ח"
+            )
+        assert new_state == DriverState.MENU.value
+        # חייב להציג הודעת שגיאה ולא "לא נמצאו קבוצות"
+        assert "שגיאה" in response.text
+        assert "3" in response.text
+        assert "לא נמצאו קבוצות" not in response.text
 
     @pytest.mark.asyncio
     async def test_ride_posting_invalid_format(

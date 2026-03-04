@@ -845,8 +845,8 @@ class DriverStateHandler:
             )
             return response, DriverState.MENU.value, {}
 
-        success, message, sent_count = await self.ride_posting_service.post_ride(
-            user, posting
+        success, message, sent_count, total_groups = (
+            await self.ride_posting_service.post_ride(user, posting)
         )
 
         if sent_count > 0:
@@ -856,13 +856,22 @@ class DriverStateHandler:
                 f"📢 פורסם ב-{sent_count} קבוצות.\n\n"
                 f"📋 לחזרה לתפריט שלח 'ת'"
             )
-        else:
+        elif total_groups == 0:
             confirmation = (
                 f"⚠️ <b>לא נמצאו קבוצות רלוונטיות</b>\n\n"
                 f"{message}\n"
                 f"לא נמצאו קבוצות מתאימות למסלול "
                 f"{escape(posting.origin)} → {escape(posting.destination)}.\n"
                 f"הנסיעה לא פורסמה.\n\n"
+                f"📋 לחזרה לתפריט שלח 'ת'"
+            )
+        else:
+            # נמצאו קבוצות אבל כל השליחות נכשלו
+            confirmation = (
+                f"❌ <b>שגיאה בפרסום הנסיעה</b>\n\n"
+                f"{message}\n"
+                f"נמצאו {total_groups} קבוצות רלוונטיות אך השליחה נכשלה.\n"
+                f"נסה שוב מאוחר יותר.\n\n"
                 f"📋 לחזרה לתפריט שלח 'ת'"
             )
 

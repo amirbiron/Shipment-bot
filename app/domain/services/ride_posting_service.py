@@ -255,7 +255,7 @@ class RidePostingService:
         self,
         user: User,
         posting: ParsedRidePosting,
-    ) -> tuple[bool, str, int]:
+    ) -> tuple[bool, str, int, int]:
         """
         פרסום נסיעה — הפצה לקבוצות רלוונטיות.
 
@@ -264,7 +264,7 @@ class RidePostingService:
             posting: פרטי הנסיעה
 
         Returns:
-            tuple של (הצליח, הודעת תוצאה, מספר קבוצות שפורסמו)
+            tuple של (הצליח, הודעת תוצאה, מספר קבוצות שנשלחו בהצלחה, סה"כ קבוצות רלוונטיות)
         """
         driver_name = user.full_name or user.name or "נהג"
         message = self.format_ride_message(posting, driver_name)
@@ -280,7 +280,7 @@ class RidePostingService:
                     "destination": posting.destination,
                 },
             )
-            return True, message, 0
+            return True, message, 0, 0
 
         sent_count = 0
         for group in groups:
@@ -331,4 +331,4 @@ class RidePostingService:
             },
         )
 
-        return True, message, sent_count
+        return True, message, sent_count, len(groups)
