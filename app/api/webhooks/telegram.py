@@ -311,7 +311,7 @@ def _build_driver_rejection_context(
 
 async def _apply_driver_decision_side_effects(
     db: AsyncSession,
-    background_tasks: BackgroundTasks,
+    background_tasks: BackgroundTasks | None,
     driver_user_id: int,
     decision: str,
     admin_name: str,
@@ -322,8 +322,22 @@ async def _apply_driver_decision_side_effects(
     """פעולות צד לאחר אישור/דחיית נהג — עדכון state, הודעה לנהג, סיכום למנהלים.
 
     מרכז את הלוגיקה המשותפת לכל נתיבי ההחלטה (callback, הערת דחייה, פקודת טקסט, כשל Redis)
-    כדי למנוע כפילויות ואי-עקביות.
+    כדי למנוע כפילויות ואי-עקביות. משמש גם מ-whatsapp.py.
+
+    אם background_tasks=None, הפעולות מבוצעות באופן סינכרוני (await ישיר).
     """
+    from app.api.webhooks.whatsapp import send_whatsapp_message
+    from app.domain.services.admin_notification_service import (
+        AdminNotificationService,
+    )
+
+    async def _dispatch(fn: Callable, *args: object) -> None:
+        """מפעיל פונקציה כ-background task או await ישיר."""
+        if background_tasks is not None:
+            background_tasks.add_task(fn, *args)
+        else:
+            await fn(*args)
+
     state_manager = StateManager(db)
 
     if decision == "approved":
@@ -340,24 +354,18 @@ async def _apply_driver_decision_side_effects(
             "כתוב <b>תפריט</b> כדי להתחיל."
         )
         if user.telegram_chat_id:
-            background_tasks.add_task(
-                send_telegram_message, str(user.telegram_chat_id), tg_msg,
-            )
+            await _dispatch(send_telegram_message, str(user.telegram_chat_id), tg_msg)
         elif (
             user.phone_number
             and not user.phone_number.startswith("tg:")
             and not user.phone_number.endswith("@g.us")
         ):
-            from app.api.webhooks.whatsapp import send_whatsapp_message
-
             wa_msg = (
                 "🎉 *האימות שלך אושר!*\n\n"
                 "ברוך הבא ל-iDriver!\n"
                 "כתוב *תפריט* כדי להתחיל."
             )
-            background_tasks.add_task(
-                send_whatsapp_message, user.phone_number, wa_msg,
-            )
+            await _dispatch(send_whatsapp_message, user.phone_number, wa_msg)
     else:
         # דחייה — עדכון מצב חזרה ל-VERIFY_COLLECT_SELFIE עם קונטקסט רישום
         rej_ctx = _build_driver_rejection_context(user, profile)
@@ -371,7 +379,7 @@ async def _apply_driver_decision_side_effects(
         # הודעה לנהג
         rej_reason_text = f"\nסיבה: {rejection_note}" if rejection_note else ""
         if user.telegram_chat_id:
-            background_tasks.add_task(
+            await _dispatch(
                 send_telegram_message,
                 str(user.telegram_chat_id),
                 f"😔 <b>האימות שלך נדחה.</b>{rej_reason_text}\nתוכל לנסות שוב.",
@@ -381,20 +389,14 @@ async def _apply_driver_decision_side_effects(
             and not user.phone_number.startswith("tg:")
             and not user.phone_number.endswith("@g.us")
         ):
-            from app.api.webhooks.whatsapp import send_whatsapp_message
-
-            background_tasks.add_task(
+            await _dispatch(
                 send_whatsapp_message,
                 user.phone_number,
                 f"😔 *האימות שלך נדחה.*{rej_reason_text}\nתוכל לנסות שוב.",
             )
 
     # סיכום לקבוצת מנהלים
-    from app.domain.services.admin_notification_service import (
-        AdminNotificationService,
-    )
-
-    background_tasks.add_task(
+    await _dispatch(
         AdminNotificationService.notify_group_driver_decision,
         driver_user_id,
         user.full_name or user.name or "לא צוין",
@@ -1291,7 +1293,7 @@ async def telegram_webhook(
                         background_tasks.add_task(
                             send_telegram_message,
                             send_chat_id,
-                            f"⚠️ הדחייה הקודמת ({prev_id}) בוטלה. ממתין להערה על נהג {courier_id}.",
+                            f"⚠️ הדחייה הקודמת ({prev_id}) בוטלה. ממתין להערה על שליח {courier_id}.",
                         )
 
                     saved = await _set_pending_rejection(send_chat_id, courier_id, target_type="courier")

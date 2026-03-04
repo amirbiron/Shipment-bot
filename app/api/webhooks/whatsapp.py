@@ -698,13 +698,12 @@ async def _handle_whatsapp_driver_approval(
 ) -> str:
     """
     ביצוע אישור/דחייה של נהג iDriver מפקודת WhatsApp.
+    משתמש בלוגיקה המשותפת מ-_apply_driver_decision_side_effects.
     """
     from app.domain.services.driver_verification_service import (
         DriverVerificationService,
     )
-    from app.state_machine.manager import StateManager
-    from app.state_machine.states import DriverState
-    from app.api.webhooks.telegram import send_telegram_message
+    from app.api.webhooks.telegram import _apply_driver_decision_side_effects
 
     if action == "approve":
         result = await DriverVerificationService.approve_driver(db, driver_user_id)
@@ -717,108 +716,12 @@ async def _handle_whatsapp_driver_approval(
         return result.message
 
     if result.user and result.profile:
-        state_manager = StateManager(db)
-
-        if action == "approve":
-            # עדכון מצב הנהג ל-MENU
-            for plat in ("telegram", "whatsapp"):
-                await state_manager.force_state(
-                    driver_user_id, plat, DriverState.MENU.value, context={}
-                )
-
-            # הודעה לנהג
-            if result.user.telegram_chat_id:
-                tg_msg = (
-                    "🎉 <b>האימות שלך אושר!</b>\n\n"
-                    "ברוך הבא ל-iDriver!\n"
-                    "כתוב <b>תפריט</b> כדי להתחיל."
-                )
-                if background_tasks:
-                    background_tasks.add_task(
-                        send_telegram_message, str(result.user.telegram_chat_id), tg_msg
-                    )
-                else:
-                    await send_telegram_message(str(result.user.telegram_chat_id), tg_msg)
-            elif (
-                result.user.phone_number
-                and not result.user.phone_number.startswith("tg:")
-                and not result.user.phone_number.endswith("@g.us")
-            ):
-                wa_msg = (
-                    "🎉 *האימות שלך אושר!*\n\n"
-                    "ברוך הבא ל-iDriver!\n"
-                    "כתוב *תפריט* כדי להתחיל."
-                )
-                if background_tasks:
-                    background_tasks.add_task(
-                        send_whatsapp_message, result.user.phone_number, wa_msg
-                    )
-                else:
-                    await send_whatsapp_message(result.user.phone_number, wa_msg)
-        else:
-            # דחייה — עדכון מצב חזרה ל-VERIFY_COLLECT_SELFIE עם קונטקסט רישום
-            from app.api.webhooks.telegram import _build_driver_rejection_context
-
-            rej_ctx = _build_driver_rejection_context(result.user, result.profile)
-            for plat in ("telegram", "whatsapp"):
-                await state_manager.force_state(
-                    driver_user_id, plat,
-                    DriverState.VERIFY_COLLECT_SELFIE.value,
-                    context=rej_ctx,
-                )
-
-            # הודעה לנהג
-            rej_reason_text = f"\nסיבה: {rejection_note}" if rejection_note else ""
-            if result.user.telegram_chat_id:
-                tg_msg = f"😔 <b>האימות שלך נדחה.</b>{rej_reason_text}\nתוכל לנסות שוב."
-                if background_tasks:
-                    background_tasks.add_task(
-                        send_telegram_message, str(result.user.telegram_chat_id), tg_msg
-                    )
-                else:
-                    await send_telegram_message(str(result.user.telegram_chat_id), tg_msg)
-            elif (
-                result.user.phone_number
-                and not result.user.phone_number.startswith("tg:")
-                and not result.user.phone_number.endswith("@g.us")
-            ):
-                wa_msg = f"😔 *האימות שלך נדחה.*{rej_reason_text}\nתוכל לנסות שוב."
-                if background_tasks:
-                    background_tasks.add_task(
-                        send_whatsapp_message, result.user.phone_number, wa_msg
-                    )
-                else:
-                    await send_whatsapp_message(result.user.phone_number, wa_msg)
-
-        # סיכום לקבוצת מנהלים
-        from app.domain.services.admin_notification_service import (
-            AdminNotificationService,
-        )
-
         decision = "approved" if action == "approve" else "rejected"
-        if background_tasks:
-            background_tasks.add_task(
-                AdminNotificationService.notify_group_driver_decision,
-                driver_user_id,
-                result.user.full_name or result.user.name or "לא צוין",
-                result.profile.dress_code or "לא צוין",
-                result.profile.vehicle_description or "לא צוין",
-                result.user.platform or "whatsapp",
-                decision,
-                admin_name,
-                rejection_note if action == "reject" else None,
-            )
-        else:
-            await AdminNotificationService.notify_group_driver_decision(
-                driver_user_id,
-                result.user.full_name or result.user.name or "לא צוין",
-                result.profile.dress_code or "לא צוין",
-                result.profile.vehicle_description or "לא צוין",
-                result.user.platform or "whatsapp",
-                decision,
-                admin_name,
-                rejection_note if action == "reject" else None,
-            )
+        await _apply_driver_decision_side_effects(
+            db, background_tasks, driver_user_id, decision,
+            admin_name, result.user, result.profile,
+            rejection_note if action == "reject" else None,
+        )
 
     return result.message
 
