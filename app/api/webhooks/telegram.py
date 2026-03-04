@@ -309,6 +309,104 @@ def _build_driver_rejection_context(
     return ctx
 
 
+async def _apply_driver_decision_side_effects(
+    db: AsyncSession,
+    background_tasks: BackgroundTasks,
+    driver_user_id: int,
+    decision: str,
+    admin_name: str,
+    user: User,
+    profile: object,
+    rejection_note: str | None = None,
+) -> None:
+    """פעולות צד לאחר אישור/דחיית נהג — עדכון state, הודעה לנהג, סיכום למנהלים.
+
+    מרכז את הלוגיקה המשותפת לכל נתיבי ההחלטה (callback, הערת דחייה, פקודת טקסט, כשל Redis)
+    כדי למנוע כפילויות ואי-עקביות.
+    """
+    state_manager = StateManager(db)
+
+    if decision == "approved":
+        # עדכון מצב הנהג ל-MENU
+        for plat in ("telegram", "whatsapp"):
+            await state_manager.force_state(
+                driver_user_id, plat, DriverState.MENU.value, context={}
+            )
+
+        # הודעה לנהג
+        tg_msg = (
+            "🎉 <b>האימות שלך אושר!</b>\n\n"
+            "ברוך הבא ל-iDriver!\n"
+            "כתוב <b>תפריט</b> כדי להתחיל."
+        )
+        if user.telegram_chat_id:
+            background_tasks.add_task(
+                send_telegram_message, str(user.telegram_chat_id), tg_msg,
+            )
+        elif (
+            user.phone_number
+            and not user.phone_number.startswith("tg:")
+            and not user.phone_number.endswith("@g.us")
+        ):
+            from app.api.webhooks.whatsapp import send_whatsapp_message
+
+            wa_msg = (
+                "🎉 *האימות שלך אושר!*\n\n"
+                "ברוך הבא ל-iDriver!\n"
+                "כתוב *תפריט* כדי להתחיל."
+            )
+            background_tasks.add_task(
+                send_whatsapp_message, user.phone_number, wa_msg,
+            )
+    else:
+        # דחייה — עדכון מצב חזרה ל-VERIFY_COLLECT_SELFIE עם קונטקסט רישום
+        rej_ctx = _build_driver_rejection_context(user, profile)
+        for plat in ("telegram", "whatsapp"):
+            await state_manager.force_state(
+                driver_user_id, plat,
+                DriverState.VERIFY_COLLECT_SELFIE.value,
+                context=rej_ctx,
+            )
+
+        # הודעה לנהג
+        rej_reason_text = f"\nסיבה: {rejection_note}" if rejection_note else ""
+        if user.telegram_chat_id:
+            background_tasks.add_task(
+                send_telegram_message,
+                str(user.telegram_chat_id),
+                f"😔 <b>האימות שלך נדחה.</b>{rej_reason_text}\nתוכל לנסות שוב.",
+            )
+        elif (
+            user.phone_number
+            and not user.phone_number.startswith("tg:")
+            and not user.phone_number.endswith("@g.us")
+        ):
+            from app.api.webhooks.whatsapp import send_whatsapp_message
+
+            background_tasks.add_task(
+                send_whatsapp_message,
+                user.phone_number,
+                f"😔 *האימות שלך נדחה.*{rej_reason_text}\nתוכל לנסות שוב.",
+            )
+
+    # סיכום לקבוצת מנהלים
+    from app.domain.services.admin_notification_service import (
+        AdminNotificationService,
+    )
+
+    background_tasks.add_task(
+        AdminNotificationService.notify_group_driver_decision,
+        driver_user_id,
+        user.full_name or user.name or "לא צוין",
+        getattr(profile, "dress_code", None) or "לא צוין",
+        getattr(profile, "vehicle_description", None) or "לא צוין",
+        user.platform or "telegram",
+        decision,
+        admin_name,
+        rejection_note,
+    )
+
+
 _SenderButtonHandler: TypeAlias = Callable[
     [User, AsyncSession, StateManager, str, str | None],
     Awaitable[tuple[MessageResponse, str | None]],
@@ -1279,57 +1377,9 @@ async def telegram_webhook(
                     )
 
                     if result.success and result.user and result.profile:
-                        # עדכון מצב הנהג ל-MENU
-                        state_manager = StateManager(db)
-                        for plat in ("telegram", "whatsapp"):
-                            await state_manager.force_state(
-                                driver_user_id, plat, DriverState.MENU.value, context={}
-                            )
-
-                        # הודעה לנהג
-                        tg_msg = (
-                            "🎉 <b>האימות שלך אושר!</b>\n\n"
-                            "ברוך הבא ל-iDriver!\n"
-                            "כתוב <b>תפריט</b> כדי להתחיל."
-                        )
-                        if result.user.telegram_chat_id:
-                            background_tasks.add_task(
-                                send_telegram_message,
-                                str(result.user.telegram_chat_id),
-                                tg_msg,
-                            )
-                        elif (
-                            result.user.phone_number
-                            and not result.user.phone_number.startswith("tg:")
-                            and not result.user.phone_number.endswith("@g.us")
-                        ):
-                            from app.api.webhooks.whatsapp import send_whatsapp_message
-
-                            wa_msg = (
-                                "🎉 *האימות שלך אושר!*\n\n"
-                                "ברוך הבא ל-iDriver!\n"
-                                "כתוב *תפריט* כדי להתחיל."
-                            )
-                            background_tasks.add_task(
-                                send_whatsapp_message,
-                                result.user.phone_number,
-                                wa_msg,
-                            )
-
-                        # סיכום לקבוצת מנהלים
-                        from app.domain.services.admin_notification_service import (
-                            AdminNotificationService,
-                        )
-
-                        background_tasks.add_task(
-                            AdminNotificationService.notify_group_driver_decision,
-                            driver_user_id,
-                            result.user.full_name or result.user.name or "לא צוין",
-                            result.profile.dress_code or "לא צוין",
-                            result.profile.vehicle_description or "לא צוין",
-                            result.user.platform or "telegram",
-                            "approved",
-                            admin_name,
+                        await _apply_driver_decision_side_effects(
+                            db, background_tasks, driver_user_id, "approved",
+                            admin_name, result.user, result.profile,
                         )
                 else:
                     # דחייה — אותו תהליך כמו שליחים (Redis + הערה)
@@ -1353,54 +1403,9 @@ async def telegram_webhook(
                             f"⚠️ שגיאת מערכת — הדחייה בוצעה ללא הערה.\n{result.message}",
                         )
                         if result.success and result.user and result.profile:
-                            # עדכון מצב הנהג חזרה ל-VERIFY_COLLECT_SELFIE עם קונטקסט רישום
-                            rej_ctx = _build_driver_rejection_context(
-                                result.user, result.profile
-                            )
-                            state_manager = StateManager(db)
-                            for plat in ("telegram", "whatsapp"):
-                                await state_manager.force_state(
-                                    driver_user_id,
-                                    plat,
-                                    DriverState.VERIFY_COLLECT_SELFIE.value,
-                                    context=rej_ctx,
-                                )
-
-                            # הודעה לנהג
-                            if result.user.telegram_chat_id:
-                                background_tasks.add_task(
-                                    send_telegram_message,
-                                    str(result.user.telegram_chat_id),
-                                    "😔 <b>האימות שלך נדחה.</b>\nתוכל לנסות שוב.",
-                                )
-                            elif (
-                                result.user.phone_number
-                                and not result.user.phone_number.startswith("tg:")
-                                and not result.user.phone_number.endswith("@g.us")
-                            ):
-                                from app.api.webhooks.whatsapp import send_whatsapp_message
-
-                                background_tasks.add_task(
-                                    send_whatsapp_message,
-                                    result.user.phone_number,
-                                    "😔 *האימות שלך נדחה.*\nתוכל לנסות שוב.",
-                                )
-
-                            # סיכום לקבוצת מנהלים
-                            from app.domain.services.admin_notification_service import (
-                                AdminNotificationService,
-                            )
-
-                            background_tasks.add_task(
-                                AdminNotificationService.notify_group_driver_decision,
-                                driver_user_id,
-                                result.user.full_name or result.user.name or "לא צוין",
-                                result.profile.dress_code or "לא צוין",
-                                result.profile.vehicle_description or "לא צוין",
-                                result.user.platform or "telegram",
-                                "rejected",
-                                admin_name,
-                                None,  # ללא הערת דחייה (כשל Redis)
+                            await _apply_driver_decision_side_effects(
+                                db, background_tasks, driver_user_id, "rejected",
+                                admin_name, result.user, result.profile,
                             )
 
                         return {
@@ -1532,57 +1537,9 @@ async def telegram_webhook(
             )
 
             if result.success and result.user and result.profile:
-                # עדכון מצב הנהג חזרה ל-VERIFY_COLLECT_SELFIE עם קונטקסט רישום
-                rej_ctx = _build_driver_rejection_context(
-                    result.user, result.profile
-                )
-                state_manager_rej = StateManager(db)
-                for plat in ("telegram", "whatsapp"):
-                    await state_manager_rej.force_state(
-                        target_id,
-                        plat,
-                        DriverState.VERIFY_COLLECT_SELFIE.value,
-                        context=rej_ctx,
-                    )
-
-                # הודעה לנהג
-                rej_reason_text = (
-                    f"\nסיבה: {rejection_note}" if rejection_note else ""
-                )
-                if result.user.telegram_chat_id:
-                    background_tasks.add_task(
-                        send_telegram_message,
-                        str(result.user.telegram_chat_id),
-                        f"😔 <b>האימות שלך נדחה.</b>{rej_reason_text}\nתוכל לנסות שוב.",
-                    )
-                elif (
-                    result.user.phone_number
-                    and not result.user.phone_number.startswith("tg:")
-                    and not result.user.phone_number.endswith("@g.us")
-                ):
-                    from app.api.webhooks.whatsapp import send_whatsapp_message
-
-                    background_tasks.add_task(
-                        send_whatsapp_message,
-                        result.user.phone_number,
-                        f"😔 *האימות שלך נדחה.*{rej_reason_text}\nתוכל לנסות שוב.",
-                    )
-
-                # סיכום לקבוצת מנהלים
-                from app.domain.services.admin_notification_service import (
-                    AdminNotificationService,
-                )
-
-                background_tasks.add_task(
-                    AdminNotificationService.notify_group_driver_decision,
-                    target_id,
-                    result.user.full_name or result.user.name or "לא צוין",
-                    result.profile.dress_code or "לא צוין",
-                    result.profile.vehicle_description or "לא צוין",
-                    result.user.platform or "telegram",
-                    "rejected",
-                    admin_name,
-                    rejection_note,
+                await _apply_driver_decision_side_effects(
+                    db, background_tasks, target_id, "rejected",
+                    admin_name, result.user, result.profile, rejection_note,
                 )
 
             return {
@@ -1651,53 +1608,9 @@ async def telegram_webhook(
                         )
 
                         if result.success and result.user and result.profile:
-                            state_manager_cmd = StateManager(db)
-                            for plat in ("telegram", "whatsapp"):
-                                await state_manager_cmd.force_state(
-                                    target_id_parsed, plat, DriverState.MENU.value, context={}
-                                )
-
-                            # הודעה לנהג
-                            tg_msg = (
-                                "🎉 <b>האימות שלך אושר!</b>\n\n"
-                                "ברוך הבא ל-iDriver!\n"
-                                "כתוב <b>תפריט</b> כדי להתחיל."
-                            )
-                            if result.user.telegram_chat_id:
-                                background_tasks.add_task(
-                                    send_telegram_message,
-                                    str(result.user.telegram_chat_id), tg_msg,
-                                )
-                            elif (
-                                result.user.phone_number
-                                and not result.user.phone_number.startswith("tg:")
-                                and not result.user.phone_number.endswith("@g.us")
-                            ):
-                                from app.api.webhooks.whatsapp import send_whatsapp_message
-
-                                wa_msg = (
-                                    "🎉 *האימות שלך אושר!*\n\n"
-                                    "ברוך הבא ל-iDriver!\n"
-                                    "כתוב *תפריט* כדי להתחיל."
-                                )
-                                background_tasks.add_task(
-                                    send_whatsapp_message, result.user.phone_number, wa_msg,
-                                )
-
-                            # סיכום לקבוצת מנהלים
-                            from app.domain.services.admin_notification_service import (
-                                AdminNotificationService,
-                            )
-
-                            background_tasks.add_task(
-                                AdminNotificationService.notify_group_driver_decision,
-                                target_id_parsed,
-                                result.user.full_name or result.user.name or "לא צוין",
-                                result.profile.dress_code or "לא צוין",
-                                result.profile.vehicle_description or "לא צוין",
-                                result.user.platform or "telegram",
-                                "approved",
-                                admin_name_text,
+                            await _apply_driver_decision_side_effects(
+                                db, background_tasks, target_id_parsed, "approved",
+                                admin_name_text, result.user, result.profile,
                             )
                     else:
                         # דחייה — שמירה ב-Redis כדי לחכות להערה, או דחייה ישירה עם הערה
@@ -1710,50 +1623,9 @@ async def telegram_webhook(
                             )
 
                             if result.success and result.user and result.profile:
-                                rej_ctx = _build_driver_rejection_context(
-                                    result.user, result.profile
-                                )
-                                state_manager_cmd = StateManager(db)
-                                for plat in ("telegram", "whatsapp"):
-                                    await state_manager_cmd.force_state(
-                                        target_id_parsed, plat,
-                                        DriverState.VERIFY_COLLECT_SELFIE.value,
-                                        context=rej_ctx,
-                                    )
-
-                                rej_reason_text = f"\nסיבה: {rejection_note}"
-                                if result.user.telegram_chat_id:
-                                    background_tasks.add_task(
-                                        send_telegram_message,
-                                        str(result.user.telegram_chat_id),
-                                        f"😔 <b>האימות שלך נדחה.</b>{rej_reason_text}\nתוכל לנסות שוב.",
-                                    )
-                                elif (
-                                    result.user.phone_number
-                                    and not result.user.phone_number.startswith("tg:")
-                                    and not result.user.phone_number.endswith("@g.us")
-                                ):
-                                    from app.api.webhooks.whatsapp import send_whatsapp_message
-
-                                    background_tasks.add_task(
-                                        send_whatsapp_message,
-                                        result.user.phone_number,
-                                        f"😔 *האימות שלך נדחה.*{rej_reason_text}\nתוכל לנסות שוב.",
-                                    )
-
-                                from app.domain.services.admin_notification_service import (
-                                    AdminNotificationService,
-                                )
-
-                                background_tasks.add_task(
-                                    AdminNotificationService.notify_group_driver_decision,
-                                    target_id_parsed,
-                                    result.user.full_name or result.user.name or "לא צוין",
-                                    result.profile.dress_code or "לא צוין",
-                                    result.profile.vehicle_description or "לא צוין",
-                                    result.user.platform or "telegram",
-                                    "rejected",
-                                    admin_name_text,
+                                await _apply_driver_decision_side_effects(
+                                    db, background_tasks, target_id_parsed, "rejected",
+                                    admin_name_text, result.user, result.profile,
                                     rejection_note,
                                 )
                         else:
@@ -1788,6 +1660,12 @@ async def telegram_webhook(
                                     send_chat_id,
                                     f"⚠️ שגיאת מערכת — הדחייה בוצעה ללא הערה.\n{result.message}",
                                 )
+                                if result.success and result.user and result.profile:
+                                    await _apply_driver_decision_side_effects(
+                                        db, background_tasks, target_id_parsed,
+                                        "rejected", admin_name_text,
+                                        result.user, result.profile,
+                                    )
 
                     return {
                         "ok": True,
