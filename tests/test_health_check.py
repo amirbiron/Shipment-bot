@@ -63,7 +63,7 @@ class TestReadinessProbe:
 
     @pytest.mark.unit
     async def test_readiness_db_down(self, test_client: httpx.AsyncClient) -> None:
-        """כש-DB לא זמין — status=degraded ו-HTTP 503."""
+        """כש-DB לא זמין — status=unhealthy ו-HTTP 503."""
         with patch(
             "app.domain.services.health_service._check_db",
             new_callable=AsyncMock,
@@ -85,7 +85,7 @@ class TestReadinessProbe:
 
         assert response.status_code == 503
         data = response.json()
-        assert data["status"] == "degraded"
+        assert data["status"] == "unhealthy"
         assert data["db"] == "error: db_unavailable"
         assert data["redis"] == "ok"
 
@@ -93,7 +93,7 @@ class TestReadinessProbe:
     async def test_readiness_whatsapp_gateway_down(
         self, test_client: httpx.AsyncClient
     ) -> None:
-        """כש-WhatsApp Gateway לא זמין — status=degraded ו-HTTP 503."""
+        """כש-WhatsApp Gateway לא זמין — status=degraded אבל HTTP 200 (תלות לא קריטית)."""
         with patch(
             "app.domain.services.health_service._check_db",
             new_callable=AsyncMock,
@@ -113,17 +113,17 @@ class TestReadinessProbe:
         ):
             response = await test_client.get("/health/ready")
 
-        assert response.status_code == 503
+        assert response.status_code == 200
         data = response.json()
         assert data["status"] == "degraded"
         assert data["whatsapp_gateway"] == "error: whatsapp_unavailable"
         assert data["db"] == "ok"
 
     @pytest.mark.unit
-    async def test_readiness_multiple_failures(
+    async def test_readiness_multiple_critical_failures(
         self, test_client: httpx.AsyncClient
     ) -> None:
-        """כשכמה תלויות נכשלות — status=degraded ופירוט לכל תלות."""
+        """כשכמה תלויות קריטיות נכשלות — status=unhealthy ו-HTTP 503."""
         with patch(
             "app.domain.services.health_service._check_db",
             new_callable=AsyncMock,
@@ -145,7 +145,7 @@ class TestReadinessProbe:
 
         assert response.status_code == 503
         data = response.json()
-        assert data["status"] == "degraded"
+        assert data["status"] == "unhealthy"
         assert data["db"] == "error: db_unavailable"
         assert data["redis"] == "error: redis_unavailable"
         assert data["whatsapp_gateway"] == "ok"
@@ -155,7 +155,7 @@ class TestReadinessProbe:
     async def test_readiness_celery_broker_down(
         self, test_client: httpx.AsyncClient
     ) -> None:
-        """כש-Celery broker לא זמין — status=degraded."""
+        """כש-Celery broker לא זמין — status=unhealthy ו-HTTP 503 (תלות קריטית)."""
         with patch(
             "app.domain.services.health_service._check_db",
             new_callable=AsyncMock,
@@ -177,8 +177,38 @@ class TestReadinessProbe:
 
         assert response.status_code == 503
         data = response.json()
-        assert data["status"] == "degraded"
+        assert data["status"] == "unhealthy"
         assert data["celery"] == "error: celery_unavailable"
+
+    @pytest.mark.unit
+    async def test_readiness_whatsapp_and_critical_down(
+        self, test_client: httpx.AsyncClient
+    ) -> None:
+        """כש-WhatsApp וגם DB לא זמינים — status=unhealthy ו-HTTP 503 (בגלל DB)."""
+        with patch(
+            "app.domain.services.health_service._check_db",
+            new_callable=AsyncMock,
+            return_value="error: db_unavailable",
+        ), patch(
+            "app.domain.services.health_service._check_redis",
+            new_callable=AsyncMock,
+            return_value="ok",
+        ), patch(
+            "app.domain.services.health_service._check_whatsapp_gateway",
+            new_callable=AsyncMock,
+            return_value="error: whatsapp_unavailable",
+        ), patch(
+            "app.domain.services.health_service._check_celery",
+            new_callable=AsyncMock,
+            return_value="ok",
+        ):
+            response = await test_client.get("/health/ready")
+
+        assert response.status_code == 503
+        data = response.json()
+        assert data["status"] == "unhealthy"
+        assert data["db"] == "error: db_unavailable"
+        assert data["whatsapp_gateway"] == "error: whatsapp_unavailable"
 
 
 # ============================================================================
