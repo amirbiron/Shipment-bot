@@ -16,8 +16,9 @@ from app.state_machine.states import DriverState
 from app.state_machine.manager import StateManager
 from app.state_machine.handlers import MessageResponse
 from app.db.models.user import User
-from app.db.models.driver_profile import DressCode
+from app.db.models.driver_profile import DriverProfile, DressCode
 from app.domain.services.driver_registration_service import DriverRegistrationService
+from sqlalchemy import select
 from app.core.exceptions import ValidationException
 from app.core.logging import get_logger
 
@@ -71,8 +72,8 @@ class DriverStateHandler:
         self.registration_service = DriverRegistrationService(db)
 
     def _is_registration_flow_state(self, state: str) -> bool:
-        """בודק אם המצב שייך לזרימת רישום"""
-        return state.startswith("DRIVER.REGISTER.")
+        """בודק אם המצב שייך לזרימת רישום או אימות (לניקוי קונטקסט)"""
+        return state.startswith(("DRIVER.REGISTER.", "DRIVER.VERIFY."))
 
     async def handle_message(
         self, user: User, message: str, photo_file_id: str | None = None
@@ -164,8 +165,24 @@ class DriverStateHandler:
         self, user: User, message: str, context: dict
     ) -> Tuple[MessageResponse, str, dict]:
         """
-        מצב ראשוני — הודעת ברוכים הבאים ומעבר לאיסוף שם.
+        מצב ראשוני — בדיקה אם הרישום כבר הושלם.
+        אם כן — מעבר לתפריט. אם לא — הודעת ברוכים הבאים ומעבר לאיסוף שם.
         """
+        # בדיקה אם הנהג כבר רשום — למנוע הפעלה מחדש של רישום
+        result = await self.db.execute(
+            select(DriverProfile).where(DriverProfile.user_id == user.id)
+        )
+        profile = result.scalar_one_or_none()
+        if profile and profile.is_registration_complete:
+            logger.info(
+                "נהג רשום ניגש ל-INITIAL — מנתב לתפריט",
+                extra_data={"user_id": user.id},
+            )
+            response = MessageResponse(
+                text="🚗 המערכת בהקמה, נעדכן אותך בקרוב.",
+            )
+            return response, DriverState.MENU.value, {}
+
         response = MessageResponse(
             text=(
                 "🚗 <b>ברוך הבא ל-iDriver!</b>\n\n"

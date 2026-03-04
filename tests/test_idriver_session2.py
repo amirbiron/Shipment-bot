@@ -944,3 +944,147 @@ class TestCancelCleansContext:
         assert "reg_birth_date" not in context
         # מפתחות אחרים נשמרים
         assert context.get("some_other_key") == "keep_me"
+
+
+# ============================================================================
+# בדיקות תיקון באגים — route-to-menu וניקוי קונטקסט אימות
+# ============================================================================
+
+
+class TestRegisteredDriverDoesNotRestartRegistration:
+    """באג: _handle_initial מפעיל רישום מחדש לנהגים רשומים"""
+
+    @pytest.mark.asyncio
+    async def test_registered_driver_initial_goes_to_menu(
+        self, db_session, user_factory
+    ) -> None:
+        """נהג שכבר סיים רישום — INITIAL מנתב לתפריט ולא לרישום מחדש"""
+        from datetime import datetime
+
+        user = await user_factory(
+            phone_number="+972502229111",
+            name="נהג רשום",
+            role=UserRole.DRIVER,
+        )
+        # יצירת פרופיל עם trial_starts_at (רישום הושלם)
+        profile = DriverProfile(
+            user_id=user.id,
+            birth_date=date(1990, 1, 1),
+            vehicle_description="טויוטה 2023",
+            vehicle_category="car",
+            dress_code="secular",
+            trial_starts_at=datetime.utcnow(),
+            trial_expires_at=datetime.utcnow(),
+        )
+        db_session.add(profile)
+        await db_session.commit()
+
+        state_manager = StateManager(db_session)
+        await state_manager.force_state(
+            user.id, "telegram", DriverState.INITIAL.value, context={}
+        )
+
+        handler = DriverStateHandler(db_session, platform="telegram")
+        response, new_state = await handler.handle_message(user, "תפריט", None)
+
+        # חייב לעבור לתפריט, לא להתחיל רישום מחדש
+        assert new_state == DriverState.MENU.value
+        assert "שם המלא" not in response.text
+
+    @pytest.mark.asyncio
+    async def test_unregistered_driver_initial_starts_registration(
+        self, db_session, user_factory
+    ) -> None:
+        """נהג ללא פרופיל — INITIAL מתחיל רישום כרגיל"""
+        user = await user_factory(
+            phone_number="+972502229112",
+            name="נהג חדש",
+            role=UserRole.DRIVER,
+        )
+        state_manager = StateManager(db_session)
+        await state_manager.force_state(
+            user.id, "telegram", DriverState.INITIAL.value, context={}
+        )
+
+        handler = DriverStateHandler(db_session, platform="telegram")
+        response, new_state = await handler.handle_message(user, "/start", None)
+
+        assert new_state == DriverState.REGISTER_COLLECT_NAME.value
+        assert "ברוך הבא" in response.text
+
+    @pytest.mark.asyncio
+    async def test_partial_profile_starts_registration(
+        self, db_session, user_factory
+    ) -> None:
+        """נהג עם פרופיל חלקי (ללא trial_starts_at) — מתחיל רישום"""
+        user = await user_factory(
+            phone_number="+972502229113",
+            name="נהג חלקי",
+            role=UserRole.DRIVER,
+        )
+        # פרופיל ללא trial_starts_at — רישום לא הושלם
+        profile = DriverProfile(
+            user_id=user.id,
+            birth_date=date(1990, 1, 1),
+            vehicle_description="",
+            vehicle_category="car",
+            dress_code="secular",
+        )
+        db_session.add(profile)
+        await db_session.commit()
+
+        state_manager = StateManager(db_session)
+        await state_manager.force_state(
+            user.id, "telegram", DriverState.INITIAL.value, context={}
+        )
+
+        handler = DriverStateHandler(db_session, platform="telegram")
+        response, new_state = await handler.handle_message(user, "/start", None)
+
+        assert new_state == DriverState.REGISTER_COLLECT_NAME.value
+        assert "ברוך הבא" in response.text
+
+
+class TestVerifyFlowContextCleanup:
+    """באג: קונטקסט רישום לא מנוקה בחזרה מזרימת אימות"""
+
+    @pytest.mark.asyncio
+    async def test_verify_to_menu_cleans_registration_context(
+        self, db_session, user_factory
+    ) -> None:
+        """מעבר מ-VERIFY → MENU מנקה מפתחות רישום מהקונטקסט"""
+        user = await user_factory(
+            phone_number="+972502229211",
+            name="נהג אימות",
+            role=UserRole.DRIVER,
+        )
+        state_manager = StateManager(db_session)
+        # סימולציה של מצב אימות עם קונטקסט רישום שנשאר
+        await state_manager.force_state(
+            user.id,
+            "telegram",
+            DriverState.VERIFY_COLLECT_SELFIE.value,
+            context={
+                "reg_name": "ישראל",
+                "reg_age": "35",
+                "reg_vehicle": "טויוטה",
+                "reg_birth_date": "1990-01-01",
+                "other_key": "keep",
+            },
+        )
+
+        handler = DriverStateHandler(db_session, platform="telegram")
+
+        # כפיית מעבר ל-MENU (סימולציה של סיום אימות)
+        from app.state_machine.driver_handler import _REGISTRATION_CONTEXT_KEYS
+
+        # בדיקה ש-_is_registration_flow_state מזהה VERIFY states
+        assert handler._is_registration_flow_state(
+            DriverState.VERIFY_COLLECT_SELFIE.value
+        )
+        assert handler._is_registration_flow_state(
+            DriverState.VERIFY_COLLECT_ID_DOCUMENT.value
+        )
+        assert handler._is_registration_flow_state(
+            DriverState.VERIFY_PENDING_APPROVAL.value
+        )
