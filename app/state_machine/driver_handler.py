@@ -56,10 +56,7 @@ from app.domain.services.driver_menu_service import (
     TIMEFRAME_BY_LABEL,
 )
 from app.domain.services.driver_search_service import DriverSearchService
-from app.domain.services.city_abbreviation_service import (
-    CityAbbreviationService,
-    ParsedSearchCommand,
-)
+from app.domain.services.city_abbreviation_service import CityAbbreviationService
 from app.db.models.driver_search import MAX_ACTIVE_SEARCHES_PER_USER
 from sqlalchemy import select
 from app.core.exceptions import ValidationException, NotFoundException
@@ -1255,7 +1252,9 @@ class DriverStateHandler:
 
         keyboard = []
         for i, search in enumerate(searches, 1):
-            summary = DriverSearchService.format_search_summary(search)
+            summary = DriverSearchService.format_search_summary(
+                search, html_escape=False
+            )
             keyboard.append([f"🗑 {i}. {summary}"])
 
         keyboard.append(["❌ ביטול"])

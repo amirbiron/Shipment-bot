@@ -290,25 +290,30 @@ class DriverSearchService:
         return result.scalar_one_or_none()
 
     @staticmethod
-    def format_search_summary(search: DriverSearch) -> str:
+    def format_search_summary(
+        search: DriverSearch, *, html_escape: bool = True
+    ) -> str:
         """
         פורמט חיפוש בודד לתצוגה.
 
         Args:
             search: אובייקט חיפוש
+            html_escape: האם להחיל HTML escape (ברירת מחדל True).
+                         יש להעביר False כשהטקסט מוצג כ-plain text (למשל כפתורי מקלדת).
 
         Returns:
             טקסט מפורמט
         """
+        esc = escape if html_escape else lambda s: s
         area_marker = " (אזורי)" if search.is_area_search else ""
         if search.origin_city and search.origin_city != "מיקום נוכחי":
             return (
-                f"📍 {escape(search.origin_city)} → "
-                f"{escape(search.destination_city)}{escape(area_marker)}"
+                f"📍 {esc(search.origin_city)} → "
+                f"{esc(search.destination_city)}{esc(area_marker)}"
             )
         if search.latitude is not None and search.longitude is not None:
-            return f"📍 מיקום GPS → {escape(search.destination_city)}{escape(area_marker)}"
-        return f"📍 → {escape(search.destination_city)}{escape(area_marker)}"
+            return f"📍 מיקום GPS → {esc(search.destination_city)}{esc(area_marker)}"
+        return f"📍 → {esc(search.destination_city)}{esc(area_marker)}"
 
     @staticmethod
     def format_searches_list(searches: list[DriverSearch]) -> str:
