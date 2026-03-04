@@ -166,6 +166,12 @@ class Settings(BaseSettings):
 
         # --- TELEGRAM_WEBHOOK_SECRET_TOKEN ---
         if not self.TELEGRAM_WEBHOOK_SECRET_TOKEN and self.TELEGRAM_BOT_TOKEN:
+            if not self.DEBUG:
+                raise ValueError(
+                    "TELEGRAM_WEBHOOK_SECRET_TOKEN ריק בסביבת פרודקשן (DEBUG=False) — "
+                    "ה-webhook חשוף לבקשות מזויפות ללא אימות. "
+                    "הגדר: export TELEGRAM_WEBHOOK_SECRET_TOKEN=$(openssl rand -hex 32)"
+                )
             warnings.warn(
                 "TELEGRAM_WEBHOOK_SECRET_TOKEN ריק — webhook של טלגרם לא מאומת. "
                 "הגדר: export TELEGRAM_WEBHOOK_SECRET_TOKEN=$(openssl rand -hex 32) "
