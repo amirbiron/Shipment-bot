@@ -34,12 +34,12 @@ logger = get_logger(__name__)
 
 VEHICLE_TYPE_LABELS: dict[str, str] = {
     VehicleCategory.FOUR_SEATER.value: "פרטי 4 מקומות",
-    VehicleCategory.VAN.value: "מיני קטן 6 מקומות",
-    VehicleCategory.EIGHT_PLUS.value: "מיני ומעלה עד 8 מקומות",
-    VehicleCategory.CAR.value: "מיניוואן 6 מקומות מרווח",
-    VehicleCategory.SEVEN_SEATER.value: "7 מקומות",
-    VehicleCategory.TRUCK.value: "8 מקומות",
-    VehicleCategory.MOTORCYCLE.value: "מעל 8 מקומות",
+    VehicleCategory.CAR.value: "רכב סטנדרטי",
+    VehicleCategory.VAN.value: "וואן / פורגון",
+    VehicleCategory.SEVEN_SEATER.value: "7 מקומות (מיניוואן)",
+    VehicleCategory.EIGHT_PLUS.value: "מעל 8 מקומות",
+    VehicleCategory.TRUCK.value: "משאית",
+    VehicleCategory.MOTORCYCLE.value: "אופנוע",
 }
 
 # מיפוי הפוך — מטקסט כפתור לערך enum
@@ -305,7 +305,6 @@ class DriverMenuService:
         update = DriverSearchSettingsUpdate(
             upcoming_timeframe=timeframe,
             future_only_enabled=False if auto_disable_future else None,
-            future_only_start_time=None if auto_disable_future else None,
         )
 
         # ולידציה צולבת מול ערכים קיימים
