@@ -989,17 +989,17 @@ async def send_telegram_message(
 
         return True
 
-    try:
-        inline_keyboard: list[list[dict]] | None = None
-        if keyboard:
-            inline_keyboard = await _build_inline_keyboard(keyboard)
+    inline_keyboard: list[list[dict]] | None = None
+    if keyboard:
+        inline_keyboard = await _build_inline_keyboard(keyboard)
 
-        # --- ניקוי reply keyboard ישן (פעם אחת לכל chat, רק כשיש כפתורים) ---
-        if keyboard and not await _was_reply_keyboard_cleared(chat_id):
-            placeholder_payload = {
+    # --- ניקוי reply keyboard ישן (פעם אחת לכל chat, רק כשיש כפתורים) ---
+    # best-effort: כשלון כאן לא ימנע שליחת ההודעה האמיתית
+    if keyboard and not await _was_reply_keyboard_cleared(chat_id):
+        try:
+            placeholder_payload: dict = {
                 "chat_id": chat_id,
-                "text": "\u200b",
-                "parse_mode": "HTML",
+                "text": ".",
                 "reply_markup": {"remove_keyboard": True},
             }
 
@@ -1018,8 +1018,14 @@ async def send_telegram_message(
                     await _delete_message(int(placeholder_message_id))
                 except Exception:
                     pass
+        except Exception as e:
+            logger.warning(
+                "כשלון בניקוי reply keyboard (best-effort, ממשיך לשליחה)",
+                extra_data={"chat_id": chat_id, "error": str(e)},
+            )
 
-        # --- שליחה ---
+    # --- שליחה ---
+    try:
         payload: dict = {
             "chat_id": chat_id,
             "text": text,
