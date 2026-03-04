@@ -173,32 +173,49 @@ async def health_check() -> dict[str, str]:
     summary="בדיקת מוכנות (Readiness Probe)",
     description=(
         "בדיקה מקיפה של כל התלויות: DB, Redis, WhatsApp Gateway, Celery broker. "
-        "מחזיר status=healthy אם הכל תקין, או status=degraded עם פירוט השגיאה."
+        "מחזיר status=healthy אם הכל תקין, status=degraded אם תלות לא קריטית "
+        "(WhatsApp) לא זמינה (עדיין HTTP 200), או status=unhealthy עם HTTP 503 "
+        "אם תלות קריטית (DB/Redis/Celery) לא זמינה."
     ),
     responses={
         200: {
-            "description": "כל התלויות תקינות",
+            "description": "תלויות קריטיות תקינות (WhatsApp עשוי להיות מושבת)",
             "content": {
                 "application/json": {
-                    "example": {
-                        "status": "healthy",
-                        "db": "ok",
-                        "redis": "ok",
-                        "whatsapp_gateway": "ok",
-                        "celery": "ok",
+                    "examples": {
+                        "healthy": {
+                            "summary": "הכל תקין",
+                            "value": {
+                                "status": "healthy",
+                                "db": "ok",
+                                "redis": "ok",
+                                "whatsapp_gateway": "ok",
+                                "celery": "ok",
+                            },
+                        },
+                        "degraded": {
+                            "summary": "WhatsApp מושבת — טלגרם עדיין עובד",
+                            "value": {
+                                "status": "degraded",
+                                "db": "ok",
+                                "redis": "ok",
+                                "whatsapp_gateway": "error: whatsapp_disconnected",
+                                "celery": "ok",
+                            },
+                        },
                     }
                 }
             },
         },
         503: {
-            "description": "לפחות תלות אחת לא זמינה",
+            "description": "תלות קריטית לא זמינה — המערכת לא יכולה לשרת בקשות",
             "content": {
                 "application/json": {
                     "example": {
-                        "status": "degraded",
-                        "db": "ok",
+                        "status": "unhealthy",
+                        "db": "error: db_unavailable",
                         "redis": "ok",
-                        "whatsapp_gateway": "error: 404",
+                        "whatsapp_gateway": "ok",
                         "celery": "ok",
                     }
                 }
@@ -214,7 +231,9 @@ async def readiness_check() -> dict[str, str]:
     from app.domain.services.health_service import check_readiness
 
     result = await check_readiness()
-    status_code = 200 if result["status"] == "healthy" else 503
+    # רק כשל בתלות קריטית (DB/Redis/Celery) מחזיר 503.
+    # WhatsApp מושבת = degraded אבל עדיין HTTP 200 — כדי לא לחסום תעבורת טלגרם.
+    status_code = 503 if result["status"] == "unhealthy" else 200
     return JSONResponse(content=result, status_code=status_code)
 
 

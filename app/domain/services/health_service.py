@@ -21,6 +21,7 @@ logger = get_logger(__name__)
 # סטטוסים אפשריים לתשובת readiness
 _STATUS_HEALTHY = "healthy"
 _STATUS_DEGRADED = "degraded"
+_STATUS_UNHEALTHY = "unhealthy"
 
 _CHECK_OK = "ok"
 
@@ -102,8 +103,13 @@ async def check_readiness() -> dict[str, Any]:
     בדיקת מוכנות מקיפה — בודק את כל התלויות החיצוניות.
 
     מחזיר dict עם סטטוס כללי ופירוט לכל תלות:
-    - status: "healthy" אם הכל תקין, "degraded" אם יש בעיה באחת התלויות
+    - status: "healthy" אם הכל תקין, "degraded" אם יש בעיה בתלות לא קריטית,
+      "unhealthy" אם תלות קריטית לא זמינה
     - db / redis / whatsapp_gateway / celery: "ok" או "error: ..."
+
+    תלויות קריטיות (DB, Redis, Celery) — כשל בהן מחזיר HTTP 503.
+    תלויות לא קריטיות (WhatsApp Gateway) — כשל בהן מחזיר HTTP 200 עם status=degraded.
+    זה מונע מצב שבו WhatsApp מושבת חוסם את כל התעבורה כולל טלגרם.
     """
     db_status = await _check_db()
     redis_status = await _check_redis()
@@ -117,12 +123,26 @@ async def check_readiness() -> dict[str, Any]:
         "celery": celery_status,
     }
 
+    # תלויות קריטיות — כשל בהן = המערכת לא יכולה לשרת בקשות
+    critical_checks = {
+        "db": db_status,
+        "redis": redis_status,
+        "celery": celery_status,
+    }
+    critical_ok = all(v == _CHECK_OK for v in critical_checks.values())
     all_ok = all(v == _CHECK_OK for v in checks.values())
-    overall_status = _STATUS_HEALTHY if all_ok else _STATUS_DEGRADED
+
+    if not critical_ok:
+        overall_status = _STATUS_UNHEALTHY
+    elif not all_ok:
+        overall_status = _STATUS_DEGRADED
+    else:
+        overall_status = _STATUS_HEALTHY
 
     if not all_ok:
         logger.warning(
-            "בדיקת מוכנות — המערכת במצב degraded",
+            "בדיקת מוכנות — המערכת במצב %s",
+            overall_status,
             extra_data=checks,
         )
 
