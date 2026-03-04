@@ -166,8 +166,9 @@ class DriverRegistrationService:
 
         # הפעלת תקופת ניסיון דרך SubscriptionService
         # (עם הגנה מפני הפעלה כפולה + קביעת subscription_status)
+        # commit=False — ה-commit יתבצע פעם אחת בסוף save_dress_code
         subscription_service = DriverSubscriptionService(self.db)
-        await subscription_service.activate_trial(user_id)
+        await subscription_service.activate_trial(user_id, commit=False)
 
         needs_verification = self.requires_verification(dress_code)
 

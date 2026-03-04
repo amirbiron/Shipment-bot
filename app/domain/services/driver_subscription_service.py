@@ -34,7 +34,9 @@ class DriverSubscriptionService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def activate_trial(self, user_id: int) -> DriverProfile:
+    async def activate_trial(
+        self, user_id: int, *, commit: bool = True
+    ) -> DriverProfile:
         """
         הפעלת תקופת ניסיון (7 ימים).
 
@@ -43,6 +45,7 @@ class DriverSubscriptionService:
 
         Args:
             user_id: מזהה המשתמש
+            commit: האם לבצע commit. False כשנקרא בתוך טרנזקציה חיצונית.
 
         Returns:
             הפרופיל המעודכן
@@ -68,8 +71,9 @@ class DriverSubscriptionService:
         profile.subscription_status = DriverSubscriptionStatus.TRIAL.value
         profile.updated_at = now
 
-        await self.db.commit()
-        await self.db.refresh(profile)
+        if commit:
+            await self.db.commit()
+            await self.db.refresh(profile)
 
         logger.info(
             "תקופת ניסיון הופעלה",
