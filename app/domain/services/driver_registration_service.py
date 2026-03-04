@@ -19,6 +19,7 @@ from app.db.models.driver_profile import (
 from app.core.validation import NameValidator, TextSanitizer
 from app.core.logging import get_logger
 from app.core.exceptions import ValidationException, NotFoundException
+from app.domain.services.driver_subscription_service import DriverSubscriptionService
 
 logger = get_logger(__name__)
 
@@ -163,10 +164,10 @@ class DriverRegistrationService:
         profile = await self._get_or_create_profile(user_id)
         profile.dress_code = dress_code
 
-        # הפעלת תקופת ניסיון (7 ימים)
-        now = datetime.utcnow()
-        profile.trial_starts_at = now
-        profile.trial_expires_at = now + timedelta(days=7)
+        # הפעלת תקופת ניסיון דרך SubscriptionService
+        # (עם הגנה מפני הפעלה כפולה + קביעת subscription_status)
+        subscription_service = DriverSubscriptionService(self.db)
+        await subscription_service.activate_trial(user_id)
 
         needs_verification = self.requires_verification(dress_code)
 

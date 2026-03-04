@@ -856,6 +856,19 @@ class DriverStateHandler:
             )
             return response, DriverState.MENU.value, {}
 
+        # בדיקת מנוי פעיל — רק אחרי פרסור מוצלח של הפקודה,
+        # כדי לחסוך שאילתת DB מיותרת על פקודות לא תקינות
+        if not await self.subscription_service.is_subscription_active(user.id):
+            response = MessageResponse(
+                text=(
+                    "⚠️ <b>המנוי שלך פג תוקף</b>\n\n"
+                    "רכוש מנוי כדי להמשיך לפרסם נסיעות.\n"
+                    "לחץ על כפתור 'מנוי' לפרטים."
+                ),
+                keyboard=[["💳 מנוי"], ["🔙 חזרה לתפריט"]],
+            )
+            return response, DriverState.MENU.value, {}
+
         success, message, sent_count, total_groups = (
             await self.ride_posting_service.post_ride(user, posting)
         )
