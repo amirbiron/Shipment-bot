@@ -1034,7 +1034,10 @@ def check_driver_subscriptions():
                             },
                             exc_info=True,
                         )
-                        await db.rollback()
+                        # לא עושים rollback — הלולאה היא read-only
+                        # (throttle ב-Redis + שליחת הודעה חיצונית).
+                        # rollback מבטל ORM objects ב-session ושובר איטרציות הבאות
+                        # (DetachedInstanceError / MissingGreenlet).
             except Exception as e:
                 logger.error(
                     "כשלון בשליפת מנויים שעומדים לפוג",

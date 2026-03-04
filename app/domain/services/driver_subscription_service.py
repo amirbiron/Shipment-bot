@@ -150,13 +150,15 @@ class DriverSubscriptionService:
         if status == DriverSubscriptionStatus.ACTIVE.value:
             if profile.subscription_expires_at is not None:
                 return profile.subscription_expires_at > now
-            return True
+            # אין תאריך תפוגה — פרופיל לא תקין, לא מעניקים גישה
+            return False
 
         # תקופת ניסיון
         if status == DriverSubscriptionStatus.TRIAL.value:
             if profile.trial_expires_at is not None:
                 return profile.trial_expires_at > now
-            return True
+            # אין תאריך תפוגה — פרופיל לא תקין, לא מעניקים גישה
+            return False
 
         # כל סטטוס אחר (expired, paused, cancelled) = לא פעיל
         return False
