@@ -673,3 +673,64 @@ class TestDriverSearchSettingsUpdateSchema:
         """סוג רכב לא תקין"""
         with pytest.raises(ValueError, match="סוג רכב"):
             DriverSearchSettingsUpdate(vehicle_type_filter="submarine")
+
+
+class TestDriverSearchCoordinateValidation:
+    """בדיקות ולידציית קואורדינטות בחיפוש"""
+
+    @pytest.mark.unit
+    def test_area_search_without_coords_fails(self) -> None:
+        """חיפוש אזורי ללא קואורדינטות חייב להיכשל"""
+        with pytest.raises(ValueError, match="latitude"):
+            DriverSearchCreate(
+                origin_city="חיפה",
+                destination_city="חיפה",
+                is_area_search=True,
+            )
+
+    @pytest.mark.unit
+    def test_area_search_with_only_lat_fails(self) -> None:
+        """חיפוש אזורי עם latitude בלבד חייב להיכשל"""
+        with pytest.raises(ValueError, match="latitude"):
+            DriverSearchCreate(
+                origin_city="חיפה",
+                destination_city="חיפה",
+                is_area_search=True,
+                latitude=32.7940,
+            )
+
+    @pytest.mark.unit
+    def test_area_search_with_only_lng_fails(self) -> None:
+        """חיפוש אזורי עם longitude בלבד חייב להיכשל"""
+        with pytest.raises(ValueError, match="latitude"):
+            DriverSearchCreate(
+                origin_city="חיפה",
+                destination_city="חיפה",
+                is_area_search=True,
+                longitude=34.9896,
+            )
+
+    @pytest.mark.unit
+    def test_route_search_with_coords_fails(self) -> None:
+        """חיפוש מסלול עם קואורדינטות חייב להיכשל"""
+        with pytest.raises(ValueError, match="קואורדינטות"):
+            DriverSearchCreate(
+                origin_city="תל אביב",
+                destination_city="ירושלים",
+                is_area_search=False,
+                latitude=32.0,
+                longitude=34.0,
+            )
+
+    @pytest.mark.unit
+    def test_area_search_with_both_coords_passes(self) -> None:
+        """חיפוש אזורי עם שתי קואורדינטות — תקין"""
+        search = DriverSearchCreate(
+            origin_city="חיפה",
+            destination_city="חיפה",
+            is_area_search=True,
+            latitude=32.7940,
+            longitude=34.9896,
+        )
+        assert search.latitude == 32.7940
+        assert search.longitude == 34.9896

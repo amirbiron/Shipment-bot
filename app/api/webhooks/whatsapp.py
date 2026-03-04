@@ -17,7 +17,7 @@ from app.db.database import get_db
 from app.db.models.user import User, UserRole, ApprovalStatus
 from app.db.models.webhook_event import WebhookEvent
 from app.state_machine.handlers import SenderStateHandler, CourierStateHandler
-from app.state_machine.states import CourierState, DispatcherState, SenderState, StationOwnerState
+from app.state_machine.states import CourierState, DispatcherState, SenderState, StationOwnerState, DriverState
 from app.state_machine.dispatcher_handler import DispatcherStateHandler
 from app.state_machine.station_owner_handler import StationOwnerStateHandler
 from app.state_machine.manager import StateManager
@@ -775,6 +775,17 @@ async def _route_to_role_menu_wa(
         await db.commit()
         return await _sender_fallback_wa(user, db, state_manager)
 
+    if user.role == UserRole.DRIVER:
+        # iDriver — נהג מופנה למצב ראשוני (handler ייבנה בסשנים הבאים)
+        await state_manager.force_state(
+            user.id, "whatsapp", DriverState.INITIAL.value, context={}
+        )
+        from app.state_machine.handlers import MessageResponse
+        return MessageResponse(
+            text="ברוך הבא ל-iDriver! 🚗\nהמערכת בהקמה, נעדכן אותך בקרוב.",
+            keyboard=None,
+        ), DriverState.INITIAL.value
+
     if user.role == UserRole.SENDER or user.role == UserRole.ADMIN:
         # בדיקה אם המשתמש הוא סדרן פעיל — סדרנים שאינם שליחים נכנסים ישירות לתפריט סדרן
         from app.domain.services.station_service import StationService
@@ -1242,7 +1253,7 @@ async def whatsapp_webhook(
             _is_in_multi_step_flow = _is_courier_in_registration or (
                 isinstance(_current_state_value, str)
                 and (
-                    _current_state_value.startswith(("DISPATCHER.", "STATION."))
+                    _current_state_value.startswith(("DISPATCHER.", "STATION.", "DRIVER."))
                     # הגנה על זרימות שולח: מונע "תחנה" וכו' מלתפוס כתובות כמו "תחנה מרכזית"
                     or (
                         _current_state_value.startswith("SENDER.")
@@ -1604,6 +1615,26 @@ async def whatsapp_webhook(
                 )
                 continue
     
+            if user.role == UserRole.DRIVER:
+                # iDriver — ניתוב נהג (handler ייבנה בסשנים הבאים)
+                is_driver_flow = isinstance(current_state, str) and current_state.startswith("DRIVER.")
+                if not is_driver_flow:
+                    await state_manager.force_state(
+                        user.id, "whatsapp", DriverState.INITIAL.value, context={}
+                    )
+                from app.state_machine.handlers import MessageResponse as _MR
+                response = _MR(
+                    text="ברוך הבא ל-iDriver! 🚗\nהמערכת בהקמה, נעדכן אותך בקרוב.",
+                    keyboard=None,
+                )
+                background_tasks.add_task(
+                    send_whatsapp_message, reply_to, response.text, response.keyboard
+                )
+                responses.append(
+                    {"from": sender_id, "response": response.text, "new_state": DriverState.INITIAL.value}
+                )
+                continue
+
             # Sender flow
             if "שלוח" in text or "חבילה" in text:
                 handler = SenderStateHandler(db)

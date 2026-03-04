@@ -4,7 +4,7 @@
 משמש לולידציית קלט בעת רישום, עדכון הגדרות ויצירת חיפושים.
 """
 from datetime import date, time
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 from app.core.validation import NameValidator, TextSanitizer
 from app.db.models.driver_profile import VehicleCategory, DressCode
@@ -132,3 +132,14 @@ class DriverSearchCreate(BaseModel):
         if not is_safe:
             raise ValueError("שם עיר מכיל תוכן לא תקין")
         return TextSanitizer.sanitize(v, max_length=100)
+
+    @model_validator(mode="after")
+    def validate_area_search_coordinates(self) -> "DriverSearchCreate":
+        """חיפוש אזורי חייב לכלול שתי קואורדינטות; חיפוש מסלול אסור עם קואורדינטות."""
+        if self.is_area_search:
+            if self.latitude is None or self.longitude is None:
+                raise ValueError("חיפוש אזורי חייב לכלול latitude ו-longitude")
+        else:
+            if self.latitude is not None or self.longitude is not None:
+                raise ValueError("חיפוש מסלול לא יכול לכלול קואורדינטות")
+        return self
