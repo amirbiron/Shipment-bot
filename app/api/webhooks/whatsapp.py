@@ -776,15 +776,14 @@ async def _route_to_role_menu_wa(
         return await _sender_fallback_wa(user, db, state_manager)
 
     if user.role == UserRole.DRIVER:
-        # iDriver — נהג מופנה למצב ראשוני (handler ייבנה בסשנים הבאים)
+        # iDriver — ניתוב נהג ל-handler רישום (סשן 2)
+        from app.state_machine.driver_handler import DriverStateHandler
+
         await state_manager.force_state(
             user.id, "whatsapp", DriverState.INITIAL.value, context={}
         )
-        from app.state_machine.handlers import MessageResponse
-        return MessageResponse(
-            text="ברוך הבא ל-iDriver! 🚗\nהמערכת בהקמה, נעדכן אותך בקרוב.",
-            keyboard=None,
-        ), DriverState.INITIAL.value
+        handler = DriverStateHandler(db, platform="whatsapp")
+        return await handler.handle_message(user, "תפריט", None)
 
     if user.role == UserRole.SENDER or user.role == UserRole.ADMIN:
         # בדיקה אם המשתמש הוא סדרן פעיל — סדרנים שאינם שליחים נכנסים ישירות לתפריט סדרן
@@ -1616,23 +1615,21 @@ async def whatsapp_webhook(
                 continue
     
             if user.role == UserRole.DRIVER:
-                # iDriver — ניתוב נהג (handler ייבנה בסשנים הבאים)
+                # iDriver — ניתוב נהג ל-handler רישום (סשן 2)
+                from app.state_machine.driver_handler import DriverStateHandler as _DH
+
                 is_driver_flow = isinstance(current_state, str) and current_state.startswith("DRIVER.")
                 if not is_driver_flow:
                     await state_manager.force_state(
                         user.id, "whatsapp", DriverState.INITIAL.value, context={}
                     )
-                from app.state_machine.handlers import MessageResponse as _MR
-                response = _MR(
-                    text="ברוך הבא ל-iDriver! 🚗\nהמערכת בהקמה, נעדכן אותך בקרוב.",
-                    keyboard=None,
-                )
+                _driver_handler = _DH(db, platform="whatsapp")
+                response, new_state = await _driver_handler.handle_message(user, text, None)
                 background_tasks.add_task(
                     send_whatsapp_message, reply_to, response.text, response.keyboard
                 )
-                actual_state = current_state if is_driver_flow else DriverState.INITIAL.value
                 responses.append(
-                    {"from": sender_id, "response": response.text, "new_state": actual_state}
+                    {"from": sender_id, "response": response.text, "new_state": new_state}
                 )
                 continue
 
