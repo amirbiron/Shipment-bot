@@ -850,7 +850,8 @@ class TestPostRegistrationStability:
 
         # חייב להישאר ב-VERIFY, לא לחזור ל-REGISTER
         assert new_state == DriverState.VERIFY_COLLECT_SELFIE.value
-        assert "בהקמה" in response.text
+        assert "סלפי" in response.text
+        assert "שם המלא" not in response.text
 
     @pytest.mark.asyncio
     async def test_unknown_state_does_not_restart_registration(

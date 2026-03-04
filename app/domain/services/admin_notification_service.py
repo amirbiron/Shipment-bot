@@ -261,6 +261,230 @@ class AdminNotificationService:
         return success
 
     # ──────────────────────────────────────────────
+    #  כרטיס אימות נהג (iDriver סשן 3)
+    # ──────────────────────────────────────────────
+
+    # מיפוי קוד לבוש לתצוגה בעברית
+    DRESS_CODE_DISPLAY = {
+        "hassidic": "חסידי",
+        "ultra_orthodox": "חרדי",
+        "modern_orthodox": "חרדי מודרני",
+        "religious_elegant": "דתי אלגנט",
+        "mixed": "מעורב",
+        "secular": "חילוני",
+    }
+
+    @staticmethod
+    async def notify_new_driver_verification(
+        user_id: int,
+        full_name: str,
+        dress_code: str,
+        vehicle_description: str,
+        platform: str,
+        phone_or_chat_id: str,
+        selfie_file_id: Optional[str] = None,
+        id_file_id: Optional[str] = None,
+    ) -> bool:
+        """
+        שליחת כרטיס אימות נהג למנהלים בפרטי לאישור.
+        כולל כפתורי אישור/דחייה (inline בטלגרם, טקסט בוואטסאפ).
+        """
+        success = False
+        dress_display = AdminNotificationService.DRESS_CODE_DISPLAY.get(
+            dress_code, dress_code or "לא צוין"
+        )
+
+        # --- שליחה למנהלים פרטיים בטלגרם ---
+        tg_admin_ids = _parse_csv_setting(settings.TELEGRAM_ADMIN_CHAT_IDS)
+        is_tg_fallback_to_group = not tg_admin_ids
+        if is_tg_fallback_to_group and settings.TELEGRAM_ADMIN_CHAT_ID:
+            tg_admin_ids = [settings.TELEGRAM_ADMIN_CHAT_ID]
+
+        if tg_admin_ids and settings.TELEGRAM_BOT_TOKEN:
+            is_telegram = platform == "telegram"
+            has_tg_selfie = selfie_file_id and is_telegram
+            has_tg_id = id_file_id and is_telegram
+
+            tg_selfie_status = "נשלח למטה ⬇️" if has_tg_selfie else "✗"
+            tg_id_status = "נשלח למטה ⬇️" if has_tg_id else "✗"
+
+            safe_full_name = TextSanitizer.sanitize_for_html(full_name)
+            safe_vehicle = TextSanitizer.sanitize_for_html(vehicle_description)
+            safe_dress = TextSanitizer.sanitize_for_html(dress_display)
+
+            if platform == "telegram":
+                contact_line = (
+                    f'<a href="tg://user?id={phone_or_chat_id}">פתח צ\'אט בטלגרם</a>'
+                    f" (ID: {phone_or_chat_id})"
+                )
+            else:
+                contact_line = TextSanitizer.sanitize_for_html(phone_or_chat_id)
+
+            tg_message = f"""🕵🏼 <b>בקשת אימות נהג #{user_id}</b>
+
+📋 <b>פרטים:</b>
+• שם: {safe_full_name}
+• רכב: {safe_vehicle}
+• זרם: {safe_dress}
+• פלטפורמה: {platform}
+• ליצירת קשר: {contact_line}
+
+📎 <b>מסמכים:</b>
+  - סלפי: {tg_selfie_status}
+  - ת.ז.: {tg_id_status}"""
+
+            if is_tg_fallback_to_group:
+                tg_message += f"""
+
+✅ לאישור: <code>אשר נהג {user_id}</code>
+❌ לדחייה: <code>דחה נהג {user_id}</code>"""
+                inline_keyboard = None
+            else:
+                inline_keyboard = [[
+                    {"text": "✅ אשר נהג", "callback_data": f"approve_driver_{user_id}"},
+                    {"text": "❌ דחה נהג", "callback_data": f"reject_driver_{user_id}"},
+                ]]
+
+            for admin_id in tg_admin_ids:
+                if inline_keyboard:
+                    tg_sent = await AdminNotificationService._send_telegram_message_with_inline_keyboard(
+                        admin_id, tg_message, inline_keyboard
+                    )
+                else:
+                    tg_sent = await AdminNotificationService._send_telegram_message(
+                        admin_id, tg_message
+                    )
+                success = success or tg_sent
+
+                # שליחת תמונות (רק אם מטלגרם)
+                if is_telegram:
+                    for file_id in [selfie_file_id, id_file_id]:
+                        if file_id:
+                            await AdminNotificationService._forward_photo(admin_id, file_id)
+
+        # --- שליחה למנהלים פרטיים בוואטסאפ ---
+        wa_admin_numbers = _parse_csv_setting(settings.WHATSAPP_ADMIN_NUMBERS)
+        is_wa_fallback_to_group = not wa_admin_numbers
+        wa_targets = wa_admin_numbers if wa_admin_numbers else (
+            [settings.WHATSAPP_ADMIN_GROUP_ID] if settings.WHATSAPP_ADMIN_GROUP_ID else []
+        )
+
+        if wa_targets:
+            if platform == "telegram":
+                wa_contact_line = f"טלגרם ID: {phone_or_chat_id}"
+            else:
+                wa_contact_line = phone_or_chat_id
+
+            wa_message = f"""🕵🏼 *בקשת אימות נהג #{user_id}*
+
+📋 *פרטים:*
+• שם: {full_name}
+• רכב: {vehicle_description}
+• זרם: {dress_display}
+• פלטפורמה: {platform}
+• ליצירת קשר: {wa_contact_line}
+
+✅ לאישור: *אשר נהג {user_id}*
+❌ לדחייה: *דחה נהג {user_id}*"""
+
+            if is_wa_fallback_to_group:
+                wa_keyboard = None
+            else:
+                wa_keyboard = [[f"✅ אשר נהג {user_id}", f"❌ דחה נהג {user_id}"]]
+
+            for target in wa_targets:
+                wa_sent = await AdminNotificationService._send_whatsapp_admin_message(
+                    target, wa_message, keyboard=wa_keyboard
+                )
+                if not wa_sent and wa_keyboard:
+                    wa_sent = await AdminNotificationService._send_whatsapp_admin_message(
+                        target, wa_message, keyboard=None
+                    )
+                success = success or wa_sent
+
+        if not success:
+            logger.warning(
+                "Driver verification notification not configured or failed",
+                extra_data={"user_id": user_id},
+            )
+
+        return success
+
+    @staticmethod
+    async def notify_group_driver_decision(
+        user_id: int,
+        full_name: str,
+        dress_code: str,
+        vehicle_description: str,
+        platform: str,
+        decision: str,
+        decided_by: str,
+        rejection_reason: Optional[str] = None,
+    ) -> bool:
+        """שליחת סיכום החלטת אישור/דחייה של נהג לקבוצת מנהלים"""
+        success = False
+        dress_display = AdminNotificationService.DRESS_CODE_DISPLAY.get(
+            dress_code, dress_code or "לא צוין"
+        )
+
+        if decision == "approved":
+            status_icon = "✅"
+            status_text = "אושר"
+        else:
+            status_icon = "❌"
+            status_text = "נדחה"
+
+        wa_note_line = TextSanitizer.format_note_line(
+            rejection_reason, platform="whatsapp", label="סיבה"
+        )
+        tg_note_line = TextSanitizer.format_note_line(
+            rejection_reason, platform="telegram", label="סיבה"
+        )
+
+        # שליחה לקבוצת וואטסאפ
+        if settings.WHATSAPP_ADMIN_GROUP_ID:
+            wa_msg = f"""{status_icon} *אימות נהג #{user_id} - {status_text}*
+
+📋 *פרטים:*
+• שם: {full_name}
+• רכב: {vehicle_description}
+• זרם: {dress_display}
+• פלטפורמה: {platform}
+
+📌 *סטטוס:* {status_text}{wa_note_line}
+👤 *על ידי:* {decided_by}"""
+
+            wa_success = await AdminNotificationService._send_whatsapp_admin_message(
+                settings.WHATSAPP_ADMIN_GROUP_ID, wa_msg
+            )
+            success = success or wa_success
+
+        # שליחה לקבוצת טלגרם
+        if settings.TELEGRAM_ADMIN_CHAT_ID and settings.TELEGRAM_BOT_TOKEN:
+            safe_full_name = TextSanitizer.sanitize_for_html(full_name)
+            safe_vehicle = TextSanitizer.sanitize_for_html(vehicle_description)
+            safe_dress = TextSanitizer.sanitize_for_html(dress_display)
+            safe_decided_by = TextSanitizer.sanitize_for_html(decided_by)
+
+            tg_msg = f"""{status_icon} <b>אימות נהג #{user_id} - {status_text}</b>
+
+📋 <b>פרטים:</b>
+• שם: {safe_full_name}
+• רכב: {safe_vehicle}
+• זרם: {safe_dress}
+• פלטפורמה: {platform}
+
+📌 <b>סטטוס:</b> {status_text}{tg_note_line}
+👤 <b>על ידי:</b> {safe_decided_by}"""
+
+            tg_success = await AdminNotificationService._send_telegram_message(
+                settings.TELEGRAM_ADMIN_CHAT_ID, tg_msg
+            )
+            success = success or tg_success
+
+        return success
+
+    # ──────────────────────────────────────────────
     #  סיכום אישור/דחייה → שליחה לקבוצת מנהלים
     # ──────────────────────────────────────────────
 

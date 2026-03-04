@@ -70,10 +70,13 @@ class DriverProfile(Base):
     vehicle_category = Column(String(50), nullable=False)  # ערך מ-VehicleCategory
     dress_code = Column(String(50), nullable=False)         # ערך מ-DressCode
 
-    # אימות (מתמלא בסשן 3)
+    # אימות (סשן 3)
     verification_status = Column(
         String(50), nullable=False, default=DriverVerificationStatus.UNVERIFIED.value,
     )
+    verification_selfie_file_id = Column(Text, nullable=True)   # מזהה קובץ סלפי
+    verification_id_file_id = Column(Text, nullable=True)       # מזהה קובץ ת.ז.
+    rejection_reason = Column(Text, nullable=True)              # סיבת דחייה (אם נדחה)
 
     # מנוי
     subscription_status = Column(

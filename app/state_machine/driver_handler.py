@@ -1,11 +1,16 @@
 """
-Driver State Handler — זרימת רישום נהג (iDriver סשן 2)
+Driver State Handler — זרימת רישום ואימות נהג (iDriver סשנים 2-3)
 
 מנהל את מכונת המצבים של רישום נהג חדש:
 1. REGISTER_COLLECT_NAME — שם מלא
 2. REGISTER_COLLECT_BIRTH_DATE — תאריך לידה
 3. REGISTER_COLLECT_VEHICLE — תיאור רכב
 4. REGISTER_COLLECT_DRESS_CODE — קוד לבוש (עם הסתעפות לאימות/תפריט)
+
+ואימות חרדי (סשן 3):
+5. VERIFY_COLLECT_SELFIE — תמונת סלפי
+6. VERIFY_COLLECT_ID_DOCUMENT — תעודת זהות
+7. VERIFY_PENDING_APPROVAL — המתנה לאישור מנהל
 """
 
 from typing import Tuple
@@ -16,10 +21,15 @@ from app.state_machine.states import DriverState
 from app.state_machine.manager import StateManager
 from app.state_machine.handlers import MessageResponse
 from app.db.models.user import User
-from app.db.models.driver_profile import DriverProfile, DressCode
+from app.db.models.driver_profile import (
+    DriverProfile,
+    DressCode,
+    DriverVerificationStatus,
+)
 from app.domain.services.driver_registration_service import DriverRegistrationService
+from app.domain.services.driver_verification_service import DriverVerificationService
 from sqlalchemy import select
-from app.core.exceptions import ValidationException
+from app.core.exceptions import ValidationException, NotFoundException
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -59,10 +69,10 @@ _REGISTRATION_CONTEXT_KEYS = {
 
 class DriverStateHandler:
     """
-    Handler לזרימת רישום נהג חדש.
+    Handler לזרימת רישום ואימות נהג.
 
-    מטפל בשלבי הרישום (סשן 2) וב-INITIAL/NEW.
-    שלבים נוספים (אימות, תפריט, הגדרות, חיפוש) יתווספו בסשנים הבאים.
+    מטפל בשלבי הרישום (סשן 2), אימות חרדי (סשן 3) וב-INITIAL/NEW.
+    שלבים נוספים (תפריט, הגדרות, חיפוש) יתווספו בסשנים הבאים.
     """
 
     def __init__(self, db: AsyncSession, platform: str = "telegram"):
@@ -70,6 +80,7 @@ class DriverStateHandler:
         self.platform = platform
         self.state_manager = StateManager(db)
         self.registration_service = DriverRegistrationService(db)
+        self.verification_service = DriverVerificationService(db)
 
     def _is_registration_flow_state(self, state: str) -> bool:
         """בודק אם המצב שייך לזרימת רישום או אימות (לניקוי קונטקסט)"""
@@ -84,7 +95,7 @@ class DriverStateHandler:
         Args:
             user: אובייקט המשתמש
             message: טקסט ההודעה
-            photo_file_id: מזהה תמונה (לא בשימוש בסשן 2)
+            photo_file_id: מזהה תמונה (בשימוש בשלבי אימות — סשן 3)
 
         Returns:
             tuple של (תגובה, מצב חדש)
@@ -94,7 +105,9 @@ class DriverStateHandler:
         context = await self.state_manager.get_context(user.id, platform)
 
         handler = self._get_handler(current_state)
-        response, new_state, context_update = await handler(user, message, context)
+        response, new_state, context_update = await handler(
+            user, message, context, photo_file_id=photo_file_id
+        )
 
         # ניקוי קונטקסט רישום בחזרה ל-MENU או ל-INITIAL (ביטול)
         if (
@@ -149,20 +162,19 @@ class DriverStateHandler:
             DriverState.REGISTER_COLLECT_BIRTH_DATE.value: self._handle_collect_birth_date,
             DriverState.REGISTER_COLLECT_VEHICLE.value: self._handle_collect_vehicle,
             DriverState.REGISTER_COLLECT_DRESS_CODE.value: self._handle_collect_dress_code,
-            # מצבים שהרישום מוביל אליהם — placeholder עד שהסשנים הבאים יממשו
+            # אימות חרדי (סשן 3)
+            DriverState.VERIFY_COLLECT_SELFIE.value: self._handle_verify_collect_selfie,
+            DriverState.VERIFY_COLLECT_ID_DOCUMENT.value: self._handle_verify_collect_id_document,
+            DriverState.VERIFY_PENDING_APPROVAL.value: self._handle_verify_pending_approval,
+            # תפריט ראשי — placeholder עד סשנים הבאים
             DriverState.MENU.value: self._handle_post_registration_placeholder,
-            DriverState.VERIFY_COLLECT_SELFIE.value: self._handle_post_registration_placeholder,
-            DriverState.VERIFY_COLLECT_ID_DOCUMENT.value: (
-                self._handle_post_registration_placeholder
-            ),
-            DriverState.VERIFY_PENDING_APPROVAL.value: self._handle_post_registration_placeholder,
         }
         return handlers.get(state, self._handle_unknown)
 
     # ==================== שלב 0: מצב ראשוני ====================
 
     async def _handle_initial(
-        self, user: User, message: str, context: dict
+        self, user: User, message: str, context: dict, **kwargs: object
     ) -> Tuple[MessageResponse, str, dict]:
         """
         מצב ראשוני — בדיקה אם הרישום כבר הושלם.
@@ -196,7 +208,7 @@ class DriverStateHandler:
     # ==================== שלב 1: שם מלא ====================
 
     async def _handle_collect_name(
-        self, user: User, message: str, context: dict
+        self, user: User, message: str, context: dict, **kwargs: object
     ) -> Tuple[MessageResponse, str, dict]:
         """איסוף ואימות שם מלא"""
         try:
@@ -228,7 +240,7 @@ class DriverStateHandler:
     # ==================== שלב 2: תאריך לידה ====================
 
     async def _handle_collect_birth_date(
-        self, user: User, message: str, context: dict
+        self, user: User, message: str, context: dict, **kwargs: object
     ) -> Tuple[MessageResponse, str, dict]:
         """איסוף ואימות תאריך לידה"""
         try:
@@ -268,7 +280,7 @@ class DriverStateHandler:
     # ==================== שלב 3: תיאור רכב ====================
 
     async def _handle_collect_vehicle(
-        self, user: User, message: str, context: dict
+        self, user: User, message: str, context: dict, **kwargs: object
     ) -> Tuple[MessageResponse, str, dict]:
         """איסוף ואימות תיאור רכב"""
         try:
@@ -301,7 +313,7 @@ class DriverStateHandler:
     # ==================== שלב 4: קוד לבוש ====================
 
     async def _handle_collect_dress_code(
-        self, user: User, message: str, context: dict
+        self, user: User, message: str, context: dict, **kwargs: object
     ) -> Tuple[MessageResponse, str, dict]:
         """איסוף קוד לבוש וניתוב (אימות/תפריט)"""
         msg = message.strip()
@@ -370,13 +382,218 @@ class DriverStateHandler:
         )
         return response, DriverState.MENU.value, {}
 
+    # ==================== סשן 3: אימות חרדי ====================
+
+    async def _handle_verify_collect_selfie(
+        self, user: User, message: str, context: dict, **kwargs: object
+    ) -> Tuple[MessageResponse, str, dict]:
+        """
+        איסוף תמונת סלפי לאימות.
+
+        בכניסה הראשונה (ללא photo_file_id) — מציג הנחיות.
+        כשמתקבלת תמונה — שומר ועובר לשלב הבא.
+        """
+        photo_file_id: str | None = kwargs.get("photo_file_id")
+
+        # ביטול
+        if message and "ביטול" in message.strip():
+            response = MessageResponse(
+                text=(
+                    "❌ האימות בוטל.\n"
+                    "תוכל לחזור לאימות בכל שלב דרך התפריט."
+                ),
+            )
+            return response, DriverState.MENU.value, {}
+
+        # שליחת טקסט ללא תמונה — הצגת הנחיות
+        if not photo_file_id:
+            # בדיקה אם הנהג נדחה ומגיש מחדש
+            result = await self.db.execute(
+                select(DriverProfile).where(DriverProfile.user_id == user.id)
+            )
+            profile = result.scalar_one_or_none()
+            rejection_line = ""
+            if profile and profile.verification_status == DriverVerificationStatus.REJECTED.value:
+                reason = profile.rejection_reason or "לא צוינה"
+                rejection_line = (
+                    f"\n⚠️ <b>הגשתך הקודמת נדחתה.</b>\n"
+                    f"סיבה: {escape(reason)}\n"
+                )
+
+            # כרטיס נהג לא מאומת
+            reg_name = context.get("reg_name", user.full_name or user.name or "לא צוין")
+            reg_age = context.get("reg_age", "")
+            reg_vehicle = context.get("reg_vehicle", "")
+            dress_label = ""
+            if profile and profile.dress_code:
+                dress_label = DRESS_CODE_LABELS.get(profile.dress_code, profile.dress_code)
+
+            response = MessageResponse(
+                text=(
+                    f"🕵🏼 • שם מלא - {escape(reg_name)}"
+                    f" | 🔞 גיל - {escape(reg_age)}"
+                    f" | 🏎 רכב - {escape(reg_vehicle)}"
+                    f" | 🦓 זרם: {escape(dress_label)} - לא מאומת\n\n"
+                    "➖ הנך לא מזוהה במערכת ➖\n"
+                    f"{rejection_line}\n"
+                    "📸 <b>שלב אימות 1 מתוך 2</b>\n"
+                    "שלח תמונת סלפי עדכנית שלך.\n"
+                    "ודא שהפנים ברורות ומוארות."
+                ),
+                keyboard=[["📸 צלם סלפי"], ["❌ ביטול"]],
+            )
+            return response, DriverState.VERIFY_COLLECT_SELFIE.value, {}
+
+        # תמונה התקבלה — שמירה
+        try:
+            await self.verification_service.submit_selfie(user.id, photo_file_id)
+        except (ValidationException, NotFoundException) as e:
+            logger.error(
+                "כשלון בשמירת סלפי",
+                extra_data={"user_id": user.id, "error": str(e)},
+            )
+            response = MessageResponse(
+                text=(
+                    "❌ שגיאה בשמירת הסלפי. נסה שוב.\n\n"
+                    "📸 שלח תמונת סלפי:"
+                ),
+                keyboard=[["🔄 נסה שוב"], ["❌ ביטול"]],
+            )
+            return response, DriverState.VERIFY_COLLECT_SELFIE.value, {}
+
+        response = MessageResponse(
+            text=(
+                "✅ סלפי התקבל!\n\n"
+                "🪪 <b>שלב אימות 2 מתוך 2</b>\n"
+                "שלח תמונה של תעודת הזהות שלך.\n"
+                "ודא שכל הפרטים קריאים."
+            ),
+            keyboard=[["🪪 צלם תעודה"], ["❌ ביטול"]],
+        )
+        return response, DriverState.VERIFY_COLLECT_ID_DOCUMENT.value, {}
+
+    async def _handle_verify_collect_id_document(
+        self, user: User, message: str, context: dict, **kwargs: object
+    ) -> Tuple[MessageResponse, str, dict]:
+        """
+        איסוף תמונת תעודת זהות.
+
+        כשמתקבלת תמונה — שומר, מעדכן סטטוס ל-PENDING, שולח לאדמין.
+        """
+        photo_file_id: str | None = kwargs.get("photo_file_id")
+
+        # ביטול
+        if message and "ביטול" in message.strip():
+            response = MessageResponse(
+                text=(
+                    "❌ האימות בוטל.\n"
+                    "תוכל לחזור לאימות בכל שלב דרך התפריט."
+                ),
+            )
+            return response, DriverState.MENU.value, {}
+
+        if not photo_file_id:
+            response = MessageResponse(
+                text=(
+                    "🪪 <b>שלב אימות 2 מתוך 2</b>\n"
+                    "שלח תמונה של תעודת הזהות שלך.\n"
+                    "ודא שכל הפרטים קריאים."
+                ),
+                keyboard=[["🪪 צלם תעודה"], ["❌ ביטול"]],
+            )
+            return response, DriverState.VERIFY_COLLECT_ID_DOCUMENT.value, {}
+
+        # תמונה התקבלה — שמירה ועדכון סטטוס
+        try:
+            await self.verification_service.submit_id_document(user.id, photo_file_id)
+        except (ValidationException, NotFoundException) as e:
+            logger.error(
+                "כשלון בשמירת תעודה",
+                extra_data={"user_id": user.id, "error": str(e)},
+            )
+            response = MessageResponse(
+                text=(
+                    "❌ שגיאה בשמירת התעודה. נסה שוב.\n\n"
+                    "🪪 שלח תמונה של תעודת הזהות:"
+                ),
+                keyboard=[["🔄 נסה שוב"], ["❌ ביטול"]],
+            )
+            return response, DriverState.VERIFY_COLLECT_ID_DOCUMENT.value, {}
+
+        # שליחת כרטיס נהג + תמונות לאדמין
+        await self._notify_admin_driver_verification(user)
+
+        response = MessageResponse(
+            text=(
+                "✅ <b>תעודת הזהות התקבלה!</b>\n\n"
+                "⏳ הבקשה שלך נשלחה לבדיקה.\n"
+                "נעדכן אותך ברגע שמנהל יבדוק את הפרטים.\n\n"
+                "⏱ בדרך כלל האימות מתבצע תוך מספר שעות."
+            ),
+        )
+        return response, DriverState.VERIFY_PENDING_APPROVAL.value, {}
+
+    async def _handle_verify_pending_approval(
+        self, user: User, message: str, context: dict, **kwargs: object
+    ) -> Tuple[MessageResponse, str, dict]:
+        """ממתין לאישור מנהל — הודעת סטטוס"""
+        response = MessageResponse(
+            text=(
+                "⏳ <b>הבקשה שלך בבדיקה</b>\n\n"
+                "האימות שלך ממתין לאישור מנהל.\n"
+                "נעדכן אותך ברגע שתהיה החלטה.\n\n"
+                "⏱ בדרך כלל האימות מתבצע תוך מספר שעות."
+            ),
+        )
+        return response, DriverState.VERIFY_PENDING_APPROVAL.value, {}
+
+    async def _notify_admin_driver_verification(self, user: User) -> None:
+        """שליחת כרטיס אימות נהג למנהלים"""
+        try:
+            from app.domain.services.admin_notification_service import (
+                AdminNotificationService,
+            )
+
+            result = await self.db.execute(
+                select(DriverProfile).where(DriverProfile.user_id == user.id)
+            )
+            profile = result.scalar_one_or_none()
+            if not profile:
+                logger.error(
+                    "פרופיל נהג לא נמצא בעת שליחת התראה לאדמין",
+                    extra_data={"user_id": user.id},
+                )
+                return
+
+            await AdminNotificationService.notify_new_driver_verification(
+                user_id=user.id,
+                full_name=user.full_name or user.name or "לא צוין",
+                dress_code=profile.dress_code,
+                vehicle_description=profile.vehicle_description or "לא צוין",
+                platform=self.platform,
+                phone_or_chat_id=(
+                    str(user.telegram_chat_id)
+                    if self.platform == "telegram" and user.telegram_chat_id
+                    else user.phone_number or "לא צוין"
+                ),
+                selfie_file_id=profile.verification_selfie_file_id,
+                id_file_id=profile.verification_id_file_id,
+            )
+        except Exception as e:
+            # כשלון בהתראה לא עוצר את הזרימה — הנהג יקבל הודעת "בבדיקה"
+            logger.error(
+                "כשלון בשליחת התראת אימות נהג לאדמין",
+                extra_data={"user_id": user.id, "error": str(e)},
+                exc_info=True,
+            )
+
     # ==================== placeholder למצבים עתידיים ====================
 
     async def _handle_post_registration_placeholder(
-        self, user: User, message: str, context: dict
+        self, user: User, message: str, context: dict, **kwargs: object
     ) -> Tuple[MessageResponse, str, dict]:
         """
-        Placeholder למצבים שהרישום מוביל אליהם (MENU, VERIFY).
+        Placeholder למצבים שהרישום מוביל אליהם (MENU).
         שומר על המצב הנוכחי ומציג הודעה — מונע חזרה לרישום.
         יוחלף בסשנים הבאים.
         """
@@ -391,7 +608,7 @@ class DriverStateHandler:
     # ==================== fallback ====================
 
     async def _handle_unknown(
-        self, user: User, message: str, context: dict
+        self, user: User, message: str, context: dict, **kwargs: object
     ) -> Tuple[MessageResponse, str, dict]:
         """
         מצב לא מוכר — שומר על המצב הנוכחי ומציג הודעה.
