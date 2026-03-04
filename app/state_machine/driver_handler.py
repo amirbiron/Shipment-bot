@@ -1291,18 +1291,6 @@ class DriverStateHandler:
         אם הפקודה היא "פ מיקום" — עובר למצב המתנה למיקום GPS.
         סשן 8: בודק מנוי פעיל לפני יצירת חיפוש.
         """
-        # סשן 8: בדיקת מנוי פעיל לפני חיפוש
-        if not await self.subscription_service.is_subscription_active(user.id):
-            response = MessageResponse(
-                text=(
-                    "⚠️ <b>המנוי שלך פג תוקף</b>\n\n"
-                    "רכוש מנוי כדי להמשיך לחפש.\n"
-                    "לחץ על כפתור 'מנוי' לפרטים."
-                ),
-                keyboard=[["💳 מנוי"], ["🔙 חזרה לתפריט"]],
-            )
-            return response, DriverState.MENU.value, {}
-
         parsed = CityAbbreviationService.parse_search_command(text)
 
         if not parsed:
@@ -1318,6 +1306,19 @@ class DriverStateHandler:
                     "💡 שלח 'מילון' לרשימת קיצורי ערים"
                 ),
                 keyboard=[["🔙 חזרה לתפריט"]],
+            )
+            return response, DriverState.MENU.value, {}
+
+        # סשן 8: בדיקת מנוי פעיל — רק אחרי פרסור מוצלח של הפקודה,
+        # כדי לחסוך שאילתת DB מיותרת על פקודות לא תקינות
+        if not await self.subscription_service.is_subscription_active(user.id):
+            response = MessageResponse(
+                text=(
+                    "⚠️ <b>המנוי שלך פג תוקף</b>\n\n"
+                    "רכוש מנוי כדי להמשיך לחפש.\n"
+                    "לחץ על כפתור 'מנוי' לפרטים."
+                ),
+                keyboard=[["💳 מנוי"], ["🔙 חזרה לתפריט"]],
             )
             return response, DriverState.MENU.value, {}
 
@@ -1817,10 +1818,22 @@ class DriverStateHandler:
                 profile = await self.subscription_service.purchase_subscription(
                     user.id, months
                 )
-            except (NotFoundException, ValidationException) as e:
-                error_msg = e.message if hasattr(e, "message") else str(e)
+            except NotFoundException:
+                logger.error(
+                    "פרופיל לא נמצא ברכישת מנוי",
+                    extra_data={"user_id": user.id},
+                )
                 response = MessageResponse(
-                    text=f"❌ שגיאה ברכישה: {error_msg}",
+                    text="❌ שגיאה ברכישה: לא נמצא פרופיל נהג. פנה לתמיכה.",
+                    keyboard=[["🔙 חזרה לתפריט"]],
+                )
+            except ValidationException as e:
+                logger.warning(
+                    "כשלון ולידציה ברכישת מנוי",
+                    extra_data={"user_id": user.id, "error": e.message},
+                )
+                response = MessageResponse(
+                    text=f"❌ שגיאה ברכישה: {e.message}",
                     keyboard=[["🔙 חזרה לתפריט"]],
                 )
                 return response, DriverState.SUBSCRIPTION_VIEW.value, {
