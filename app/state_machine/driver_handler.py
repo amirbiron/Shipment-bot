@@ -1,5 +1,5 @@
 """
-Driver State Handler — זרימת רישום, אימות, תפריט, הגדרות וחיפוש נהג (iDriver סשנים 2-5)
+Driver State Handler — זרימת רישום, אימות, תפריט, הגדרות וחיפוש נהג (iDriver סשנים 2-6)
 
 מנהל את מכונת המצבים של רישום נהג חדש:
 1. REGISTER_COLLECT_NAME — שם מלא
@@ -26,6 +26,12 @@ Driver State Handler — זרימת רישום, אימות, תפריט, הגדר
 16. SEARCH_VIEW_ACTIVE — צפייה בחיפושים פעילים
 17. SEARCH_MANAGE — ניהול (מחיקת) חיפוש בודד
 18. SEARCH_CREATE_ORIGIN — המתנה לשיתוף מיקום GPS
+
+ניהול חיפושים + סשן 24 שעות (סשן 6):
+19. פקודת "ע" — השהיית כל החיפושים
+20. פקודת "ה" — חידוש חיפושים מושהים
+21. פקודת "מ" — מחיקת חיפוש בודד (רשימה לבחירה)
+22. פקודת "ממ" — מחיקת כל החיפושים (עם אישור)
 """
 
 from datetime import time as time_type
@@ -57,7 +63,7 @@ from app.domain.services.driver_menu_service import (
 )
 from app.domain.services.driver_search_service import DriverSearchService
 from app.domain.services.city_abbreviation_service import CityAbbreviationService
-from app.db.models.driver_search import MAX_ACTIVE_SEARCHES_PER_USER
+from app.db.models.driver_search import MAX_ACTIVE_SEARCHES_PER_USER, DriverSearchStatus
 from sqlalchemy import select
 from app.core.exceptions import ValidationException, NotFoundException
 from app.core.logging import get_logger
@@ -99,6 +105,7 @@ _REGISTRATION_CONTEXT_KEYS = {
 # מפתחות קונטקסט של זרימת חיפוש — ניקוי בחזרה לתפריט/צפייה
 _SEARCH_CONTEXT_KEYS = {
     "search_ids",
+    "delete_all_pending",
 }
 
 
@@ -107,7 +114,8 @@ class DriverStateHandler:
     Handler לזרימת רישום, אימות, תפריט, הגדרות וחיפוש נהג.
 
     מטפל בשלבי הרישום (סשן 2), אימות חרדי (סשן 3),
-    תפריט ראשי והגדרות חיפוש (סשן 4), וחיפוש נסיעות (סשן 5).
+    תפריט ראשי והגדרות חיפוש (סשן 4), חיפוש נסיעות (סשן 5),
+    וניהול חיפושים + סשן 24 שעות (סשן 6).
     """
 
     def __init__(self, db: AsyncSession, platform: str = "telegram"):
@@ -118,6 +126,9 @@ class DriverStateHandler:
         self.verification_service = DriverVerificationService(db)
         self.menu_service = DriverMenuService(db)
         self.search_service = DriverSearchService(db)
+        # סשן 6 — ניהול סשנים
+        from app.domain.services.driver_session_service import DriverSessionService
+        self.session_service = DriverSessionService(db)
 
     def _is_registration_flow_state(self, state: str) -> bool:
         """בודק אם המצב שייך לזרימת רישום או אימות (לניקוי קונטקסט)"""
@@ -709,6 +720,22 @@ class DriverStateHandler:
         if CityAbbreviationService.is_search_command(msg):
             return await self._handle_search_command(user, msg)
 
+        # סשן 6: פקודת השהיית חיפושים — "ע"
+        if msg == "ע":
+            return await self._handle_pause_searches(user)
+
+        # סשן 6: פקודת חידוש חיפושים — "ה"
+        if msg == "ה":
+            return await self._handle_resume_searches(user)
+
+        # סשן 6: פקודת מחיקת כל החיפושים — "ממ" (לפני "מ" כדי לא לתפוס "ממ" כ-"מ")
+        if msg == "ממ":
+            return self._show_delete_all_confirmation()
+
+        # סשן 6: פקודת מחיקת חיפוש בודד — "מ"
+        if msg == "מ":
+            return await self._build_search_delete_menu(user)
+
         # ניתוב להגדרות חיפוש
         if "הגדרות" in msg:
             return await self._build_settings_menu(user)
@@ -742,6 +769,10 @@ class DriverStateHandler:
                 "🔹 <b>פ מיקום</b> — חיפוש לפי שיתוף מיקום GPS\n\n"
                 "📋 <b>ניהול חיפושים</b>\n"
                 "🔹 <b>חיפושים</b> — צפייה בחיפושים פעילים\n"
+                "🔹 <b>ע</b> — השהיית כל החיפושים\n"
+                "🔹 <b>ה</b> — חידוש חיפושים מושהים\n"
+                "🔹 <b>מ</b> — מחיקת חיפוש בודד\n"
+                "🔹 <b>ממ</b> — מחיקת כל החיפושים\n"
                 "🔹 <b>מילון</b> — רשימת קיצורי ערים\n\n"
                 "📋 לחזרה לתפריט שלח 'ת'"
             ),
@@ -1221,8 +1252,31 @@ class DriverStateHandler:
     ) -> Tuple[MessageResponse, str, dict]:
         """
         מצב צפייה בחיפושים — ניתוב לפי בחירת כפתור.
+        כולל טיפול באישור מחיקת כל החיפושים (סשן 6).
         """
         msg = message.strip()
+
+        # סשן 6: טיפול באישור "מחק הכל" (מתוך פקודת "ממ")
+        if context.get("delete_all_pending"):
+            if "כן" in msg:
+                count = await self.search_service.delete_all_searches(user.id)
+                if count == 0:
+                    response = MessageResponse(
+                        text="ℹ️ אין חיפושים למחיקה.",
+                        keyboard=[["🔙 חזרה לתפריט"]],
+                    )
+                    return response, DriverState.MENU.value, {"delete_all_pending": None}
+                response = MessageResponse(
+                    text=f"✅ {count} חיפושים נמחקו בהצלחה.",
+                    keyboard=[["🔙 חזרה לתפריט"]],
+                )
+                return response, DriverState.MENU.value, {"delete_all_pending": None}
+            # ביטול / כל תשובה אחרת
+            response = MessageResponse(
+                text="❌ המחיקה בוטלה.",
+                keyboard=[["🔙 חזרה לתפריט"]],
+            )
+            return response, DriverState.MENU.value, {"delete_all_pending": None}
 
         # חזרה לתפריט
         if "חזרה" in msg or "תפריט" in msg:
@@ -1232,12 +1286,22 @@ class DriverStateHandler:
         if CityAbbreviationService.is_search_command(msg):
             return await self._handle_search_command(user, msg)
 
-        # מחיקת כל החיפושים
+        # סשן 6: פקודות ניהול חיפושים מתוך מסך הצפייה
+        if msg == "ע":
+            return await self._handle_pause_searches(user)
+        if msg == "ה":
+            return await self._handle_resume_searches(user)
+        if msg == "ממ":
+            return self._show_delete_all_confirmation()
+        if msg == "מ":
+            return await self._build_search_delete_menu(user)
+
+        # מחיקת כל החיפושים (כפתור מסך צפייה)
         if "מחק הכל" in msg:
             count = await self.search_service.delete_all_searches(user.id)
             if count == 0:
                 response = MessageResponse(
-                    text="❌ אין חיפושים פעילים למחיקה.",
+                    text="ℹ️ אין חיפושים למחיקה.",
                     keyboard=[["🔙 חזרה לתפריט"]],
                 )
                 return response, DriverState.MENU.value, {}
@@ -1257,11 +1321,11 @@ class DriverStateHandler:
     async def _build_search_delete_menu(
         self, user: User
     ) -> Tuple[MessageResponse, str, dict]:
-        """בניית תפריט מחיקת חיפוש — הצגת רשימה ממוספרת לבחירה"""
-        searches = await self.search_service.get_active_searches(user.id)
+        """בניית תפריט מחיקת חיפוש — הצגת רשימה ממוספרת לבחירה (פעילים + מושהים)"""
+        searches = await self.search_service.get_non_deleted_searches(user.id)
         if not searches:
             response = MessageResponse(
-                text="❌ אין חיפושים פעילים למחיקה.",
+                text="ℹ️ אין חיפושים למחיקה.",
                 keyboard=[["🔙 חזרה לתפריט"]],
             )
             return response, DriverState.MENU.value, {}
@@ -1386,6 +1450,76 @@ class DriverStateHandler:
             keyboard=[["🔍 חיפושים פעילים"], ["🔙 חזרה לתפריט"]],
         )
         return response, DriverState.MENU.value, {}
+
+    # ==================== סשן 6: ניהול חיפושים ====================
+
+    async def _handle_pause_searches(
+        self, user: User
+    ) -> Tuple[MessageResponse, str, dict]:
+        """פקודת "ע" — השהיית כל החיפושים הפעילים"""
+        count = await self.search_service.pause_all_searches(user.id)
+        if count == 0:
+            response = MessageResponse(
+                text="ℹ️ אין חיפושים פעילים להשהיה.",
+                keyboard=[["🔙 חזרה לתפריט"]],
+            )
+            return response, DriverState.MENU.value, {}
+
+        response = MessageResponse(
+            text=f"⏸ {count} חיפושים הושהו.\n\n💡 לחידוש — שלח 'ה'",
+            keyboard=[["🔙 חזרה לתפריט"]],
+        )
+        return response, DriverState.MENU.value, {}
+
+    async def _handle_resume_searches(
+        self, user: User
+    ) -> Tuple[MessageResponse, str, dict]:
+        """פקודת "ה" — חידוש כל החיפושים המושהים (עד למגבלת המקסימום)"""
+        try:
+            count = await self.search_service.resume_all_searches(user.id)
+        except ValidationException as e:
+            err_msg = e.message if hasattr(e, "message") else str(e)
+            response = MessageResponse(
+                text=f"❌ {err_msg}",
+                keyboard=[["🔙 חזרה לתפריט"]],
+            )
+            return response, DriverState.MENU.value, {}
+
+        if count == 0:
+            response = MessageResponse(
+                text="ℹ️ אין חיפושים מושהים לחידוש.",
+                keyboard=[["🔙 חזרה לתפריט"]],
+            )
+            return response, DriverState.MENU.value, {}
+
+        # בדיקה אם נותרו חיפושים מושהים (חידוש חלקי עקב מגבלת מקסימום)
+        paused_remaining = await self.search_service.get_non_deleted_searches(user.id)
+        still_paused = sum(
+            1 for s in paused_remaining
+            if s.status == DriverSearchStatus.PAUSED.value
+        )
+
+        text = f"▶️ {count} חיפושים חודשו בהצלחה."
+        if still_paused > 0:
+            text += (
+                f"\n\n⚠️ נותרו {still_paused} חיפושים מושהים — "
+                f"המקסימום הוא {MAX_ACTIVE_SEARCHES_PER_USER} פעילים."
+            )
+        text += "\n\n💡 להשהיה — שלח 'ע'"
+
+        response = MessageResponse(
+            text=text,
+            keyboard=[["🔙 חזרה לתפריט"]],
+        )
+        return response, DriverState.MENU.value, {}
+
+    def _show_delete_all_confirmation(self) -> Tuple[MessageResponse, str, dict]:
+        """פקודת "ממ" — אישור מחיקת כל החיפושים"""
+        response = MessageResponse(
+            text="⚠️ <b>האם אתה בטוח שברצונך למחוק את כל החיפושים?</b>",
+            keyboard=[["✅ כן — מחק הכל"], ["❌ ביטול"]],
+        )
+        return response, DriverState.SEARCH_VIEW_ACTIVE.value, {"delete_all_pending": True}
 
     # ==================== fallback ====================
 

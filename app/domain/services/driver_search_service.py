@@ -222,9 +222,151 @@ class DriverSearchService:
         )
         return True
 
+    async def pause_all_searches(self, user_id: int) -> int:
+        """
+        השהיית כל החיפושים הפעילים (ACTIVE → PAUSED).
+
+        Args:
+            user_id: מזהה המשתמש
+
+        Returns:
+            מספר חיפושים שהושהו
+        """
+        result = await self.db.execute(
+            update(DriverSearch)
+            .where(
+                DriverSearch.user_id == user_id,
+                DriverSearch.status == DriverSearchStatus.ACTIVE.value,
+            )
+            .values(
+                status=DriverSearchStatus.PAUSED.value,
+                updated_at=datetime.utcnow(),
+            )
+        )
+        await self.db.commit()
+
+        count = result.rowcount
+        if count > 0:
+            logger.info(
+                "כל החיפושים הושהו",
+                extra_data={"user_id": user_id, "count": count},
+            )
+        return count
+
+    async def resume_all_searches(self, user_id: int) -> int:
+        """
+        חידוש כל החיפושים המושהים (PAUSED → ACTIVE).
+
+        מכבד את מגבלת MAX_ACTIVE_SEARCHES_PER_USER — אם כבר יש חיפושים
+        פעילים, מחדש רק עד למכסה המותרת.
+
+        Args:
+            user_id: מזהה המשתמש
+
+        Returns:
+            מספר חיפושים שחודשו
+
+        Raises:
+            ValidationException: אם כבר הגיע למקסימום חיפושים פעילים
+        """
+        # בדיקה כמה חיפושים פעילים כבר קיימים
+        active_count_result = await self.db.execute(
+            select(func.count())
+            .select_from(DriverSearch)
+            .where(
+                DriverSearch.user_id == user_id,
+                DriverSearch.status == DriverSearchStatus.ACTIVE.value,
+            )
+        )
+        current_active = active_count_result.scalar() or 0
+
+        if current_active >= MAX_ACTIVE_SEARCHES_PER_USER:
+            raise ValidationException(
+                f"כבר יש {current_active} חיפושים פעילים — "
+                f"המקסימום הוא {MAX_ACTIVE_SEARCHES_PER_USER}."
+            )
+
+        slots_available = MAX_ACTIVE_SEARCHES_PER_USER - current_active
+
+        # שליפת חיפושים מושהים לפי סדר יצירה (ישנים קודם)
+        paused_result = await self.db.execute(
+            select(DriverSearch.id)
+            .where(
+                DriverSearch.user_id == user_id,
+                DriverSearch.status == DriverSearchStatus.PAUSED.value,
+            )
+            .order_by(DriverSearch.created_at.asc())
+            .limit(slots_available)
+        )
+        ids_to_resume = [row[0] for row in paused_result.all()]
+
+        if not ids_to_resume:
+            return 0
+
+        await self.db.execute(
+            update(DriverSearch)
+            .where(DriverSearch.id.in_(ids_to_resume))
+            .values(
+                status=DriverSearchStatus.ACTIVE.value,
+                updated_at=datetime.utcnow(),
+            )
+        )
+        await self.db.commit()
+
+        count = len(ids_to_resume)
+        logger.info(
+            "חיפושים חודשו",
+            extra_data={"user_id": user_id, "count": count},
+        )
+
+        # שליפת מספר מושהים שנותרו (אם לא כולם חודשו)
+        remaining_result = await self.db.execute(
+            select(func.count())
+            .select_from(DriverSearch)
+            .where(
+                DriverSearch.user_id == user_id,
+                DriverSearch.status == DriverSearchStatus.PAUSED.value,
+            )
+        )
+        remaining_paused = remaining_result.scalar() or 0
+
+        if remaining_paused > 0:
+            logger.info(
+                "נותרו חיפושים מושהים — חריגה ממגבלת מקסימום",
+                extra_data={
+                    "user_id": user_id,
+                    "remaining_paused": remaining_paused,
+                },
+            )
+
+        return count
+
+    async def get_non_deleted_searches(self, user_id: int) -> list[DriverSearch]:
+        """
+        שליפת כל החיפושים שלא נמחקו (פעילים + מושהים).
+
+        Args:
+            user_id: מזהה המשתמש
+
+        Returns:
+            רשימת חיפושים פעילים ומושהים
+        """
+        result = await self.db.execute(
+            select(DriverSearch)
+            .where(
+                DriverSearch.user_id == user_id,
+                DriverSearch.status.in_([
+                    DriverSearchStatus.ACTIVE.value,
+                    DriverSearchStatus.PAUSED.value,
+                ]),
+            )
+            .order_by(DriverSearch.created_at.desc())
+        )
+        return list(result.scalars().all())
+
     async def delete_all_searches(self, user_id: int) -> int:
         """
-        מחיקת כל החיפושים הפעילים (soft-delete).
+        מחיקת כל החיפושים שלא נמחקו — פעילים ומושהים (soft-delete).
 
         Args:
             user_id: מזהה המשתמש
@@ -236,7 +378,10 @@ class DriverSearchService:
             update(DriverSearch)
             .where(
                 DriverSearch.user_id == user_id,
-                DriverSearch.status == DriverSearchStatus.ACTIVE.value,
+                DriverSearch.status.in_([
+                    DriverSearchStatus.ACTIVE.value,
+                    DriverSearchStatus.PAUSED.value,
+                ]),
             )
             .values(
                 status=DriverSearchStatus.DELETED.value,

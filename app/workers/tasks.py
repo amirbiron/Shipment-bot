@@ -811,6 +811,127 @@ def generate_monthly_reports():
     return run_async(_generate())
 
 
+@celery_app.task(name="app.workers.tasks.check_driver_sessions")
+def check_driver_sessions():
+    """
+    סשן 6: בדיקת סשנים של נהגים — ניתוק 24 שעות.
+
+    רצה כל דקה. בכל ריצה:
+    1. מוצאת סשנים שעומדים לפוג (23:58 שעות) ושולחת תזכורת
+    2. מנתקת סשנים שפג תוקפם (24+ שעות) ומשהה חיפושים אוטומטית
+    """
+    from app.domain.services.driver_session_service import DriverSessionService
+    from app.db.models.driver_session import DriverSession
+
+    # הודעת תזכורת ניתוק
+    _REMINDER_MESSAGE = (
+        "👤 נהג יקר — אנחנו מבצעים ניתוק יזום כל 24 שעות, "
+        "על מנת להמשיך עם החיפוש אנא הקלד את המילה — <b>תפריט</b>"
+    )
+
+    async def _check():
+        async with get_task_session() as db:
+            session_service = DriverSessionService(db)
+            reminders_sent = 0
+            sessions_disconnected = 0
+
+            # --- שלב 1: שליחת תזכורות (23:58 שעות) ---
+            try:
+                expiring = await session_service.get_expiring_sessions()
+                for session in expiring:
+                    try:
+                        # שליפת פרטי המשתמש לשליחת הודעה
+                        user_result = await db.execute(
+                            select(User).where(User.id == session.user_id)
+                        )
+                        user = user_result.scalar_one_or_none()
+                        if not user:
+                            continue
+
+                        # שליחת תזכורת לפי פלטפורמה
+                        sent = False
+                        content = {"message_text": _REMINDER_MESSAGE}
+                        if user.platform == "telegram" and user.telegram_chat_id:
+                            sent = await _send_telegram_message(
+                                user.telegram_chat_id, content
+                            )
+                        elif user.platform == "whatsapp" and user.phone_number:
+                            sent = await _send_whatsapp_message(
+                                user.phone_number, content
+                            )
+
+                        if sent:
+                            await session_service.mark_reminder_sent(session.id)
+                            reminders_sent += 1
+                            logger.info(
+                                "תזכורת ניתוק סשן נשלחה",
+                                extra_data={"user_id": session.user_id},
+                            )
+                    except Exception as e:
+                        logger.error(
+                            "כשלון בשליחת תזכורת ניתוק",
+                            extra_data={
+                                "user_id": session.user_id,
+                                "error": str(e),
+                            },
+                            exc_info=True,
+                        )
+                        await db.rollback()
+            except Exception as e:
+                logger.error(
+                    "כשלון בשליפת סשנים שעומדים לפוג",
+                    extra_data={"error": str(e)},
+                    exc_info=True,
+                )
+
+            # --- שלב 2: ניתוק סשנים שפג תוקפם (24+ שעות) ---
+            try:
+                expired = await session_service.get_expired_sessions()
+                for session in expired:
+                    try:
+                        paused = await session_service.disconnect_session(
+                            session.user_id
+                        )
+                        sessions_disconnected += 1
+                        logger.info(
+                            "סשן נהג נותק אוטומטית",
+                            extra_data={
+                                "user_id": session.user_id,
+                                "paused_searches": paused,
+                            },
+                        )
+                    except Exception as e:
+                        logger.error(
+                            "כשלון בניתוק סשן נהג",
+                            extra_data={
+                                "user_id": session.user_id,
+                                "error": str(e),
+                            },
+                            exc_info=True,
+                        )
+                        await db.rollback()
+            except Exception as e:
+                logger.error(
+                    "כשלון בשליפת סשנים שפג תוקפם",
+                    extra_data={"error": str(e)},
+                    exc_info=True,
+                )
+
+            logger.info(
+                "סיום בדיקת סשנים תקופתית",
+                extra_data={
+                    "reminders_sent": reminders_sent,
+                    "sessions_disconnected": sessions_disconnected,
+                },
+            )
+            return {
+                "reminders_sent": reminders_sent,
+                "sessions_disconnected": sessions_disconnected,
+            }
+
+    return run_async(_check())
+
+
 @celery_app.task(name="app.workers.tasks.check_whatsapp_connection")
 def check_whatsapp_connection() -> dict:
     """

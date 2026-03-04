@@ -62,4 +62,9 @@ celery_app.conf.beat_schedule = {
         "task": "app.workers.tasks.check_whatsapp_connection",
         "schedule": 180.0,  # 3 דקות
     },
+    # סשן 6: בדיקת סשנים של נהגים — ניתוק 24 שעות (כל דקה)
+    "check-driver-sessions-every-minute": {
+        "task": "app.workers.tasks.check_driver_sessions",
+        "schedule": 60.0,  # דקה
+    },
 }

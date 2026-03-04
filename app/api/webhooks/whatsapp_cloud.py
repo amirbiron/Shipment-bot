@@ -722,6 +722,12 @@ async def _route_message_to_handler(
 
     # נהג (iDriver)
     if user.role == UserRole.DRIVER:
+        from app.domain.services.driver_session_service import DriverSessionService
+
+        # סשן 6: עדכון פעילות אחרונה בכל הודעה מנהג
+        _session_svc = DriverSessionService(db)
+        await _session_svc.touch_session(user.id)
+
         is_driver_flow = isinstance(current_state, str) and current_state.startswith("DRIVER.")
         if not is_driver_flow:
             await state_manager.force_state(
