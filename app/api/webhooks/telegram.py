@@ -1653,6 +1653,7 @@ async def telegram_webhook(
             and not current_state.startswith("COURIER.")
             and not current_state.startswith("DISPATCHER.")
             and not current_state.startswith("STATION.")
+            and not current_state.startswith("DRIVER.")
             and current_state not in ["INITIAL", "SENDER.INITIAL"]
         ):
             handler = SenderStateHandler(db)
