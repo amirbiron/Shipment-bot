@@ -1738,6 +1738,7 @@ async def telegram_webhook(
                                     "\n⏱ יש לך 5 דקות לשלוח הערה.",
                                 )
                             else:
+                                # כשל Redis — דחייה מיידית ללא הערה
                                 result = await CourierApprovalService.reject(
                                     db, target_id_parsed
                                 )
@@ -1746,6 +1747,17 @@ async def telegram_webhook(
                                     send_chat_id,
                                     f"⚠️ שגיאת מערכת — הדחייה בוצעה ללא הערה.\n{result.message}",
                                 )
+                                if result.success and result.user:
+                                    from app.api.webhooks.whatsapp import send_whatsapp_message
+
+                                    background_tasks.add_task(
+                                        CourierApprovalService.notify_after_decision,
+                                        result.user,
+                                        "reject",
+                                        admin_name_text,
+                                        send_telegram_fn=send_telegram_message,
+                                        send_whatsapp_fn=send_whatsapp_message,
+                                    )
 
                     return {
                         "ok": True,
