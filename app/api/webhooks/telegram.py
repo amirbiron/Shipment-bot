@@ -1635,7 +1635,8 @@ async def telegram_webhook(
             keyboard=None,
         )
         _queue_response_send(background_tasks, send_chat_id, response)
-        return {"ok": True, "new_state": DriverState.INITIAL.value}
+        actual_state = current_state if is_driver_flow else DriverState.INITIAL.value
+        return {"ok": True, "new_state": actual_state}
 
     if user.role in (UserRole.SENDER, UserRole.ADMIN):
         # התחלת זרימת שולח רק עבור שולח/אדמין (guard תפקיד - מונע יירוט תפקידים אחרים)

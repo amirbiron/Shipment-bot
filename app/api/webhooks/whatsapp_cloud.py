@@ -735,7 +735,8 @@ async def _route_message_to_handler(
         background_tasks.add_task(
             send_whatsapp_message, reply_to, response.text, response.keyboard
         )
-        return response.text, DriverState.INITIAL.value
+        actual_state = current_state if is_driver_flow else DriverState.INITIAL.value
+        return response.text, actual_state
 
     # שולח — רק אם באמצע זרימת שולח פעילה.
     # משתמש ב-INITIAL / SENDER.INITIAL / ללא state → welcome message (כמו ב-WPPConnect).

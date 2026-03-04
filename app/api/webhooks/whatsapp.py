@@ -1630,8 +1630,9 @@ async def whatsapp_webhook(
                 background_tasks.add_task(
                     send_whatsapp_message, reply_to, response.text, response.keyboard
                 )
+                actual_state = current_state if is_driver_flow else DriverState.INITIAL.value
                 responses.append(
-                    {"from": sender_id, "response": response.text, "new_state": DriverState.INITIAL.value}
+                    {"from": sender_id, "response": response.text, "new_state": actual_state}
                 )
                 continue
 
