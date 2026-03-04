@@ -523,7 +523,7 @@ class TestDriverSearchService:
     async def test_partial_coordinate_duplicate_detected(
         self, db_session, user_factory
     ) -> None:
-        """זיהוי כפילויות עם קואורדינטה חלקית (רק latitude)"""
+        """זיהוי כפילויות עם קואורדינטות מלאות (שתי הקואורדינטות)"""
         user, _ = await _create_registered_driver(db_session, user_factory, "+972505002023")
         service = DriverSearchService(db_session)
 
@@ -533,7 +533,7 @@ class TestDriverSearchService:
             destination_city="אזור מיקום",
             is_area_search=True,
             latitude=31.7683,
-            longitude=None,
+            longitude=35.2137,
         )
 
         with pytest.raises(ValidationException, match="כבר קיים"):
@@ -543,7 +543,7 @@ class TestDriverSearchService:
                 destination_city="אזור מיקום",
                 is_area_search=True,
                 latitude=31.7683,
-                longitude=None,
+                longitude=35.2137,
             )
 
 
@@ -922,3 +922,94 @@ class TestSearchContextCleanup:
         # וידוא שהקונטקסט לא מכיל search_ids
         ctx = await handler.state_manager.get_context(user.id, "telegram")
         assert "search_ids" not in ctx
+
+
+# ============================================================================
+# בדיקות הודעת מיקום — אין הצעה לפקודה שלא נתמכת במצב
+# ============================================================================
+
+
+class TestLocationHintText:
+    """בדיקת טקסט הנחיה במצב המתנה למיקום GPS"""
+
+    @pytest.mark.asyncio
+    async def test_no_search_command_hint_in_location_state(
+        self, db_session, user_factory
+    ) -> None:
+        """טקסט ההנחיה לא כולל הצעה לפקודת 'פ' שלא נתמכת במצב"""
+        user, _ = await _create_registered_driver(db_session, user_factory, "+972505003040")
+
+        handler = DriverStateHandler(db_session, platform="telegram")
+        await handler.state_manager.force_state(
+            user.id, "telegram", DriverState.SEARCH_CREATE_ORIGIN.value, context={}
+        )
+
+        response, new_state = await handler.handle_message(user, "טקסט כלשהו")
+        assert "לא התקבל מיקום" in response.text
+        # וידוא שאין הצעה מטעה לפקודת חיפוש
+        assert "פ <" not in response.text
+
+
+# ============================================================================
+# בדיקות ולידציית קואורדינטות חלקיות ב-DriverSearchCreate
+# ============================================================================
+
+
+class TestPartialCoordinateValidation:
+    """בדיקת דחייה של קואורדינטה חלקית (lat ללא lng או להפך)"""
+
+    @pytest.mark.unit
+    def test_partial_latitude_only_rejected(self) -> None:
+        """latitude בלבד — שגיאה"""
+        from app.schemas.driver import DriverSearchCreate
+
+        with pytest.raises(ValueError, match="latitude.*longitude"):
+            DriverSearchCreate(
+                origin_city="",
+                destination_city="ירושלים",
+                is_area_search=True,
+                latitude=31.77,
+                longitude=None,
+            )
+
+    @pytest.mark.unit
+    def test_partial_longitude_only_rejected(self) -> None:
+        """longitude בלבד — שגיאה"""
+        from app.schemas.driver import DriverSearchCreate
+
+        with pytest.raises(ValueError, match="latitude.*longitude"):
+            DriverSearchCreate(
+                origin_city="",
+                destination_city="ירושלים",
+                is_area_search=True,
+                latitude=None,
+                longitude=35.21,
+            )
+
+    @pytest.mark.unit
+    def test_both_coordinates_accepted(self) -> None:
+        """שתי הקואורדינטות — תקין"""
+        from app.schemas.driver import DriverSearchCreate
+
+        search = DriverSearchCreate(
+            origin_city="",
+            destination_city="ירושלים",
+            is_area_search=True,
+            latitude=31.77,
+            longitude=35.21,
+        )
+        assert search.latitude == 31.77
+        assert search.longitude == 35.21
+
+    @pytest.mark.unit
+    def test_no_coordinates_accepted(self) -> None:
+        """ללא קואורדינטות — תקין"""
+        from app.schemas.driver import DriverSearchCreate
+
+        search = DriverSearchCreate(
+            origin_city="",
+            destination_city="ירושלים",
+            is_area_search=True,
+        )
+        assert search.latitude is None
+        assert search.longitude is None

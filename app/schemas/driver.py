@@ -217,8 +217,13 @@ class DriverSearchCreate(BaseModel):
     @model_validator(mode="after")
     def validate_area_search_coordinates(self) -> "DriverSearchCreate":
         """חיפוש מסלול (לא אזורי) אסור עם קואורדינטות.
-        חיפוש אזורי עם קואורדינטות — תקין (GPS). חיפוש אזורי ללא — גם תקין (טקסט)."""
+        חיפוש אזורי עם קואורדינטות — תקין (GPS). חיפוש אזורי ללא — גם תקין (טקסט).
+        קואורדינטה חלקית (אחת בלי השנייה) — תמיד שגיאה."""
+        has_lat = self.latitude is not None
+        has_lng = self.longitude is not None
+        if has_lat != has_lng:
+            raise ValueError("חובה לספק גם latitude וגם longitude, או אף אחד מהם")
         if not self.is_area_search:
-            if self.latitude is not None or self.longitude is not None:
+            if has_lat or has_lng:
                 raise ValueError("חיפוש מסלול לא יכול לכלול קואורדינטות")
         return self
