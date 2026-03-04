@@ -991,10 +991,8 @@ def check_driver_subscriptions():
                         throttle_key = (
                             f"alert_throttle:subscription:{profile.user_id}"
                         )
-                        was_set = await redis.set(
-                            throttle_key, "1", nx=True, ex=_THROTTLE_SECONDS
-                        )
-                        if not was_set:
+                        already_sent = await redis.get(throttle_key)
+                        if already_sent:
                             continue
 
                         # שליפת פרטי המשתמש
@@ -1024,6 +1022,11 @@ def check_driver_subscriptions():
                             )
 
                         if sent:
+                            # throttle key נקבע רק אחרי שליחה מוצלחת
+                            # כדי שכשלון שליחה לא יחסום ניסיון חוזר
+                            await redis.set(
+                                throttle_key, "1", ex=_THROTTLE_SECONDS
+                            )
                             reminders_sent += 1
                             logger.info(
                                 "תזכורת פקיעת מנוי נשלחה",
