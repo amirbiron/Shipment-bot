@@ -20,13 +20,15 @@ from app.domain.services.city_abbreviation_service import CityAbbreviationServic
 
 logger = get_logger(__name__)
 
-# regex לזיהוי מחיר בסוף הפקודה: "150 ש״ח" / "150 שח" / "150ש״ח" / "150₪" / "150"
+# regex לזיהוי מחיר בסוף הפקודה: "150 ש״ח" / "150 שח" / "150ש״ח" / "150₪"
+# חובה סיומת מטבע — מספר חשוף בסוף לא מספיק כדי למנוע false-positive
 _PRICE_PATTERN = re.compile(
-    r"(\d+(?:\.\d+)?)\s*(?:ש[״\"]?ח|₪)?$"
+    r"(\d+(?:\.\d+)?)\s*(?:ש[״\"]?ח|₪)$"
 )
 
 # regex לזיהוי מספר מקומות: "5 מק" / "5מק"
-_SEATS_PATTERN = re.compile(r"(\d+)\s*מק")
+# עוגן סוף-מילה (\b) מונע התאמה למילים כמו "מקום" / "מקומות"
+_SEATS_PATTERN = re.compile(r"(\d+)\s*מק\b")
 
 
 @dataclass

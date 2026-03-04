@@ -212,7 +212,7 @@ class TestRidePostingService:
     def test_is_ride_posting_valid(self) -> None:
         """זיהוי פקודות פרסום נסיעה תקינות"""
         assert RidePostingService.is_ride_posting("בב ים 5 מק 150 ש״ח") is True
-        assert RidePostingService.is_ride_posting("בב ים 5 מק 150") is True
+        assert RidePostingService.is_ride_posting("בב ים 5 מק 150₪") is True
         assert RidePostingService.is_ride_posting("תא חי 3 מק 200 שח") is True
 
     @pytest.mark.unit
@@ -224,6 +224,11 @@ class TestRidePostingService:
         assert RidePostingService.is_ride_posting("מחירון בב ים") is False
         # חסר מק
         assert RidePostingService.is_ride_posting("בב ים 150") is False
+        # מספר חשוף ללא סיומת מטבע — לא תקין (מונע false-positive)
+        assert RidePostingService.is_ride_posting("בב ים 5 מק 150") is False
+        # "מקום"/"מקומות" — לא אמור להתאים ל-"מק"
+        assert RidePostingService.is_ride_posting("יש 5 מקומות 150 ש״ח") is False
+        assert RidePostingService.is_ride_posting("3 מקום פנוי 100₪") is False
 
     @pytest.mark.unit
     def test_parse_basic_posting(self) -> None:
@@ -236,9 +241,15 @@ class TestRidePostingService:
         assert result.price == 150.0
 
     @pytest.mark.unit
-    def test_parse_without_shekel_suffix(self) -> None:
-        """פרסור ללא סיומת ש״ח"""
+    def test_parse_without_shekel_suffix_rejected(self) -> None:
+        """פרסור ללא סיומת מטבע — דחייה למניעת false-positive"""
         result = RidePostingService.parse_ride_posting("בב ים 3 מק 100")
+        assert result is None
+
+    @pytest.mark.unit
+    def test_parse_with_nis_symbol(self) -> None:
+        """פרסור עם סימן ₪"""
+        result = RidePostingService.parse_ride_posting("בב ים 3 מק 100₪")
         assert result is not None
         assert result.seats == 3
         assert result.price == 100.0
@@ -469,14 +480,10 @@ class TestDriverRidePostingHandler:
             user.id, "telegram", DriverState.MENU.value, context={}
         )
 
-        # מק בלי מחיר תקין — is_ride_posting ידחה את זה
-        # ננסה משהו שעובר is_ride_posting אבל נכשל בפרסור
-        # בפועל, is_ride_posting כבר מסנן — ניסיון עם פורמט גבולי
+        # חסר סיומת מטבע — is_ride_posting ידחה, לא יפורסם
         response, new_state = await handler.handle_message(
             user, "x 5 מק 150"
         )
-        # הפקודה תזוהה כפרסום (יש מק + מחיר) אבל הפרסור ייכשל
-        # כי יש מילה אחת בלבד לפני ה-"מק"
         assert new_state == DriverState.MENU.value
 
     @pytest.mark.asyncio
