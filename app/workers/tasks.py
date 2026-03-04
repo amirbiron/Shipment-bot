@@ -975,6 +975,10 @@ def check_driver_subscriptions():
                     extra_data={"error": str(e)},
                     exc_info=True,
                 )
+                # expire_lapsed_subscriptions היא פעולת כתיבה — כשלון commit
+                # משאיר את הסשן ב-failed transaction. חובה rollback כדי
+                # שהשאילתות בשלב 2 (תזכורות) יוכלו לרוץ.
+                await db.rollback()
 
             # --- שלב 2: שליחת תזכורות (יום לפני תפוגה) ---
             try:
