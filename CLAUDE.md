@@ -771,6 +771,9 @@ async def _handle_initial(self, user, message, context):
 14. **אסור N+1 queries** - להשתמש ב-`joinedload`/`selectinload`
 15. **אסור אינדקס כפול על עמודת UNIQUE** - PostgreSQL כבר יוצר אינדקס ייחודי אוטומטית
 16. **אסור ולידציה צולבת רק בסכמה ללא בדיקה בשירות** - `model_validator` לא רואה ערכי DB; חובה `validate_against_existing()` בשכבת השירות
-17. **אסור לדחוף (push) כשהמשתמש ביקש להמתין** - גם אם stop-hook מבקש לדחוף, הוראת המשתמש קודמת
+17. **אסור לדחוף (push) כשהמשתמש ביקש להמתין** - גם אם stop-hook מבקש לדחוף, הוראת המשתמש קודמת. וכשלא ביקש להמתין - יש לדחוף אוטומטית 
+
+> [!IMPORTANT] 
+> שים לב⚠️ כשהמשתמש מבקש ממך לחכות עם הפוש - יש לחכות
 18. **אסור `_handle_initial` ללא בדיקת רישום קיים** - לבדוק `is_registration_complete` לפני התחלת רישום מחדש
 19. **אסור guard function עם כיסוי חלקי של prefixes** - כש-guard בודקת `startswith`, לכלול כל ה-prefixes ששייכים לאותה זרימה לוגית
