@@ -1150,9 +1150,10 @@ async def _route_to_role_menu(
         return await _sender_fallback(user, db, state_manager)
 
     if user.role == UserRole.DRIVER:
-        # iDriver — ניתוב נהג ל-handler רישום (סשן 2)
+        # iDriver — ניתוב נהג ל-handler (סשנים 2-4)
         from app.state_machine.driver_handler import DriverStateHandler
 
+        # נהג רשום → ישירות לתפריט; לא רשום → _handle_initial ינתב לרישום
         await state_manager.force_state(
             user.id, "telegram", DriverState.INITIAL.value, context={}
         )
@@ -2097,7 +2098,7 @@ async def telegram_webhook(
         return {"ok": True, "new_state": new_state}
 
     if user.role == UserRole.DRIVER:
-        # iDriver — ניתוב נהג ל-handler רישום (סשן 2)
+        # iDriver — ניתוב נהג ל-handler (סשנים 2-4)
         from app.state_machine.driver_handler import DriverStateHandler
 
         is_driver_flow = isinstance(current_state, str) and current_state.startswith("DRIVER.")
@@ -2106,7 +2107,7 @@ async def telegram_webhook(
                 user.id, "telegram", DriverState.INITIAL.value, context={}
             )
         handler = DriverStateHandler(db, platform="telegram")
-        response, new_state = await handler.handle_message(user, text, None)
+        response, new_state = await handler.handle_message(user, text, photo_file_id)
         _queue_response_send(background_tasks, send_chat_id, response)
         return {"ok": True, "new_state": new_state}
 

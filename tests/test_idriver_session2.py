@@ -817,6 +817,22 @@ class TestPostRegistrationStability:
             name="נהג בתפריט",
             role=UserRole.DRIVER,
         )
+        # יצירת פרופיל רשום כדי שהתפריט יוכל להיטען
+        from datetime import datetime as dt
+        now = dt.utcnow()
+        profile = DriverProfile(
+            user_id=user.id,
+            birth_date=date(1990, 1, 1),
+            vehicle_description="רכב",
+            vehicle_category="seven_seater",
+            dress_code="secular",
+            subscription_status=DriverSubscriptionStatus.TRIAL.value,
+            trial_starts_at=now,
+            trial_expires_at=now + timedelta(days=7),
+        )
+        db_session.add(profile)
+        await db_session.commit()
+
         state_manager = StateManager(db_session)
         await state_manager.force_state(
             user.id, "telegram", DriverState.MENU.value, context={}
@@ -827,7 +843,7 @@ class TestPostRegistrationStability:
 
         # חייב להישאר ב-MENU, לא לחזור ל-REGISTER
         assert new_state == DriverState.MENU.value
-        assert "בהקמה" in response.text
+        assert "בחר אפשרות" in response.text
         assert "שם המלא" not in response.text
 
     @pytest.mark.asyncio
@@ -854,17 +870,32 @@ class TestPostRegistrationStability:
         assert "שם המלא" not in response.text
 
     @pytest.mark.asyncio
-    async def test_unknown_state_does_not_restart_registration(
+    async def test_settings_state_does_not_restart_registration(
         self, db_session, user_factory
     ) -> None:
-        """מצב לא מוכר שומר על מצב נוכחי"""
+        """נהג במצב SETTINGS_VIEW שולח הודעה — לא חוזר לרישום"""
         user = await user_factory(
             phone_number="+972502227113",
             name="נהג מוזר",
             role=UserRole.DRIVER,
         )
+        # יצירת פרופיל רשום כדי שתפריט ההגדרות יוכל להיטען
+        from datetime import datetime as dt
+        now = dt.utcnow()
+        profile = DriverProfile(
+            user_id=user.id,
+            birth_date=date(1990, 1, 1),
+            vehicle_description="רכב",
+            vehicle_category="seven_seater",
+            dress_code="secular",
+            subscription_status=DriverSubscriptionStatus.TRIAL.value,
+            trial_starts_at=now,
+            trial_expires_at=now + timedelta(days=7),
+        )
+        db_session.add(profile)
+        await db_session.commit()
+
         state_manager = StateManager(db_session)
-        # מצב שלא קיים ב-_get_handler
         await state_manager.force_state(
             user.id, "telegram", DriverState.SETTINGS_VIEW.value, context={}
         )
@@ -872,8 +903,9 @@ class TestPostRegistrationStability:
         handler = DriverStateHandler(db_session, platform="telegram")
         response, new_state = await handler.handle_message(user, "הגדרות", None)
 
-        assert new_state == DriverState.SETTINGS_VIEW.value
-        assert "בהקמה" in response.text
+        # SETTINGS_VIEW הוא מצב תקין בסשן 4 — מציג תפריט הגדרות
+        assert "הגדרות" in response.text
+        assert "שם המלא" not in response.text
 
     @pytest.mark.asyncio
     async def test_full_flow_then_menu_message_stays(
@@ -899,10 +931,10 @@ class TestPostRegistrationStability:
         _, state = await handler.handle_message(user, "חילוני", None)
         assert state == DriverState.MENU.value
 
-        # הודעה נוספת — חייב להישאר ב-MENU
+        # הודעה נוספת — חייב להישאר ב-MENU (סשן 4 מציג תפריט ראשי)
         response, state = await handler.handle_message(user, "מה חדש?", None)
         assert state == DriverState.MENU.value
-        assert "בהקמה" in response.text
+        assert "בחר אפשרות" in response.text
 
 
 class TestCancelCleansContext:

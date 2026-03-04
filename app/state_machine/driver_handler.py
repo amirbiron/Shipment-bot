@@ -1,5 +1,5 @@
 """
-Driver State Handler — זרימת רישום ואימות נהג (iDriver סשנים 2-3)
+Driver State Handler — זרימת רישום, אימות, תפריט והגדרות נהג (iDriver סשנים 2-4)
 
 מנהל את מכונת המצבים של רישום נהג חדש:
 1. REGISTER_COLLECT_NAME — שם מלא
@@ -11,8 +11,19 @@ Driver State Handler — זרימת רישום ואימות נהג (iDriver סש
 5. VERIFY_COLLECT_SELFIE — תמונת סלפי
 6. VERIFY_COLLECT_ID_DOCUMENT — תעודת זהות
 7. VERIFY_PENDING_APPROVAL — המתנה לאישור מנהל
+
+תפריט ראשי והגדרות חיפוש (סשן 4):
+8. MENU — תפריט ראשי עם סטטוס מנוי והגדרות
+9. SETTINGS_VIEW — תפריט הגדרות חיפוש
+10. SETTINGS_VEHICLE_TYPE — בחירת סוג רכב
+11. SETTINGS_TRIP_TYPE — בחירת סוג נסיעה
+12. SETTINGS_SHOW_DELIVERIES — הצגת משלוחים (כן/לא)
+13. SETTINGS_UPCOMING_TIMEFRAME — מסגרת זמן
+14. SETTINGS_FUTURE_ONLY_MODE — חיפוש עתידי בלבד
+15. SETTINGS_START_TIME — שעת התחלה לחיפוש עתידי
 """
 
+from datetime import time as time_type
 from typing import Tuple
 from html import escape
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,10 +35,21 @@ from app.db.models.user import User
 from app.db.models.driver_profile import (
     DriverProfile,
     DressCode,
+    VehicleCategory,
     DriverVerificationStatus,
 )
+from app.db.models.driver_search_settings import TripTypeFilter, UpcomingTimeframe
 from app.domain.services.driver_registration_service import DriverRegistrationService
 from app.domain.services.driver_verification_service import DriverVerificationService
+from app.domain.services.driver_menu_service import (
+    DriverMenuService,
+    VEHICLE_TYPE_LABELS,
+    VEHICLE_TYPE_BY_LABEL,
+    TRIP_TYPE_LABELS,
+    TRIP_TYPE_BY_LABEL,
+    TIMEFRAME_LABELS,
+    TIMEFRAME_BY_LABEL,
+)
 from sqlalchemy import select
 from app.core.exceptions import ValidationException, NotFoundException
 from app.core.logging import get_logger
@@ -69,10 +91,11 @@ _REGISTRATION_CONTEXT_KEYS = {
 
 class DriverStateHandler:
     """
-    Handler לזרימת רישום ואימות נהג.
+    Handler לזרימת רישום, אימות, תפריט והגדרות נהג.
 
-    מטפל בשלבי הרישום (סשן 2), אימות חרדי (סשן 3) וב-INITIAL/NEW.
-    שלבים נוספים (תפריט, הגדרות, חיפוש) יתווספו בסשנים הבאים.
+    מטפל בשלבי הרישום (סשן 2), אימות חרדי (סשן 3),
+    תפריט ראשי והגדרות חיפוש (סשן 4).
+    שלבים נוספים (חיפוש, מנוי) יתווספו בסשנים הבאים.
     """
 
     def __init__(self, db: AsyncSession, platform: str = "telegram"):
@@ -81,10 +104,15 @@ class DriverStateHandler:
         self.state_manager = StateManager(db)
         self.registration_service = DriverRegistrationService(db)
         self.verification_service = DriverVerificationService(db)
+        self.menu_service = DriverMenuService(db)
 
     def _is_registration_flow_state(self, state: str) -> bool:
         """בודק אם המצב שייך לזרימת רישום או אימות (לניקוי קונטקסט)"""
         return state.startswith(("DRIVER.REGISTER.", "DRIVER.VERIFY."))
+
+    def _is_settings_flow_state(self, state: str) -> bool:
+        """בודק אם המצב שייך לזרימת הגדרות (לניקוי קונטקסט)"""
+        return state.startswith("DRIVER.SETTINGS.")
 
     async def handle_message(
         self, user: User, message: str, photo_file_id: str | None = None
@@ -166,8 +194,15 @@ class DriverStateHandler:
             DriverState.VERIFY_COLLECT_SELFIE.value: self._handle_verify_collect_selfie,
             DriverState.VERIFY_COLLECT_ID_DOCUMENT.value: self._handle_verify_collect_id_document,
             DriverState.VERIFY_PENDING_APPROVAL.value: self._handle_verify_pending_approval,
-            # תפריט ראשי — placeholder עד סשנים הבאים
-            DriverState.MENU.value: self._handle_post_registration_placeholder,
+            # תפריט ראשי והגדרות חיפוש (סשן 4)
+            DriverState.MENU.value: self._handle_menu,
+            DriverState.SETTINGS_VIEW.value: self._handle_settings_view,
+            DriverState.SETTINGS_VEHICLE_TYPE.value: self._handle_settings_vehicle_type,
+            DriverState.SETTINGS_TRIP_TYPE.value: self._handle_settings_trip_type,
+            DriverState.SETTINGS_SHOW_DELIVERIES.value: self._handle_settings_show_deliveries,
+            DriverState.SETTINGS_UPCOMING_TIMEFRAME.value: self._handle_settings_timeframe,
+            DriverState.SETTINGS_FUTURE_ONLY_MODE.value: self._handle_settings_future_only,
+            DriverState.SETTINGS_START_TIME.value: self._handle_settings_start_time,
         }
         return handlers.get(state, self._handle_unknown)
 
@@ -190,10 +225,7 @@ class DriverStateHandler:
                 "נהג רשום ניגש ל-INITIAL — מנתב לתפריט",
                 extra_data={"user_id": user.id},
             )
-            response = MessageResponse(
-                text="🚗 המערכת בהקמה, נעדכן אותך בקרוב.",
-            )
-            return response, DriverState.MENU.value, {}
+            return await self._build_main_menu(user)
 
         response = MessageResponse(
             text=(
@@ -587,23 +619,408 @@ class DriverStateHandler:
                 exc_info=True,
             )
 
-    # ==================== placeholder למצבים עתידיים ====================
+    # ==================== סשן 4: תפריט ראשי ====================
 
-    async def _handle_post_registration_placeholder(
+    async def _build_main_menu(
+        self, user: User
+    ) -> Tuple[MessageResponse, str, dict]:
+        """בניית תגובת תפריט ראשי — משותף ל-INITIAL (נהג רשום) ול-MENU"""
+        try:
+            text, keyboard = await self.menu_service.get_main_menu(user.id)
+        except NotFoundException:
+            logger.error(
+                "פרופיל נהג לא נמצא בבניית תפריט",
+                extra_data={"user_id": user.id},
+            )
+            response = MessageResponse(
+                text="❌ שגיאה בטעינת התפריט. נסה שוב מאוחר יותר.",
+            )
+            return response, DriverState.MENU.value, {}
+
+        response = MessageResponse(text=text, keyboard=keyboard)
+        return response, DriverState.MENU.value, {}
+
+    async def _handle_menu(
         self, user: User, message: str, context: dict, **kwargs: object
     ) -> Tuple[MessageResponse, str, dict]:
         """
-        Placeholder למצבים שהרישום מוביל אליהם (MENU).
-        שומר על המצב הנוכחי ומציג הודעה — מונע חזרה לרישום.
-        יוחלף בסשנים הבאים.
+        תפריט ראשי — ניתוב לפי בחירת כפתור.
+
+        כפתורים:
+        - 🛠 הגדרות חיפוש → SETTINGS_VIEW
+        - 📖 הוראות שימוש → הודעת עזרה (נשאר ב-MENU)
+        - ת / תפריט → רענון התפריט
         """
-        current_state = await self.state_manager.get_current_state(
-            user.id, self.platform
-        )
+        msg = message.strip()
+
+        # ניתוב להגדרות חיפוש
+        if "הגדרות" in msg:
+            return await self._build_settings_menu(user)
+
+        # הוראות שימוש
+        if "הוראות" in msg or "עזרה" in msg:
+            response = MessageResponse(
+                text=(
+                    "📖 <b>הוראות שימוש</b>\n\n"
+                    "🔹 <b>תפריט</b> — שלח 'ת' או 'תפריט' לפתיחת התפריט הראשי\n"
+                    "🔹 <b>הגדרות</b> — שנה סוג רכב, סוג נסיעה, מסגרת זמן ועוד\n"
+                    "🔹 <b>חיפוש</b> — שלח 'פ' ואחריו יעד לחיפוש נסיעות\n\n"
+                    "📋 לחזרה לתפריט שלח 'ת'"
+                ),
+                keyboard=[["🔙 חזרה לתפריט"]],
+            )
+            return response, DriverState.MENU.value, {}
+
+        # ברירת מחדל — רענון תפריט ראשי
+        return await self._build_main_menu(user)
+
+    # ==================== סשן 4: הגדרות חיפוש ====================
+
+    async def _build_settings_menu(
+        self, user: User
+    ) -> Tuple[MessageResponse, str, dict]:
+        """בניית תגובת תפריט הגדרות — משותף ל-MENU ול-SETTINGS_VIEW"""
+        text, keyboard = await self.menu_service.get_settings_menu(user.id)
+        response = MessageResponse(text=text, keyboard=keyboard)
+        return response, DriverState.SETTINGS_VIEW.value, {}
+
+    async def _handle_settings_view(
+        self, user: User, message: str, context: dict, **kwargs: object
+    ) -> Tuple[MessageResponse, str, dict]:
+        """
+        תפריט הגדרות — ניתוב לפי בחירת כפתור.
+        """
+        msg = message.strip()
+
+        # חזרה להגדרות (כפתור "🔙 חזרה להגדרות" אחרי עדכון הגדרה)
+        if "להגדרות" in msg:
+            return await self._build_settings_menu(user)
+
+        # חזרה לתפריט ראשי (כפתור "🔙 חזרה לתפריט")
+        if "חזרה" in msg or "תפריט" in msg:
+            return await self._build_main_menu(user)
+
+        # ניתוב לפי בחירה
+        if "סוג רכב" in msg or "🚙" in msg:
+            return self._show_vehicle_type_options()
+
+        if "סוג נסיעה" in msg or "🛣" in msg:
+            return self._show_trip_type_options()
+
+        if "משלוחים" in msg or "💌" in msg:
+            return self._show_deliveries_options()
+
+        if "מסגרת זמן" in msg or "🕐" in msg:
+            return self._show_timeframe_options()
+
+        if "עתידי" in msg or "📅" in msg:
+            return self._show_future_only_options()
+
+        # בחירה לא מוכרת — הצגת הגדרות מחדש
+        return await self._build_settings_menu(user)
+
+    # ---------- סוג רכב ----------
+
+    def _show_vehicle_type_options(self) -> Tuple[MessageResponse, str, dict]:
+        """הצגת אפשרויות סוג רכב"""
+        keyboard = [[label] for label in VEHICLE_TYPE_LABELS.values()]
+        keyboard.append(["❌ ביטול"])
         response = MessageResponse(
-            text="🚗 המערכת בהקמה, נעדכן אותך בקרוב.",
+            text="🚙 <b>בחר סוג רכב:</b>",
+            keyboard=keyboard,
         )
-        return response, current_state, {}
+        return response, DriverState.SETTINGS_VEHICLE_TYPE.value, {}
+
+    async def _handle_settings_vehicle_type(
+        self, user: User, message: str, context: dict, **kwargs: object
+    ) -> Tuple[MessageResponse, str, dict]:
+        """טיפול בבחירת סוג רכב"""
+        msg = message.strip()
+
+        # ביטול
+        if "ביטול" in msg:
+            return await self._build_settings_menu(user)
+
+        # מיפוי מטקסט כפתור לערך enum
+        vehicle_value = VEHICLE_TYPE_BY_LABEL.get(msg)
+        if not vehicle_value:
+            # ניסיון ערך enum ישיר
+            valid_values = {e.value for e in VehicleCategory}
+            if msg in valid_values:
+                vehicle_value = msg
+
+        if not vehicle_value:
+            keyboard = [[label] for label in VEHICLE_TYPE_LABELS.values()]
+            keyboard.append(["❌ ביטול"])
+            response = MessageResponse(
+                text="❌ בחירה לא תקינה. אנא בחר מהרשימה:",
+                keyboard=keyboard,
+            )
+            return response, DriverState.SETTINGS_VEHICLE_TYPE.value, {}
+
+        try:
+            label = await self.menu_service.update_vehicle_type(user.id, vehicle_value)
+        except (ValidationException, ValueError) as e:
+            err_msg = e.message if hasattr(e, "message") else str(e)
+            response = MessageResponse(text=f"❌ {err_msg}")
+            return response, DriverState.SETTINGS_VEHICLE_TYPE.value, {}
+
+        response = MessageResponse(
+            text=f"✅ סוג רכב עודכן ל: {escape(label)}",
+            keyboard=[["🔙 חזרה להגדרות"], ["🔙 חזרה לתפריט"]],
+        )
+        return response, DriverState.SETTINGS_VIEW.value, {}
+
+    # ---------- סוג נסיעה ----------
+
+    def _show_trip_type_options(self) -> Tuple[MessageResponse, str, dict]:
+        """הצגת אפשרויות סוג נסיעה"""
+        keyboard = [[label] for label in TRIP_TYPE_LABELS.values()]
+        keyboard.append(["❌ ביטול"])
+        response = MessageResponse(
+            text="🛣 <b>בחר סוג נסיעה:</b>",
+            keyboard=keyboard,
+        )
+        return response, DriverState.SETTINGS_TRIP_TYPE.value, {}
+
+    async def _handle_settings_trip_type(
+        self, user: User, message: str, context: dict, **kwargs: object
+    ) -> Tuple[MessageResponse, str, dict]:
+        """טיפול בבחירת סוג נסיעה"""
+        msg = message.strip()
+
+        if "ביטול" in msg:
+            return await self._build_settings_menu(user)
+
+        trip_value = TRIP_TYPE_BY_LABEL.get(msg)
+        if not trip_value:
+            valid_values = {e.value for e in TripTypeFilter}
+            if msg in valid_values:
+                trip_value = msg
+
+        if not trip_value:
+            keyboard = [[label] for label in TRIP_TYPE_LABELS.values()]
+            keyboard.append(["❌ ביטול"])
+            response = MessageResponse(
+                text="❌ בחירה לא תקינה. אנא בחר מהרשימה:",
+                keyboard=keyboard,
+            )
+            return response, DriverState.SETTINGS_TRIP_TYPE.value, {}
+
+        try:
+            label = await self.menu_service.update_trip_type(user.id, trip_value)
+        except (ValidationException, ValueError) as e:
+            err_msg = e.message if hasattr(e, "message") else str(e)
+            response = MessageResponse(text=f"❌ {err_msg}")
+            return response, DriverState.SETTINGS_TRIP_TYPE.value, {}
+
+        response = MessageResponse(
+            text=f"✅ סוג נסיעה עודכן ל: {escape(label)}",
+            keyboard=[["🔙 חזרה להגדרות"], ["🔙 חזרה לתפריט"]],
+        )
+        return response, DriverState.SETTINGS_VIEW.value, {}
+
+    # ---------- הצגת משלוחים ----------
+
+    def _show_deliveries_options(self) -> Tuple[MessageResponse, str, dict]:
+        """הצגת אפשרויות הצגת משלוחים"""
+        response = MessageResponse(
+            text=(
+                "💌 <b>הצגת משלוחים בתוצאות חיפוש</b>\n\n"
+                "האם להציג משלוחים בנוסף לנסיעות?"
+            ),
+            keyboard=[["✅ כן — הצג משלוחים"], ["❌ לא — ללא משלוחים"], ["❌ ביטול"]],
+        )
+        return response, DriverState.SETTINGS_SHOW_DELIVERIES.value, {}
+
+    async def _handle_settings_show_deliveries(
+        self, user: User, message: str, context: dict, **kwargs: object
+    ) -> Tuple[MessageResponse, str, dict]:
+        """טיפול בבחירת הצגת משלוחים"""
+        msg = message.strip()
+
+        if "ביטול" in msg and "ללא" not in msg:
+            return await self._build_settings_menu(user)
+
+        show: bool | None = None
+        if "כן" in msg:
+            show = True
+        elif "לא" in msg or "ללא" in msg:
+            show = False
+
+        if show is None:
+            response = MessageResponse(
+                text="❌ בחירה לא תקינה. אנא בחר כן או לא:",
+                keyboard=[["✅ כן — הצג משלוחים"], ["❌ לא — ללא משלוחים"], ["❌ ביטול"]],
+            )
+            return response, DriverState.SETTINGS_SHOW_DELIVERIES.value, {}
+
+        await self.menu_service.update_show_deliveries(user.id, show)
+
+        label = "כן ✅" if show else "לא ❌"
+        response = MessageResponse(
+            text=f"✅ הצגת משלוחים עודכנה ל: {label}",
+            keyboard=[["🔙 חזרה להגדרות"], ["🔙 חזרה לתפריט"]],
+        )
+        return response, DriverState.SETTINGS_VIEW.value, {}
+
+    # ---------- מסגרת זמן ----------
+
+    def _show_timeframe_options(self) -> Tuple[MessageResponse, str, dict]:
+        """הצגת אפשרויות מסגרת זמן"""
+        keyboard = [[label] for label in TIMEFRAME_LABELS.values()]
+        keyboard.append(["❌ ביטול"])
+        response = MessageResponse(
+            text="🕐 <b>בחר מסגרת זמן לנסיעות קרובות:</b>",
+            keyboard=keyboard,
+        )
+        return response, DriverState.SETTINGS_UPCOMING_TIMEFRAME.value, {}
+
+    async def _handle_settings_timeframe(
+        self, user: User, message: str, context: dict, **kwargs: object
+    ) -> Tuple[MessageResponse, str, dict]:
+        """טיפול בבחירת מסגרת זמן"""
+        msg = message.strip()
+
+        if "ביטול" in msg:
+            return await self._build_settings_menu(user)
+
+        timeframe_value = TIMEFRAME_BY_LABEL.get(msg)
+        if not timeframe_value:
+            valid_values = {e.value for e in UpcomingTimeframe}
+            if msg in valid_values:
+                timeframe_value = msg
+
+        if not timeframe_value:
+            keyboard = [[label] for label in TIMEFRAME_LABELS.values()]
+            keyboard.append(["❌ ביטול"])
+            response = MessageResponse(
+                text="❌ בחירה לא תקינה. אנא בחר מהרשימה:",
+                keyboard=keyboard,
+            )
+            return response, DriverState.SETTINGS_UPCOMING_TIMEFRAME.value, {}
+
+        try:
+            label = await self.menu_service.update_timeframe(user.id, timeframe_value)
+        except (ValidationException, ValueError) as e:
+            err_msg = e.message if hasattr(e, "message") else str(e)
+            response = MessageResponse(text=f"❌ {err_msg}")
+            return response, DriverState.SETTINGS_UPCOMING_TIMEFRAME.value, {}
+
+        response = MessageResponse(
+            text=f"✅ מסגרת זמן עודכנה ל: {escape(label)}",
+            keyboard=[["🔙 חזרה להגדרות"], ["🔙 חזרה לתפריט"]],
+        )
+        return response, DriverState.SETTINGS_VIEW.value, {}
+
+    # ---------- חיפוש עתידי ----------
+
+    def _show_future_only_options(self) -> Tuple[MessageResponse, str, dict]:
+        """הצגת אפשרויות חיפוש עתידי"""
+        response = MessageResponse(
+            text=(
+                "📅 <b>חיפוש עתידי בלבד</b>\n\n"
+                "⚠️ שים לב: כרגע אין אפשרות לחפש גם נסיעה מיידית "
+                "וגם עתידית בו-זמנית.\n\n"
+                "אם תפעיל חיפוש עתידי, תראה רק נסיעות "
+                "שמתחילות אחרי השעה שתציין.\n\n"
+                "האם להפעיל חיפוש עתידי?"
+            ),
+            keyboard=[["✅ כן — הפעל חיפוש עתידי"], ["❌ לא — כבה חיפוש עתידי"], ["❌ ביטול"]],
+        )
+        return response, DriverState.SETTINGS_FUTURE_ONLY_MODE.value, {}
+
+    async def _handle_settings_future_only(
+        self, user: User, message: str, context: dict, **kwargs: object
+    ) -> Tuple[MessageResponse, str, dict]:
+        """טיפול בהפעלה/כיבוי חיפוש עתידי"""
+        msg = message.strip()
+
+        if "ביטול" in msg and "כבה" not in msg:
+            return await self._build_settings_menu(user)
+
+        if "כן" in msg or "הפעל" in msg:
+            # מעבר לשלב הזנת שעה
+            response = MessageResponse(
+                text=(
+                    "🕐 <b>הזן שעת התחלה לחיפוש עתידי</b>\n\n"
+                    "הזן שעה בפורמט HH:MM\n"
+                    "לדוגמה: 08:00 או 14:30"
+                ),
+                keyboard=[["❌ ביטול"]],
+            )
+            return response, DriverState.SETTINGS_START_TIME.value, {}
+
+        if "לא" in msg or "כבה" in msg:
+            try:
+                await self.menu_service.update_future_only(user.id, False, None)
+            except (ValidationException, ValueError) as e:
+                err_msg = e.message if hasattr(e, "message") else str(e)
+                response = MessageResponse(text=f"❌ {err_msg}")
+                return response, DriverState.SETTINGS_FUTURE_ONLY_MODE.value, {}
+
+            response = MessageResponse(
+                text="✅ חיפוש עתידי כובה",
+                keyboard=[["🔙 חזרה להגדרות"], ["🔙 חזרה לתפריט"]],
+            )
+            return response, DriverState.SETTINGS_VIEW.value, {}
+
+        # בחירה לא מוכרת
+        response = MessageResponse(
+            text="❌ בחירה לא תקינה. בחר כן או לא:",
+            keyboard=[["✅ כן — הפעל חיפוש עתידי"], ["❌ לא — כבה חיפוש עתידי"], ["❌ ביטול"]],
+        )
+        return response, DriverState.SETTINGS_FUTURE_ONLY_MODE.value, {}
+
+    async def _handle_settings_start_time(
+        self, user: User, message: str, context: dict, **kwargs: object
+    ) -> Tuple[MessageResponse, str, dict]:
+        """טיפול בהזנת שעת התחלה לחיפוש עתידי"""
+        msg = message.strip()
+
+        if "ביטול" in msg:
+            return await self._build_settings_menu(user)
+
+        # פרסור שעה בפורמט HH:MM
+        parsed_time = self._parse_time(msg)
+        if parsed_time is None:
+            response = MessageResponse(
+                text=(
+                    "❌ פורמט שעה לא תקין.\n\n"
+                    "הזן שעה בפורמט HH:MM\n"
+                    "לדוגמה: 08:00 או 14:30"
+                ),
+                keyboard=[["❌ ביטול"]],
+            )
+            return response, DriverState.SETTINGS_START_TIME.value, {}
+
+        try:
+            await self.menu_service.update_future_only(user.id, True, parsed_time)
+        except (ValidationException, ValueError) as e:
+            err_msg = e.message if hasattr(e, "message") else str(e)
+            response = MessageResponse(
+                text=f"❌ {err_msg}",
+                keyboard=[["❌ ביטול"]],
+            )
+            return response, DriverState.SETTINGS_START_TIME.value, {}
+
+        response = MessageResponse(
+            text=f"✅ חיפוש עתידי הופעל — משעה {parsed_time.strftime('%H:%M')}",
+            keyboard=[["🔙 חזרה להגדרות"], ["🔙 חזרה לתפריט"]],
+        )
+        return response, DriverState.SETTINGS_VIEW.value, {}
+
+    @staticmethod
+    def _parse_time(time_str: str) -> time_type | None:
+        """פרסור שעה בפורמט HH:MM"""
+        import re
+        match = re.match(r"^(\d{1,2}):(\d{2})$", time_str.strip())
+        if not match:
+            return None
+        hour, minute = int(match.group(1)), int(match.group(2))
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            return None
+        return time_type(hour, minute)
 
     # ==================== fallback ====================
 
