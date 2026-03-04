@@ -191,6 +191,41 @@ class TestCityAbbreviationService:
         assert result is None
 
     @pytest.mark.unit
+    def test_parse_multiword_destination(self) -> None:
+        """פרסור שם עיר מרובה מילים כיעד: פ תל אביב"""
+        result = CityAbbreviationService.parse_search_command("פ תל אביב")
+        assert result is not None
+        assert result.origin is None
+        assert result.destination == "תל אביב"
+        assert result.is_area_search is False
+
+    @pytest.mark.unit
+    def test_parse_area_multiword_destination(self) -> None:
+        """פרסור חיפוש אזורי עם שם עיר מרובה מילים: פ א תל אביב"""
+        result = CityAbbreviationService.parse_search_command("פ א תל אביב")
+        assert result is not None
+        assert result.origin is None
+        assert result.destination == "תל אביב"
+        assert result.is_area_search is True
+
+    @pytest.mark.unit
+    def test_parse_origin_area_multiword_destination(self) -> None:
+        """פרסור ממוצא ליעד אזורי מרובה מילים: פ ים א תל אביב"""
+        result = CityAbbreviationService.parse_search_command("פ ים א תל אביב")
+        assert result is not None
+        assert result.origin == "ירושלים"
+        assert result.destination == "תל אביב"
+        assert result.is_area_search is True
+
+    @pytest.mark.unit
+    def test_parse_two_abbreviations_still_works(self) -> None:
+        """שני קיצורים עדיין מזוהים כמוצא+יעד: פ בב ים"""
+        result = CityAbbreviationService.parse_search_command("פ בב ים")
+        assert result is not None
+        assert result.origin == "בני ברק"
+        assert result.destination == "ירושלים"
+
+    @pytest.mark.unit
     def test_get_abbreviations_help(self) -> None:
         """בדיקת הודעת עזרה קיצורים"""
         help_text = CityAbbreviationService.get_abbreviations_help()
@@ -438,6 +473,53 @@ class TestDriverSearchService:
         with pytest.raises(ValidationException, match="כבר קיים"):
             await service.create_location_search(
                 user_id=user.id, latitude=31.7683, longitude=35.2137,
+            )
+
+    @pytest.mark.asyncio
+    async def test_create_search_zero_coordinates_preserved(
+        self, db_session, user_factory
+    ) -> None:
+        """יצירת חיפוש GPS עם קואורדינטות 0 — לא הופכות ל-None"""
+        from decimal import Decimal
+        user, _ = await _create_registered_driver(db_session, user_factory, "+972505002022")
+        service = DriverSearchService(db_session)
+
+        search = await service.create_search(
+            user_id=user.id,
+            origin_city="מיקום נוכחי",
+            destination_city="אזור מיקום",
+            is_area_search=True,
+            latitude=0.0,
+            longitude=0.0,
+        )
+        assert search.latitude == Decimal("0")
+        assert search.longitude == Decimal("0")
+
+    @pytest.mark.asyncio
+    async def test_partial_coordinate_duplicate_detected(
+        self, db_session, user_factory
+    ) -> None:
+        """זיהוי כפילויות עם קואורדינטה חלקית (רק latitude)"""
+        user, _ = await _create_registered_driver(db_session, user_factory, "+972505002023")
+        service = DriverSearchService(db_session)
+
+        await service.create_search(
+            user_id=user.id,
+            origin_city="מיקום נוכחי",
+            destination_city="אזור מיקום",
+            is_area_search=True,
+            latitude=31.7683,
+            longitude=None,
+        )
+
+        with pytest.raises(ValidationException, match="כבר קיים"):
+            await service.create_search(
+                user_id=user.id,
+                origin_city="מיקום נוכחי",
+                destination_city="אזור מיקום",
+                is_area_search=True,
+                latitude=31.7683,
+                longitude=None,
             )
 
 

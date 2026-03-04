@@ -90,8 +90,8 @@ class DriverSearchService:
             origin_city=validated.origin_city,
             destination_city=validated.destination_city,
             is_area_search=validated.is_area_search,
-            latitude=Decimal(str(validated.latitude)) if validated.latitude else None,
-            longitude=Decimal(str(validated.longitude)) if validated.longitude else None,
+            latitude=Decimal(str(validated.latitude)) if validated.latitude is not None else None,
+            longitude=Decimal(str(validated.longitude)) if validated.longitude is not None else None,
             status=DriverSearchStatus.ACTIVE.value,
         )
         self.db.add(search)
@@ -274,8 +274,15 @@ class DriverSearchService:
         if latitude is not None and longitude is not None:
             conditions.append(DriverSearch.latitude == Decimal(str(latitude)))
             conditions.append(DriverSearch.longitude == Decimal(str(longitude)))
+        elif latitude is not None:
+            conditions.append(DriverSearch.latitude == Decimal(str(latitude)))
+            conditions.append(DriverSearch.longitude.is_(None))
+        elif longitude is not None:
+            conditions.append(DriverSearch.latitude.is_(None))
+            conditions.append(DriverSearch.longitude == Decimal(str(longitude)))
         else:
             conditions.append(DriverSearch.latitude.is_(None))
+            conditions.append(DriverSearch.longitude.is_(None))
 
         result = await self.db.execute(
             select(DriverSearch).where(*conditions)

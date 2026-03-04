@@ -178,11 +178,16 @@ class CityAbbreviationService:
         resolve = CityAbbreviationService.resolve_or_raw
 
         # בדיקת "א" (אזורי) — יכול להופיע בעמדות שונות
-        # פורמט 1: "פ א <יעד>" — אזורי ליעד
+        # פורמט 1: "פ א <יעד>" — אזורי ליעד (תמיכה בשם עיר מרובה מילים)
         if args[0] == "א":
             if len(args) < 2:
                 return None
-            destination = resolve(args[1])
+            dest_text = " ".join(args[1:])
+            destination = (
+                CityAbbreviationService.resolve(dest_text)
+                if len(args) > 2
+                else None
+            ) or resolve(args[1])
             if not destination:
                 return None
             return ParsedSearchCommand(
@@ -192,10 +197,15 @@ class CityAbbreviationService:
                 is_location_search=False,
             )
 
-        # פורמט 2: "פ <מוצא> א <יעד>" — ממוצא ליעד אזורי
+        # פורמט 2: "פ <מוצא> א <יעד>" — ממוצא ליעד אזורי (תמיכה בשם מרובה מילים)
         if len(args) >= 3 and args[1] == "א":
             origin = resolve(args[0])
-            destination = resolve(args[2])
+            dest_text = " ".join(args[2:])
+            destination = (
+                CityAbbreviationService.resolve(dest_text)
+                if len(args) > 3
+                else None
+            ) or resolve(args[2])
             if not origin or not destination:
                 return None
             return ParsedSearchCommand(
@@ -205,8 +215,19 @@ class CityAbbreviationService:
                 is_location_search=False,
             )
 
-        # פורמט 3: "פ <מוצא> <יעד>" — ממוצא ליעד רגיל
+        # פורמט 3: "פ <מוצא> <יעד>" או "פ <שם עיר מרובה מילים>"
         if len(args) == 2:
+            # נסיון ראשון — חיבור כשם עיר מרובה מילים (למשל "תל אביב")
+            joined = " ".join(args)
+            joined_resolved = CityAbbreviationService.resolve(joined)
+            if joined_resolved:
+                return ParsedSearchCommand(
+                    origin=None,
+                    destination=joined_resolved,
+                    is_area_search=False,
+                    is_location_search=False,
+                )
+            # נסיון שני — מוצא + יעד נפרדים
             origin = resolve(args[0])
             destination = resolve(args[1])
             if not origin or not destination:
