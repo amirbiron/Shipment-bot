@@ -315,3 +315,19 @@ class TestDriverSessionService:
         paused_count = await service.disconnect_session(user.id)
         assert paused_count == 0
         assert await service.is_session_active(user.id) is False
+
+    @pytest.mark.asyncio
+    async def test_touch_session_resets_reminder_sent(self, db_session, user_factory) -> None:
+        """touch_session מאפס reminder_sent_at — תזכורת חדשה תישלח בהתאם לזמן העדכני"""
+        user = await _create_registered_driver(db_session, user_factory, "+972506001018")
+        service = DriverSessionService(db_session)
+
+        session = await service.start_session(user.id)
+        # סימולציה: תזכורת נשלחה
+        await service.mark_reminder_sent(session.id)
+        await db_session.refresh(session)
+        assert session.reminder_sent_at is not None
+
+        # פעילות חדשה — חייבת לאפס את התזכורת
+        updated = await service.touch_session(user.id)
+        assert updated.reminder_sent_at is None

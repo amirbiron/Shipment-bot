@@ -876,6 +876,7 @@ def check_driver_sessions():
                             },
                             exc_info=True,
                         )
+                        await db.rollback()
             except Exception as e:
                 logger.error(
                     "כשלון בשליפת סשנים שעומדים לפוג",

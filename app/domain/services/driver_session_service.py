@@ -106,6 +106,10 @@ class DriverSessionService:
 
         session.last_message_at = now
         session.updated_at = now
+        # איפוס תזכורת — פעילות חדשה מאריכה את הסשן,
+        # כך שתזכורת חדשה תישלח בהתאם לזמן העדכני
+        if session.reminder_sent_at is not None:
+            session.reminder_sent_at = None
         await self.db.commit()
         await self.db.refresh(session)
         return session

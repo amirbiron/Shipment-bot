@@ -167,6 +167,67 @@ class TestDriverSearchPauseResume:
         remaining = await service.get_non_deleted_searches(user.id)
         assert len(remaining) == 0
 
+    @pytest.mark.asyncio
+    async def test_resume_respects_max_limit(self, db_session, user_factory) -> None:
+        """חידוש מכבד מגבלת MAX_ACTIVE_SEARCHES_PER_USER"""
+        from app.db.models.driver_search import MAX_ACTIVE_SEARCHES_PER_USER
+
+        user = await _create_registered_driver(db_session, user_factory, "+972507001008")
+        service = DriverSearchService(db_session)
+
+        # יצירת MAX חיפושים פעילים
+        for i in range(MAX_ACTIVE_SEARCHES_PER_USER):
+            await _create_search(db_session, user.id, f"עיר{i}")
+
+        # יצירת חיפוש מושהה נוסף
+        await _create_search(db_session, user.id, "עיר-מושהה", DriverSearchStatus.PAUSED.value)
+
+        # ניסיון חידוש — כבר במקסימום, אמור לזרוק ValidationException
+        from app.core.exceptions import ValidationException
+        with pytest.raises(ValidationException):
+            await service.resume_all_searches(user.id)
+
+    @pytest.mark.asyncio
+    async def test_resume_partial_when_near_limit(self, db_session, user_factory) -> None:
+        """חידוש חלקי כשיש מקום רק לחלק מהחיפושים"""
+        from app.db.models.driver_search import MAX_ACTIVE_SEARCHES_PER_USER
+
+        user = await _create_registered_driver(db_session, user_factory, "+972507001009")
+        service = DriverSearchService(db_session)
+
+        # יצירת MAX-2 חיפושים פעילים (נשארו 2 slots)
+        for i in range(MAX_ACTIVE_SEARCHES_PER_USER - 2):
+            await _create_search(db_session, user.id, f"עיר{i}")
+
+        # יצירת 4 חיפושים מושהים
+        for i in range(4):
+            await _create_search(db_session, user.id, f"מושהה{i}", DriverSearchStatus.PAUSED.value)
+
+        count = await service.resume_all_searches(user.id)
+        assert count == 2  # רק 2 slots פנויים
+
+        # ווידוא שנותרו 2 מושהים
+        active = await service.get_active_searches(user.id)
+        assert len(active) == MAX_ACTIVE_SEARCHES_PER_USER
+
+    @pytest.mark.asyncio
+    async def test_delete_menu_shows_paused(self, db_session, user_factory) -> None:
+        """תפריט מחיקה בודדת מציג גם חיפושים מושהים"""
+        user = await _create_registered_driver(db_session, user_factory, "+972507001010")
+        # יצירת חיפוש מושהה בלבד
+        await _create_search(db_session, user.id, "ירושלים", DriverSearchStatus.PAUSED.value)
+
+        handler = DriverStateHandler(db_session, platform="telegram")
+        await handler.state_manager.force_state(
+            user.id, "telegram", DriverState.MENU.value, context={}
+        )
+
+        response, new_state = await handler.handle_message(user, "מ")
+        assert new_state == DriverState.SEARCH_MANAGE.value
+        # ווידוא שיש כפתורים (חיפוש מושהה מוצג)
+        assert response.keyboard is not None
+        assert len(response.keyboard) > 1  # לפחות כפתור חיפוש + ביטול
+
 
 # ============================================================================
 # בדיקות DriverStateHandler — פקודות ע/ה/מ/ממ

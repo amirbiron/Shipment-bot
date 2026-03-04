@@ -63,7 +63,7 @@ from app.domain.services.driver_menu_service import (
 )
 from app.domain.services.driver_search_service import DriverSearchService
 from app.domain.services.city_abbreviation_service import CityAbbreviationService
-from app.db.models.driver_search import MAX_ACTIVE_SEARCHES_PER_USER
+from app.db.models.driver_search import MAX_ACTIVE_SEARCHES_PER_USER, DriverSearchStatus
 from sqlalchemy import select
 from app.core.exceptions import ValidationException, NotFoundException
 from app.core.logging import get_logger
@@ -1321,11 +1321,11 @@ class DriverStateHandler:
     async def _build_search_delete_menu(
         self, user: User
     ) -> Tuple[MessageResponse, str, dict]:
-        """בניית תפריט מחיקת חיפוש — הצגת רשימה ממוספרת לבחירה"""
-        searches = await self.search_service.get_active_searches(user.id)
+        """בניית תפריט מחיקת חיפוש — הצגת רשימה ממוספרת לבחירה (פעילים + מושהים)"""
+        searches = await self.search_service.get_non_deleted_searches(user.id)
         if not searches:
             response = MessageResponse(
-                text="❌ אין חיפושים פעילים למחיקה.",
+                text="ℹ️ אין חיפושים למחיקה.",
                 keyboard=[["🔙 חזרה לתפריט"]],
             )
             return response, DriverState.MENU.value, {}
@@ -1474,8 +1474,17 @@ class DriverStateHandler:
     async def _handle_resume_searches(
         self, user: User
     ) -> Tuple[MessageResponse, str, dict]:
-        """פקודת "ה" — חידוש כל החיפושים המושהים"""
-        count = await self.search_service.resume_all_searches(user.id)
+        """פקודת "ה" — חידוש כל החיפושים המושהים (עד למגבלת המקסימום)"""
+        try:
+            count = await self.search_service.resume_all_searches(user.id)
+        except ValidationException as e:
+            err_msg = e.message if hasattr(e, "message") else str(e)
+            response = MessageResponse(
+                text=f"❌ {err_msg}",
+                keyboard=[["🔙 חזרה לתפריט"]],
+            )
+            return response, DriverState.MENU.value, {}
+
         if count == 0:
             response = MessageResponse(
                 text="ℹ️ אין חיפושים מושהים לחידוש.",
@@ -1483,8 +1492,23 @@ class DriverStateHandler:
             )
             return response, DriverState.MENU.value, {}
 
+        # בדיקה אם נותרו חיפושים מושהים (חידוש חלקי עקב מגבלת מקסימום)
+        paused_remaining = await self.search_service.get_non_deleted_searches(user.id)
+        still_paused = sum(
+            1 for s in paused_remaining
+            if s.status == DriverSearchStatus.PAUSED.value
+        )
+
+        text = f"▶️ {count} חיפושים חודשו בהצלחה."
+        if still_paused > 0:
+            text += (
+                f"\n\n⚠️ נותרו {still_paused} חיפושים מושהים — "
+                f"המקסימום הוא {MAX_ACTIVE_SEARCHES_PER_USER} פעילים."
+            )
+        text += "\n\n💡 להשהיה — שלח 'ע'"
+
         response = MessageResponse(
-            text=f"▶️ {count} חיפושים חודשו בהצלחה.\n\n💡 להשהיה — שלח 'ע'",
+            text=text,
             keyboard=[["🔙 חזרה לתפריט"]],
         )
         return response, DriverState.MENU.value, {}
