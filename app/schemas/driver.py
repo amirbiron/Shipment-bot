@@ -110,6 +110,16 @@ class DriverSearchSettingsUpdate(BaseModel):
             raise ValueError(f"מסגרת זמן לא תקינה. ערכים אפשריים: {', '.join(valid_values)}")
         return v
 
+    @model_validator(mode="after")
+    def validate_future_only_requires_all_timeframe(self) -> "DriverSearchSettingsUpdate":
+        """חוק עסקי: future_only_enabled=True רק אם upcoming_timeframe='all'."""
+        if self.future_only_enabled is True and self.upcoming_timeframe is not None:
+            if self.upcoming_timeframe != UpcomingTimeframe.ALL.value:
+                raise ValueError(
+                    "מצב 'עתידי בלבד' זמין רק כאשר מסגרת הזמן היא 'הכל'"
+                )
+        return self
+
 
 class DriverSearchCreate(BaseModel):
     """סכמת יצירת חיפוש נהג"""

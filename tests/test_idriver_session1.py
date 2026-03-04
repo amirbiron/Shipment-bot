@@ -674,6 +674,32 @@ class TestDriverSearchSettingsUpdateSchema:
         with pytest.raises(ValueError, match="סוג רכב"):
             DriverSearchSettingsUpdate(vehicle_type_filter="submarine")
 
+    @pytest.mark.unit
+    def test_future_only_with_non_all_timeframe_fails(self) -> None:
+        """future_only_enabled=True עם מסגרת זמן שאינה 'all' חייב להיכשל"""
+        with pytest.raises(ValueError, match="עתידי בלבד"):
+            DriverSearchSettingsUpdate(
+                future_only_enabled=True,
+                upcoming_timeframe="1_hour",
+            )
+
+    @pytest.mark.unit
+    def test_future_only_with_all_timeframe_succeeds(self) -> None:
+        """future_only_enabled=True עם מסגרת זמן 'all' חייב להצליח"""
+        update = DriverSearchSettingsUpdate(
+            future_only_enabled=True,
+            upcoming_timeframe="all",
+        )
+        assert update.future_only_enabled is True
+        assert update.upcoming_timeframe == "all"
+
+    @pytest.mark.unit
+    def test_future_only_without_timeframe_succeeds(self) -> None:
+        """future_only_enabled=True ללא מסגרת זמן (עדכון חלקי) חייב להצליח"""
+        update = DriverSearchSettingsUpdate(future_only_enabled=True)
+        assert update.future_only_enabled is True
+        assert update.upcoming_timeframe is None
+
 
 class TestDriverSearchCoordinateValidation:
     """בדיקות ולידציית קואורדינטות בחיפוש"""
