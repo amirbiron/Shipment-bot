@@ -270,15 +270,11 @@ class DriverSearchService:
             DriverSearch.is_area_search == is_area_search,
             DriverSearch.status == DriverSearchStatus.ACTIVE.value,
         ]
-        # חיפושי GPS — כפילות רק אם אותן קואורדינטות
+        # חיפושי GPS — כפילות רק אם אותן קואורדינטות.
+        # הסכמה (DriverSearchCreate) מבטיחה ששתי הקואורדינטות מגיעות יחד או
+        # שתיהן None, כך שאין צורך לטפל בקואורדינטה חלקית.
         if latitude is not None and longitude is not None:
             conditions.append(DriverSearch.latitude == Decimal(str(latitude)))
-            conditions.append(DriverSearch.longitude == Decimal(str(longitude)))
-        elif latitude is not None:
-            conditions.append(DriverSearch.latitude == Decimal(str(latitude)))
-            conditions.append(DriverSearch.longitude.is_(None))
-        elif longitude is not None:
-            conditions.append(DriverSearch.latitude.is_(None))
             conditions.append(DriverSearch.longitude == Decimal(str(longitude)))
         else:
             conditions.append(DriverSearch.latitude.is_(None))

@@ -198,14 +198,22 @@ class CityAbbreviationService:
             )
 
         # פורמט 2: "פ <מוצא> א <יעד>" — ממוצא ליעד אזורי (תמיכה בשם מרובה מילים)
-        if len(args) >= 3 and args[1] == "א":
-            origin = resolve(args[0])
-            dest_text = " ".join(args[2:])
-            destination = (
-                CityAbbreviationService.resolve(dest_text)
-                if len(args) > 3
-                else None
-            ) or resolve(args[2])
+        # מחפשים את "א" בכל מיקום — תומך גם בעיר מקור מרובת מילים
+        # למשל: "פ תל אביב א טב"
+        if len(args) >= 3 and "א" in args[1:]:
+            area_idx = args.index("א", 1)
+            origin_parts = args[:area_idx]
+            dest_parts = args[area_idx + 1:]
+            if not origin_parts or not dest_parts:
+                return None
+            origin_text = " ".join(origin_parts)
+            origin = CityAbbreviationService.resolve(origin_text) or (
+                resolve(origin_parts[0]) if len(origin_parts) == 1 else None
+            )
+            dest_text = " ".join(dest_parts)
+            destination = CityAbbreviationService.resolve(dest_text) or (
+                resolve(dest_parts[0]) if len(dest_parts) == 1 else None
+            )
             if not origin or not destination:
                 return None
             return ParsedSearchCommand(
