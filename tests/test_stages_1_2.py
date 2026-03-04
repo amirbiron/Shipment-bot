@@ -945,19 +945,19 @@ class TestWhatsAppAdminApproval:
         from app.api.webhooks.whatsapp import _match_approval_command
 
         # אישור
-        assert _match_approval_command("אשר 123") == ("approve", 123, None)
-        assert _match_approval_command("✅ אשר 456") == ("approve", 456, None)
-        assert _match_approval_command("אשר שליח 789") == ("approve", 789, None)
+        assert _match_approval_command("אשר 123") == ("approve", 123, "courier", None)
+        assert _match_approval_command("✅ אשר 456") == ("approve", 456, "courier", None)
+        assert _match_approval_command("אשר שליח 789") == ("approve", 789, "courier", None)
 
         # דחייה
-        assert _match_approval_command("דחה 123") == ("reject", 123, None)
-        assert _match_approval_command("❌ דחה 456") == ("reject", 456, None)
-        assert _match_approval_command("דחה שליח 789") == ("reject", 789, None)
+        assert _match_approval_command("דחה 123") == ("reject", 123, "courier", None)
+        assert _match_approval_command("❌ דחה 456") == ("reject", 456, "courier", None)
+        assert _match_approval_command("דחה שליח 789") == ("reject", 789, "courier", None)
 
         # דחייה עם הערה
-        assert _match_approval_command("דחה 123 התמונות לא ברורות") == ("reject", 123, "התמונות לא ברורות")
-        assert _match_approval_command("❌ דחה שליח 456 חסר מסמך") == ("reject", 456, "חסר מסמך")
-        assert _match_approval_command("דחייה 789 צריך לשלוח תמונה חדשה") == ("reject", 789, "צריך לשלוח תמונה חדשה")
+        assert _match_approval_command("דחה 123 התמונות לא ברורות") == ("reject", 123, "courier", "התמונות לא ברורות")
+        assert _match_approval_command("❌ דחה שליח 456 חסר מסמך") == ("reject", 456, "courier", "חסר מסמך")
+        assert _match_approval_command("דחייה 789 צריך לשלוח תמונה חדשה") == ("reject", 789, "courier", "צריך לשלוח תמונה חדשה")
 
         # לא תקין
         assert _match_approval_command("שלום") is None
@@ -1099,7 +1099,7 @@ class TestRejectionNote:
 
         result = _match_approval_command("דחה 123 התמונות לא ברורות")
         assert result is not None
-        action, user_id, note = result
+        action, user_id, target_type, note = result
         assert action == "reject"
         assert user_id == 123
         assert note == "התמונות לא ברורות"
@@ -1111,7 +1111,7 @@ class TestRejectionNote:
 
         result = _match_approval_command("דחה 123")
         assert result is not None
-        action, user_id, note = result
+        action, user_id, target_type, note = result
         assert action == "reject"
         assert user_id == 123
         assert note is None
@@ -1629,7 +1629,7 @@ class TestPropertyBasedDiscoveries:
             result = _match_approval_command(text)
             # לא אמור לקרוס — None או tuple חוקי
             if result is not None:
-                action, uid, note = result
+                action, uid, _, note = result
                 assert action in ("approve", "reject")
                 assert isinstance(uid, int) and uid > 0
 
@@ -1643,7 +1643,7 @@ class TestPropertyBasedDiscoveries:
 
         result = _match_approval_command("דחה 100   ")
         assert result is not None
-        _, _, note = result
+        _, _, _, note = result
         assert note is None, f"הערה של רווחים בלבד הייתה אמורה להיות None, קיבלנו: '{note}'"
 
     @pytest.mark.asyncio

@@ -287,11 +287,12 @@ class TestApprovalCommandParsingProperties:
         result = _match_approval_command(cmd)
         if result is not None:
             assert isinstance(result, tuple), f"תוצאה אמורה להיות tuple, קיבלנו: {type(result)}"
-            assert len(result) == 3, f"אורך tuple אמור להיות 3, קיבלנו: {len(result)}"
-            action, user_id, note = result
+            assert len(result) == 4, f"אורך tuple אמור להיות 4, קיבלנו: {len(result)}"
+            action, user_id, target_type, note = result
             assert action in ("approve", "reject"), f"פעולה לא חוקית: {action}"
             assert isinstance(user_id, int), f"user_id אמור להיות int: {type(user_id)}"
             assert user_id > 0, f"user_id אמור להיות חיובי: {user_id}"
+            assert target_type in ("courier", "driver"), f"target_type לא חוקי: {target_type}"
             assert note is None or isinstance(note, str), f"note אמור להיות None או str: {type(note)}"
 
     @pytest.mark.unit
@@ -304,7 +305,7 @@ class TestApprovalCommandParsingProperties:
         """
         result = _match_approval_command(cmd)
         if result is not None:
-            _, _, note = result
+            _, _, _, note = result
             if note is not None:
                 assert len(note.strip()) > 0, (
                     f"הערת דחייה ריקה או רווחים בלבד: '{note}'"
@@ -319,7 +320,7 @@ class TestApprovalCommandParsingProperties:
         """
         result = _match_approval_command(cmd)
         if result is not None:
-            action, _, note = result
+            action, _, _, note = result
             if action == "approve":
                 assert note is None, (
                     f"פקודת אישור עם הערה: '{note}' עבור קלט: '{cmd}'"
@@ -346,7 +347,7 @@ class TestApprovalCommandParsingProperties:
         """
         result = _match_approval_command(f"אשר {user_id}")
         assert result is not None, f"פקודת אישור לא זוהתה: 'אשר {user_id}'"
-        _, parsed_id, _ = result
+        _, parsed_id, _, _ = result
         assert parsed_id == user_id, (
             f"user_id השתנה: {user_id} -> {parsed_id}"
         )
@@ -360,7 +361,7 @@ class TestApprovalCommandParsingProperties:
         """
         result = _match_approval_command(f"דחה {user_id}")
         assert result is not None, f"פקודת דחייה לא זוהתה: 'דחה {user_id}'"
-        _, parsed_id, _ = result
+        _, parsed_id, _, _ = result
         assert parsed_id == user_id, (
             f"user_id השתנה: {user_id} -> {parsed_id}"
         )
@@ -383,7 +384,7 @@ class TestApprovalCommandParsingProperties:
         cmd = f"דחה {user_id} {note_text}"
         result = _match_approval_command(cmd)
         if result is not None:
-            action, parsed_id, parsed_note = result
+            action, parsed_id, _, parsed_note = result
             if action == "reject" and parsed_id == user_id and parsed_note is not None:
                 # נרמול זהה לפונקציה: הסרת zero-width chars + כיווץ רווחים
                 import re
@@ -409,8 +410,8 @@ class TestApprovalCommandParsingProperties:
             pytest.fail(f"הפונקציה זרקה exception על קלט: '{random_text[:100]}...': {e}")
 
         if result is not None:
-            assert isinstance(result, tuple) and len(result) == 3
-            action, user_id, note = result
+            assert isinstance(result, tuple) and len(result) == 4
+            action, user_id, target_type, note = result
             assert action in ("approve", "reject")
             assert isinstance(user_id, int) and user_id > 0
             assert note is None or (isinstance(note, str) and len(note) > 0)
