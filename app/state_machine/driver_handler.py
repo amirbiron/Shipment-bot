@@ -1827,6 +1827,9 @@ class DriverStateHandler:
                     text="❌ שגיאה ברכישה: לא נמצא פרופיל נהג. פנה לתמיכה.",
                     keyboard=[["🔙 חזרה לתפריט"]],
                 )
+                return response, DriverState.SUBSCRIPTION_VIEW.value, {
+                    "subscription_months": None,
+                }
             except ValidationException as e:
                 logger.warning(
                     "כשלון ולידציה ברכישת מנוי",
