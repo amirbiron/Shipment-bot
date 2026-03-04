@@ -611,12 +611,21 @@ class TestDriverSearchCreateSchema:
         assert search.is_area_search is False
 
     @pytest.mark.unit
-    def test_empty_city_fails(self) -> None:
-        """עיר ריקה חייבת להיכשל"""
+    def test_empty_origin_allowed(self) -> None:
+        """עיר מוצא ריקה מותרת — חיפוש ליעד בלבד (סשן 5)"""
+        search = DriverSearchCreate(
+            origin_city="   ",
+            destination_city="ירושלים",
+        )
+        assert search.origin_city == ""
+
+    @pytest.mark.unit
+    def test_empty_destination_fails(self) -> None:
+        """עיר יעד ריקה חייבת להיכשל"""
         with pytest.raises(ValueError):
             DriverSearchCreate(
-                origin_city="   ",
-                destination_city="ירושלים",
+                origin_city="תל אביב",
+                destination_city="   ",
             )
 
     @pytest.mark.unit
@@ -775,19 +784,20 @@ class TestDriverSearchCoordinateValidation:
     """בדיקות ולידציית קואורדינטות בחיפוש"""
 
     @pytest.mark.unit
-    def test_area_search_without_coords_fails(self) -> None:
-        """חיפוש אזורי ללא קואורדינטות חייב להיכשל"""
-        with pytest.raises(ValueError, match="latitude"):
-            DriverSearchCreate(
-                origin_city="חיפה",
-                destination_city="חיפה",
-                is_area_search=True,
-            )
+    def test_area_search_without_coords_allowed(self) -> None:
+        """חיפוש אזורי ללא קואורדינטות מותר — חיפוש אזורי טקסטואלי (סשן 5)"""
+        search = DriverSearchCreate(
+            origin_city="חיפה",
+            destination_city="חיפה",
+            is_area_search=True,
+        )
+        assert search.is_area_search is True
+        assert search.latitude is None
 
     @pytest.mark.unit
-    def test_area_search_with_only_lat_fails(self) -> None:
-        """חיפוש אזורי עם latitude בלבד חייב להיכשל"""
-        with pytest.raises(ValueError, match="latitude"):
+    def test_area_search_with_only_lat_rejected(self) -> None:
+        """חיפוש אזורי עם latitude בלבד נדחה — קואורדינטה חלקית אסורה"""
+        with pytest.raises(ValueError, match="latitude.*longitude"):
             DriverSearchCreate(
                 origin_city="חיפה",
                 destination_city="חיפה",
@@ -796,9 +806,9 @@ class TestDriverSearchCoordinateValidation:
             )
 
     @pytest.mark.unit
-    def test_area_search_with_only_lng_fails(self) -> None:
-        """חיפוש אזורי עם longitude בלבד חייב להיכשל"""
-        with pytest.raises(ValueError, match="latitude"):
+    def test_area_search_with_only_lng_rejected(self) -> None:
+        """חיפוש אזורי עם longitude בלבד נדחה — קואורדינטה חלקית אסורה"""
+        with pytest.raises(ValueError, match="latitude.*longitude"):
             DriverSearchCreate(
                 origin_city="חיפה",
                 destination_city="חיפה",

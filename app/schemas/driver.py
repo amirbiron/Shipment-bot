@@ -186,12 +186,27 @@ class DriverSearchCreate(BaseModel):
             raise ValueError("longitude חייב להיות בטווח 180- עד 180")
         return v
 
-    @field_validator("origin_city", "destination_city")
+    @field_validator("origin_city")
     @classmethod
-    def validate_city(cls, v: str) -> str:
+    def validate_origin_city(cls, v: str) -> str:
+        """עיר מוצא — מותרת כמחרוזת ריקה (חיפוש ליעד בלבד)"""
         v = v.strip()
         if not v:
-            raise ValueError("שם עיר הוא שדה חובה")
+            return ""
+        if len(v) > 100:
+            raise ValueError("שם עיר לא יכול לחרוג מ-100 תווים")
+        is_safe, pattern = TextSanitizer.check_for_injection(v)
+        if not is_safe:
+            raise ValueError("שם עיר מכיל תוכן לא תקין")
+        return TextSanitizer.sanitize(v, max_length=100)
+
+    @field_validator("destination_city")
+    @classmethod
+    def validate_destination_city(cls, v: str) -> str:
+        """עיר יעד — שדה חובה"""
+        v = v.strip()
+        if not v:
+            raise ValueError("שם עיר יעד הוא שדה חובה")
         if len(v) > 100:
             raise ValueError("שם עיר לא יכול לחרוג מ-100 תווים")
         is_safe, pattern = TextSanitizer.check_for_injection(v)
@@ -201,11 +216,14 @@ class DriverSearchCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_area_search_coordinates(self) -> "DriverSearchCreate":
-        """חיפוש אזורי חייב לכלול שתי קואורדינטות; חיפוש מסלול אסור עם קואורדינטות."""
-        if self.is_area_search:
-            if self.latitude is None or self.longitude is None:
-                raise ValueError("חיפוש אזורי חייב לכלול latitude ו-longitude")
-        else:
-            if self.latitude is not None or self.longitude is not None:
+        """חיפוש מסלול (לא אזורי) אסור עם קואורדינטות.
+        חיפוש אזורי עם קואורדינטות — תקין (GPS). חיפוש אזורי ללא — גם תקין (טקסט).
+        קואורדינטה חלקית (אחת בלי השנייה) — תמיד שגיאה."""
+        has_lat = self.latitude is not None
+        has_lng = self.longitude is not None
+        if has_lat != has_lng:
+            raise ValueError("חובה לספק גם latitude וגם longitude, או אף אחד מהם")
+        if not self.is_area_search:
+            if has_lat or has_lng:
                 raise ValueError("חיפוש מסלול לא יכול לכלול קואורדינטות")
         return self
