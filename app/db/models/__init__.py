@@ -16,6 +16,10 @@ from app.db.models.manual_charge import ManualCharge
 from app.db.models.station_blacklist import StationBlacklist
 from app.db.models.webhook_event import WebhookEvent
 from app.db.models.audit_log import AuditLog
+from app.db.models.driver_profile import DriverProfile
+from app.db.models.driver_search_settings import DriverSearchSettings
+from app.db.models.driver_search import DriverSearch
+from app.db.models.driver_session import DriverSession
 
 __all__ = [
     "Delivery",
@@ -33,4 +37,8 @@ __all__ = [
     "StationBlacklist",
     "WebhookEvent",
     "AuditLog",
+    "DriverProfile",
+    "DriverSearchSettings",
+    "DriverSearch",
+    "DriverSession",
 ]

@@ -27,6 +27,7 @@ from app.state_machine.states import (
     DispatcherState,
     StationOwnerState,
     SenderState,
+    DriverState,
 )
 from app.state_machine.dispatcher_handler import DispatcherStateHandler
 from app.state_machine.station_owner_handler import StationOwnerStateHandler
@@ -411,7 +412,7 @@ def _is_in_multi_step_flow(
         return True
 
     if isinstance(current_state, str) and current_state.startswith(
-        ("DISPATCHER.", "STATION.")
+        ("DISPATCHER.", "STATION.", "DRIVER.")
     ):
         return True
 
@@ -991,6 +992,16 @@ async def _route_to_role_menu(
             handler = StationOwnerStateHandler(db, station.id)
             return await handler.handle_message(user, "תפריט", None)
         return await _sender_fallback(user, db, state_manager)
+
+    if user.role == UserRole.DRIVER:
+        # iDriver — נהג מופנה למצב ראשוני (handler ייבנה בסשנים הבאים)
+        await state_manager.force_state(
+            user.id, "telegram", DriverState.INITIAL.value, context={}
+        )
+        return MessageResponse(
+            text="ברוך הבא ל-iDriver! 🚗\nהמערכת בהקמה, נעדכן אותך בקרוב.",
+            keyboard=None,
+        ), DriverState.INITIAL.value
 
     if user.role == UserRole.SENDER or user.role == UserRole.ADMIN:
         # בדיקה אם המשתמש הוא סדרן פעיל — סדרנים שאינם שליחים נכנסים ישירות לתפריט סדרן
@@ -1612,6 +1623,21 @@ async def telegram_webhook(
         _queue_response_send(background_tasks, send_chat_id, response)
         return {"ok": True, "new_state": new_state}
 
+    if user.role == UserRole.DRIVER:
+        # iDriver — ניתוב נהג (handler ייבנה בסשנים הבאים)
+        is_driver_flow = isinstance(current_state, str) and current_state.startswith("DRIVER.")
+        if not is_driver_flow:
+            await state_manager.force_state(
+                user.id, "telegram", DriverState.INITIAL.value, context={}
+            )
+        response = MessageResponse(
+            text="ברוך הבא ל-iDriver! 🚗\nהמערכת בהקמה, נעדכן אותך בקרוב.",
+            keyboard=None,
+        )
+        _queue_response_send(background_tasks, send_chat_id, response)
+        actual_state = current_state if is_driver_flow else DriverState.INITIAL.value
+        return {"ok": True, "new_state": actual_state}
+
     if user.role in (UserRole.SENDER, UserRole.ADMIN):
         # התחלת זרימת שולח רק עבור שולח/אדמין (guard תפקיד - מונע יירוט תפקידים אחרים)
         if "שלוח" in text or "חבילה" in text:
@@ -1628,6 +1654,7 @@ async def telegram_webhook(
             and not current_state.startswith("COURIER.")
             and not current_state.startswith("DISPATCHER.")
             and not current_state.startswith("STATION.")
+            and not current_state.startswith("DRIVER.")
             and current_state not in ["INITIAL", "SENDER.INITIAL"]
         ):
             handler = SenderStateHandler(db)

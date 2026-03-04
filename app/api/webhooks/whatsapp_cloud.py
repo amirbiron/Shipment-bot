@@ -41,7 +41,7 @@ from app.state_machine.handlers import SenderStateHandler, CourierStateHandler
 from app.state_machine.dispatcher_handler import DispatcherStateHandler
 from app.state_machine.station_owner_handler import StationOwnerStateHandler
 from app.state_machine.manager import StateManager
-from app.state_machine.states import CourierState, DispatcherState
+from app.state_machine.states import CourierState, DispatcherState, DriverState
 from app.db.models.user import User, UserRole, ApprovalStatus
 
 logger = get_logger(__name__)
@@ -720,6 +720,24 @@ async def _route_message_to_handler(
         )
         return response.text, new_state
 
+    # נהג (iDriver)
+    if user.role == UserRole.DRIVER:
+        is_driver_flow = isinstance(current_state, str) and current_state.startswith("DRIVER.")
+        if not is_driver_flow:
+            await state_manager.force_state(
+                user.id, "whatsapp", DriverState.INITIAL.value, context={}
+            )
+        from app.state_machine.handlers import MessageResponse as _MR
+        response = _MR(
+            text="ברוך הבא ל-iDriver! 🚗\nהמערכת בהקמה, נעדכן אותך בקרוב.",
+            keyboard=None,
+        )
+        background_tasks.add_task(
+            send_whatsapp_message, reply_to, response.text, response.keyboard
+        )
+        actual_state = current_state if is_driver_flow else DriverState.INITIAL.value
+        return response.text, actual_state
+
     # שולח — רק אם באמצע זרימת שולח פעילה.
     # משתמש ב-INITIAL / SENDER.INITIAL / ללא state → welcome message (כמו ב-WPPConnect).
     if (
@@ -728,6 +746,7 @@ async def _route_message_to_handler(
         and not current_state.startswith("COURIER.")
         and not current_state.startswith("DISPATCHER.")
         and not current_state.startswith("STATION.")
+        and not current_state.startswith("DRIVER.")
     ):
         handler = SenderStateHandler(db)
         response, new_state = await handler.handle_message(
