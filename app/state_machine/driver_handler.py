@@ -118,7 +118,6 @@ class DriverStateHandler:
         self.verification_service = DriverVerificationService(db)
         self.menu_service = DriverMenuService(db)
         self.search_service = DriverSearchService(db)
-        self.city_service = CityAbbreviationService()
 
     def _is_registration_flow_state(self, state: str) -> bool:
         """בודק אם המצב שייך לזרימת רישום או אימות (לניקוי קונטקסט)"""
@@ -707,7 +706,7 @@ class DriverStateHandler:
         msg = message.strip()
 
         # פקודת חיפוש — "פ ..."
-        if self.city_service.is_search_command(msg):
+        if CityAbbreviationService.is_search_command(msg):
             return await self._handle_search_command(user, msg)
 
         # ניתוב להגדרות חיפוש
@@ -752,7 +751,7 @@ class DriverStateHandler:
 
     def _show_abbreviations_help(self) -> Tuple[MessageResponse, str, dict]:
         """הצגת מילון קיצורי ערים"""
-        abbreviations = self.city_service.get_abbreviations_help()
+        abbreviations = CityAbbreviationService.get_abbreviations_help()
         response = MessageResponse(
             text=(
                 "📚 <b>מילון קיצורי ערים</b>\n\n"
@@ -1123,7 +1122,7 @@ class DriverStateHandler:
         מפרסר את הפקודה ויוצר חיפוש חדש מיידית.
         אם הפקודה היא "פ מיקום" — עובר למצב המתנה למיקום GPS.
         """
-        parsed = self.city_service.parse_search_command(text)
+        parsed = CityAbbreviationService.parse_search_command(text)
 
         if not parsed:
             # פקודה לא תקינה — הצגת עזרה
@@ -1231,7 +1230,7 @@ class DriverStateHandler:
             return await self._build_main_menu(user)
 
         # פקודת חיפוש חדש מתוך מסך החיפושים
-        if self.city_service.is_search_command(msg):
+        if CityAbbreviationService.is_search_command(msg):
             return await self._handle_search_command(user, msg)
 
         # מחיקת כל החיפושים

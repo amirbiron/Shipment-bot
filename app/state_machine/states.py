@@ -540,7 +540,7 @@ DRIVER_TRANSITIONS: dict[DriverState, list[DriverState]] = {
     DriverState.SEARCH_CREATE_ORIGIN: [DriverState.SEARCH_CREATE_DESTINATION, DriverState.MENU],
     DriverState.SEARCH_CREATE_DESTINATION: [DriverState.SEARCH_CREATE_TYPE, DriverState.MENU],
     DriverState.SEARCH_CREATE_TYPE: [DriverState.SEARCH_VIEW_ACTIVE, DriverState.MENU],
-    DriverState.SEARCH_VIEW_ACTIVE: [DriverState.SEARCH_MANAGE, DriverState.MENU],
+    DriverState.SEARCH_VIEW_ACTIVE: [DriverState.SEARCH_MANAGE, DriverState.SEARCH_CREATE_ORIGIN, DriverState.MENU],
     DriverState.SEARCH_MANAGE: [DriverState.SEARCH_VIEW_ACTIVE, DriverState.MENU],
 
     # מנוי (סשן 8)
