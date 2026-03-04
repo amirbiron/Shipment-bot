@@ -158,6 +158,20 @@ class DriverSearchCreate(BaseModel):
     latitude: float | None = None
     longitude: float | None = None
 
+    @field_validator("latitude")
+    @classmethod
+    def validate_latitude(cls, v: float | None) -> float | None:
+        if v is not None and not (-90 <= v <= 90):
+            raise ValueError("latitude חייב להיות בטווח 90- עד 90")
+        return v
+
+    @field_validator("longitude")
+    @classmethod
+    def validate_longitude(cls, v: float | None) -> float | None:
+        if v is not None and not (-180 <= v <= 180):
+            raise ValueError("longitude חייב להיות בטווח 180- עד 180")
+        return v
+
     @field_validator("origin_city", "destination_city")
     @classmethod
     def validate_city(cls, v: str) -> str:

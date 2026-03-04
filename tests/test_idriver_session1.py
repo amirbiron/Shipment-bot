@@ -790,3 +790,40 @@ class TestDriverSearchCoordinateValidation:
         )
         assert search.latitude == 32.7940
         assert search.longitude == 34.9896
+
+    @pytest.mark.unit
+    def test_latitude_out_of_range_fails(self) -> None:
+        """latitude מחוץ לטווח חייב להיכשל"""
+        with pytest.raises(ValueError, match="latitude"):
+            DriverSearchCreate(
+                origin_city="חיפה",
+                destination_city="חיפה",
+                is_area_search=True,
+                latitude=999.0,
+                longitude=34.9896,
+            )
+
+    @pytest.mark.unit
+    def test_longitude_out_of_range_fails(self) -> None:
+        """longitude מחוץ לטווח חייב להיכשל"""
+        with pytest.raises(ValueError, match="longitude"):
+            DriverSearchCreate(
+                origin_city="חיפה",
+                destination_city="חיפה",
+                is_area_search=True,
+                latitude=32.7940,
+                longitude=999.0,
+            )
+
+    @pytest.mark.unit
+    def test_negative_boundary_coords_pass(self) -> None:
+        """קואורדינטות בגבולות שליליים — תקין"""
+        search = DriverSearchCreate(
+            origin_city="חיפה",
+            destination_city="חיפה",
+            is_area_search=True,
+            latitude=-90.0,
+            longitude=-180.0,
+        )
+        assert search.latitude == -90.0
+        assert search.longitude == -180.0

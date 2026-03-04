@@ -61,7 +61,7 @@ class DriverProfile(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(
         BigInteger, ForeignKey("users.id", ondelete="CASCADE"),
-        unique=True, nullable=False, index=True,
+        unique=True, nullable=False,
     )
 
     # פרטי רישום
