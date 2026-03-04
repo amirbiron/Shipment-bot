@@ -128,10 +128,6 @@ class DriverStateHandler:
         """בודק אם המצב שייך לזרימת הגדרות (לניקוי קונטקסט)"""
         return state.startswith("DRIVER.SETTINGS.")
 
-    def _is_search_flow_state(self, state: str) -> bool:
-        """בודק אם המצב שייך לזרימת חיפוש (לניקוי קונטקסט)"""
-        return state.startswith("DRIVER.SEARCH.")
-
     async def handle_message(
         self,
         user: User,
