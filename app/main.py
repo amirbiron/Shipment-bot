@@ -4,6 +4,7 @@ Shipment Bot - Main FastAPI Application
 import os
 from pathlib import Path
 
+import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_redoc_html
@@ -118,6 +119,55 @@ else:
     logger.warning("frontend/dist לא נמצא — הפאנל לא יוגש", extra_data={"path": str(_PANEL_DIR)})
 
 
+async def _register_telegram_webhook() -> None:
+    """רישום webhook אוטומטי של טלגרם בעלייה — מבטיח שהטוקן ותואם ל-URL הנוכחי."""
+    token = settings.TELEGRAM_BOT_TOKEN
+    if not token:
+        logger.info("TELEGRAM_BOT_TOKEN לא מוגדר — דילוג על רישום webhook")
+        return
+
+    # URL חיצוני: הגדרה מפורשת, או RENDER_EXTERNAL_URL שמסופק אוטומטית ב-Render
+    base_url = settings.TELEGRAM_WEBHOOK_BASE_URL or os.environ.get("RENDER_EXTERNAL_URL", "")
+    if not base_url:
+        logger.warning(
+            "TELEGRAM_WEBHOOK_BASE_URL ו-RENDER_EXTERNAL_URL לא מוגדרים — "
+            "לא ניתן לרשום webhook אוטומטית. "
+            "הגדר TELEGRAM_WEBHOOK_BASE_URL או רשום ידנית."
+        )
+        return
+
+    webhook_url = f"{base_url.rstrip('/')}/api/telegram/webhook"
+    secret_token = settings.TELEGRAM_WEBHOOK_SECRET_TOKEN
+
+    payload: dict[str, str] = {"url": webhook_url}
+    if secret_token:
+        payload["secret_token"] = secret_token
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(
+                f"https://api.telegram.org/bot{token}/setWebhook",
+                data=payload,
+            )
+            result = response.json()
+            if result.get("ok"):
+                logger.info(
+                    "Telegram webhook נרשם בהצלחה",
+                    extra_data={"webhook_url": webhook_url},
+                )
+            else:
+                logger.error(
+                    "רישום Telegram webhook נכשל",
+                    extra_data={"response": result, "webhook_url": webhook_url},
+                )
+    except Exception as e:
+        logger.error(
+            "שגיאה ברישום Telegram webhook",
+            extra_data={"error": str(e), "webhook_url": webhook_url},
+            exc_info=True,
+        )
+
+
 @app.on_event("startup")
 async def startup() -> None:
     """Initialize database tables on startup"""
@@ -139,6 +189,9 @@ async def startup() -> None:
         async with engine.begin() as conn:
             await run_all_migrations(conn)
         logger.info("Auto-migrations completed")
+
+    # רישום webhook של טלגרם — מבטיח שהטוקן הנוכחי מצביע ל-URL הנכון
+    await _register_telegram_webhook()
 
 
 @app.on_event("shutdown")
