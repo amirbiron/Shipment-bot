@@ -52,6 +52,7 @@ from app.db.models.driver_profile import (
     DressCode,
     VehicleCategory,
     DriverVerificationStatus,
+    DriverSubscriptionStatus,
 )
 from app.db.models.driver_search_settings import TripTypeFilter, UpcomingTimeframe
 from app.domain.services.driver_registration_service import DriverRegistrationService
@@ -69,6 +70,7 @@ from app.domain.services.driver_search_service import DriverSearchService
 from app.domain.services.city_abbreviation_service import CityAbbreviationService
 from app.domain.services.ride_posting_service import RidePostingService
 from app.domain.services.pricing_service import PricingService
+from app.domain.services.driver_subscription_service import DriverSubscriptionService
 from app.db.models.driver_search import MAX_ACTIVE_SEARCHES_PER_USER, DriverSearchStatus
 from sqlalchemy import select
 from app.core.exceptions import ValidationException, NotFoundException
@@ -138,6 +140,8 @@ class DriverStateHandler:
         self.session_service = DriverSessionService(db)
         # סשן 7 — פרסום נסיעות + מחירון
         self.ride_posting_service = RidePostingService(db)
+        # סשן 8 — מנויים
+        self.subscription_service = DriverSubscriptionService(db)
 
     def _is_registration_flow_state(self, state: str) -> bool:
         """בודק אם המצב שייך לזרימת רישום או אימות (לניקוי קונטקסט)"""
@@ -267,6 +271,9 @@ class DriverStateHandler:
             DriverState.SEARCH_VIEW_ACTIVE.value: self._handle_search_view_active,
             DriverState.SEARCH_MANAGE.value: self._handle_search_manage,
             DriverState.SEARCH_CREATE_ORIGIN.value: self._handle_search_create_location,
+            # מנוי (סשן 8)
+            DriverState.SUBSCRIPTION_VIEW.value: self._handle_subscription_view,
+            DriverState.SUBSCRIPTION_PURCHASE.value: self._handle_subscription_purchase,
         }
         return handlers.get(state, self._handle_unknown)
 
@@ -754,6 +761,10 @@ class DriverStateHandler:
         # סשן 6: פקודת מחיקת חיפוש בודד — "מ"
         if msg == "מ":
             return await self._build_search_delete_menu(user)
+
+        # סשן 8: ניתוב למנוי
+        if "מנוי" in msg or "💳" in msg:
+            return await self._build_subscription_view(user)
 
         # ניתוב להגדרות חיפוש
         if "הגדרות" in msg:
@@ -1278,7 +1289,20 @@ class DriverStateHandler:
 
         מפרסר את הפקודה ויוצר חיפוש חדש מיידית.
         אם הפקודה היא "פ מיקום" — עובר למצב המתנה למיקום GPS.
+        סשן 8: בודק מנוי פעיל לפני יצירת חיפוש.
         """
+        # סשן 8: בדיקת מנוי פעיל לפני חיפוש
+        if not await self.subscription_service.is_subscription_active(user.id):
+            response = MessageResponse(
+                text=(
+                    "⚠️ <b>המנוי שלך פג תוקף</b>\n\n"
+                    "רכוש מנוי כדי להמשיך לחפש.\n"
+                    "לחץ על כפתור 'מנוי' לפרטים."
+                ),
+                keyboard=[["💳 מנוי"], ["🔙 חזרה לתפריט"]],
+            )
+            return response, DriverState.MENU.value, {}
+
         parsed = CityAbbreviationService.parse_search_command(text)
 
         if not parsed:
@@ -1646,6 +1670,196 @@ class DriverStateHandler:
             keyboard=[["✅ כן — מחק הכל"], ["❌ ביטול"]],
         )
         return response, DriverState.SEARCH_VIEW_ACTIVE.value, {"delete_all_pending": True}
+
+    # ==================== סשן 8: מנוי ====================
+
+    async def _build_subscription_view(
+        self, user: User
+    ) -> Tuple[MessageResponse, str, dict]:
+        """בניית תצוגת סטטוס מנוי עם אפשרויות רכישה"""
+        try:
+            status_info = await self.subscription_service.get_subscription_status(
+                user.id
+            )
+        except NotFoundException:
+            response = MessageResponse(
+                text="❌ שגיאה בטעינת פרטי מנוי. נסה שוב מאוחר יותר.",
+            )
+            return response, DriverState.MENU.value, {}
+
+        # בניית טקסט סטטוס
+        if status_info["is_trial"]:
+            days = status_info["days_remaining"]
+            if days is not None and days > 0:
+                status_text = f"🆓 <b>שבוע ניסיון</b> — נותרו {days} ימים"
+            else:
+                status_text = "⚠️ <b>תקופת הניסיון פגה</b>"
+        elif status_info["status"] == DriverSubscriptionStatus.ACTIVE.value:
+            days = status_info["days_remaining"]
+            if days is not None:
+                expires = status_info["subscription_expires_at"]
+                expires_str = expires.strftime("%d/%m/%Y") if expires else ""
+                status_text = (
+                    f"✅ <b>מנוי פעיל</b>\n"
+                    f"נותרו {days} ימים (עד {expires_str})"
+                )
+            else:
+                status_text = "✅ <b>מנוי פעיל</b>"
+        elif status_info["status"] == DriverSubscriptionStatus.EXPIRED.value:
+            status_text = "⚠️ <b>המנוי פג תוקף</b>"
+        elif status_info["status"] == DriverSubscriptionStatus.PAUSED.value:
+            status_text = "⏸ <b>המנוי מושהה</b>"
+        elif status_info["status"] == DriverSubscriptionStatus.CANCELLED.value:
+            status_text = "❌ <b>המנוי בוטל</b>"
+        else:
+            status_text = "📋 סטטוס לא ידוע"
+
+        text = (
+            "💳 <b>מנוי iDriver</b>\n\n"
+            f"{status_text}\n\n"
+            "📦 <b>חבילות זמינות:</b>\n"
+            "• חודש אחד — 1 חודש\n"
+            "• 3 חודשים — 3 חודשים\n"
+            "• 6 חודשים — 6 חודשים\n"
+            "• שנתי — 12 חודשים\n\n"
+            "בחר חבילה לרכישה:"
+        )
+
+        keyboard = [
+            ["📦 חודש אחד"],
+            ["📦 3 חודשים"],
+            ["📦 6 חודשים"],
+            ["📦 שנתי"],
+            ["🔙 חזרה לתפריט"],
+        ]
+
+        response = MessageResponse(text=text, keyboard=keyboard)
+        return response, DriverState.SUBSCRIPTION_VIEW.value, {}
+
+    async def _handle_subscription_view(
+        self, user: User, message: str, context: dict, **kwargs: object
+    ) -> Tuple[MessageResponse, str, dict]:
+        """
+        מצב צפייה במנוי — טיפול בבחירת חבילה או חזרה לתפריט.
+        """
+        msg = message.strip()
+
+        # חזרה לתפריט
+        if "חזרה" in msg or "תפריט" in msg or msg in ("ת", "חזור"):
+            return await self._build_main_menu(user)
+
+        # בחירת חבילה
+        months = self._parse_subscription_choice(msg)
+        if months is None:
+            response = MessageResponse(
+                text="❌ בחירה לא תקינה. אנא בחר חבילה מהרשימה:",
+                keyboard=[
+                    ["📦 חודש אחד"],
+                    ["📦 3 חודשים"],
+                    ["📦 6 חודשים"],
+                    ["📦 שנתי"],
+                    ["🔙 חזרה לתפריט"],
+                ],
+            )
+            return response, DriverState.SUBSCRIPTION_VIEW.value, {}
+
+        # מעבר לאישור רכישה
+        months_label = self._months_to_label(months)
+        response = MessageResponse(
+            text=(
+                f"💳 <b>אישור רכישת מנוי</b>\n\n"
+                f"חבילה: {months_label}\n\n"
+                f"האם לאשר את הרכישה?"
+            ),
+            keyboard=[
+                [f"✅ אישור רכישה — {months_label}"],
+                ["❌ ביטול"],
+            ],
+        )
+        return (
+            response,
+            DriverState.SUBSCRIPTION_PURCHASE.value,
+            {"subscription_months": str(months)},
+        )
+
+    async def _handle_subscription_purchase(
+        self, user: User, message: str, context: dict, **kwargs: object
+    ) -> Tuple[MessageResponse, str, dict]:
+        """
+        מצב אישור רכישת מנוי — ביצוע הרכישה או ביטול.
+        """
+        msg = message.strip()
+
+        # ביטול
+        if "ביטול" in msg or "חזרה" in msg:
+            return await self._build_subscription_view(user)
+
+        # אישור רכישה
+        if "אישור" in msg:
+            months_str = context.get("subscription_months", "1")
+            try:
+                months = int(months_str)
+            except (ValueError, TypeError):
+                months = 1
+
+            try:
+                profile = await self.subscription_service.purchase_subscription(
+                    user.id, months
+                )
+            except (NotFoundException, ValidationException) as e:
+                error_msg = e.message if hasattr(e, "message") else str(e)
+                response = MessageResponse(
+                    text=f"❌ שגיאה ברכישה: {error_msg}",
+                    keyboard=[["🔙 חזרה לתפריט"]],
+                )
+                return response, DriverState.SUBSCRIPTION_VIEW.value, {
+                    "subscription_months": None,
+                }
+
+            expires_str = ""
+            if profile.subscription_expires_at:
+                expires_str = profile.subscription_expires_at.strftime("%d/%m/%Y")
+
+            months_label = self._months_to_label(months)
+            response = MessageResponse(
+                text=(
+                    "✅ <b>הרכישה בוצעה בהצלחה!</b>\n\n"
+                    f"📦 חבילה: {months_label}\n"
+                    f"📅 תוקף עד: {expires_str}\n\n"
+                    "🎉 אפשר להמשיך לחפש נסיעות!"
+                ),
+                keyboard=[["🔙 חזרה לתפריט"]],
+            )
+            return response, DriverState.MENU.value, {
+                "subscription_months": None,
+            }
+
+        # ברירת מחדל — חזרה לתצוגת מנוי
+        return await self._build_subscription_view(user)
+
+    @staticmethod
+    def _parse_subscription_choice(text: str) -> int | None:
+        """מיפוי בחירת חבילה לחודשים"""
+        if "שנתי" in text or "12" in text:
+            return 12
+        if "6" in text:
+            return 6
+        if "3" in text:
+            return 3
+        if "חודש" in text or "1" in text:
+            return 1
+        return None
+
+    @staticmethod
+    def _months_to_label(months: int) -> str:
+        """מיפוי מספר חודשים לתווית"""
+        labels = {
+            1: "חודש אחד",
+            3: "3 חודשים",
+            6: "6 חודשים",
+            12: "שנתי (12 חודשים)",
+        }
+        return labels.get(months, f"{months} חודשים")
 
     # ==================== fallback ====================
 

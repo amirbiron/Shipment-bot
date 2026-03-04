@@ -67,4 +67,9 @@ celery_app.conf.beat_schedule = {
         "task": "app.workers.tasks.check_driver_sessions",
         "schedule": 60.0,  # דקה
     },
+    # סשן 8: בדיקת מנויי נהגים — תזכורות ועדכון סטטוס (יומית ב-06:00)
+    "check-driver-subscriptions-daily": {
+        "task": "app.workers.tasks.check_driver_subscriptions",
+        "schedule": crontab(hour="6", minute="0"),
+    },
 }
