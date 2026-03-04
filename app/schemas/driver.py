@@ -112,13 +112,41 @@ class DriverSearchSettingsUpdate(BaseModel):
 
     @model_validator(mode="after")
     def validate_future_only_requires_all_timeframe(self) -> "DriverSearchSettingsUpdate":
-        """חוק עסקי: future_only_enabled=True רק אם upcoming_timeframe='all'."""
+        """חוק עסקי: future_only_enabled=True רק אם upcoming_timeframe='all'.
+        בודק רק כששני השדות סופקו באותו עדכון."""
         if self.future_only_enabled is True and self.upcoming_timeframe is not None:
             if self.upcoming_timeframe != UpcomingTimeframe.ALL.value:
                 raise ValueError(
                     "מצב 'עתידי בלבד' זמין רק כאשר מסגרת הזמן היא 'הכל'"
                 )
         return self
+
+    def validate_against_existing(
+        self,
+        existing_future_only_enabled: bool,
+        existing_upcoming_timeframe: str,
+    ) -> None:
+        """ולידציה צולבת מול ערכים קיימים ב-DB — חובה לקרוא לפני apply של עדכון חלקי.
+
+        בודק את התוצאה הסופית (שדה חדש + שדה ישן) מול החוק העסקי:
+        future_only_enabled=True רק אם upcoming_timeframe='all'.
+        """
+        # חשב את הערכים הסופיים לאחר מיזוג העדכון
+        final_future_only = (
+            self.future_only_enabled
+            if self.future_only_enabled is not None
+            else existing_future_only_enabled
+        )
+        final_timeframe = (
+            self.upcoming_timeframe
+            if self.upcoming_timeframe is not None
+            else existing_upcoming_timeframe
+        )
+
+        if final_future_only is True and final_timeframe != UpcomingTimeframe.ALL.value:
+            raise ValueError(
+                "מצב 'עתידי בלבד' זמין רק כאשר מסגרת הזמן היא 'הכל'"
+            )
 
 
 class DriverSearchCreate(BaseModel):

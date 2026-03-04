@@ -442,10 +442,9 @@ async def run_migration_012(conn: AsyncConnection) -> None:
         );
     """))
 
-    await conn.execute(text("""
-        CREATE INDEX IF NOT EXISTS idx_driver_profiles_user
-        ON driver_profiles(user_id);
-    """))
+    # idx_driver_profiles_user — לא נדרש: user_id הוא UNIQUE ו-PostgreSQL
+    # יוצר אינדקס ייחודי אוטומטית לאכיפת האילוץ.
+
     await conn.execute(text("""
         CREATE INDEX IF NOT EXISTS idx_driver_profiles_verification
         ON driver_profiles(verification_status);
@@ -474,10 +473,8 @@ async def run_migration_012(conn: AsyncConnection) -> None:
         );
     """))
 
-    await conn.execute(text("""
-        CREATE INDEX IF NOT EXISTS idx_driver_search_settings_user
-        ON driver_search_settings(user_id);
-    """))
+    # idx_driver_search_settings_user — לא נדרש: user_id הוא UNIQUE ו-PostgreSQL
+    # יוצר אינדקס ייחודי אוטומטית לאכיפת האילוץ.
 
     # טבלה 3: driver_searches
     await conn.execute(text("""
@@ -529,10 +526,9 @@ async def run_migration_012(conn: AsyncConnection) -> None:
         );
     """))
 
-    await conn.execute(text("""
-        CREATE INDEX IF NOT EXISTS idx_driver_sessions_user
-        ON driver_sessions(user_id);
-    """))
+    # idx_driver_sessions_user — לא נדרש: user_id הוא UNIQUE ו-PostgreSQL
+    # יוצר אינדקס ייחודי אוטומטית לאכיפת האילוץ.
+
     await conn.execute(text("""
         CREATE INDEX IF NOT EXISTS idx_driver_sessions_active
         ON driver_sessions(is_active);

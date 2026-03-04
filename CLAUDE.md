@@ -425,6 +425,28 @@ class UserCreate(BaseModel):
         return PhoneNumberValidator.normalize(v)
 ```
 
+**ולידציה צולבת בעדכון חלקי (partial update):**
+`model_validator` על סכמת Update יכול לבדוק רק שדות שסופקו **באותה בקשה**.
+כשיש חוק עסקי בין שני שדות (למשל A תלוי ב-B), עדכון חלקי שמשנה רק את B
+לא ייבדק מול הערך הקיים של A ב-DB. לכן:
+- **חובה להוסיף מתודת `validate_against_existing()`** שמקבלת את הערכים הנוכחיים מה-DB ובודקת את התוצאה הסופית
+- **שכבת השירות חייבת לקרוא ל-`validate_against_existing()`** לפני שמבצעת את העדכון
+
+```python
+# בסכמה — מתודה שמקבלת ערכים קיימים מה-DB
+def validate_against_existing(self, existing_a: bool, existing_b: str) -> None:
+    final_a = self.a if self.a is not None else existing_a
+    final_b = self.b if self.b is not None else existing_b
+    if final_a and final_b != "allowed_value":
+        raise ValueError("שילוב לא תקין")
+
+# בשירות — קריאה לפני apply
+update.validate_against_existing(
+    existing_a=settings.a,
+    existing_b=settings.b,
+)
+```
+
 ### טיפול בשגיאות
 **חובה להשתמש ב-exceptions מותאמים מ-`app/core/exceptions.py`:**
 
@@ -542,6 +564,7 @@ query = select(Delivery).options(
 ```
 
 - **חובה indexes** על שדות בשימוש תכוף ב-WHERE, JOIN, ORDER BY
+- **אסור אינדקס כפול על עמודת UNIQUE** — PostgreSQL יוצר אינדקס ייחודי אוטומטית לאכיפת אילוץ `UNIQUE`. אין לייצר `CREATE INDEX` ידני על אותה עמודה
 - **להעדיף batch operations** במקום לולאות עם queries בודדים
 
 ### ארגון קוד
@@ -719,3 +742,5 @@ if not _is_in_multi_step_flow:
 12. **אסור לבצע פעולה בלי בדיקת authorization** - לוודא שהמשתמש מורשה
 13. **אסור מעבר סטטוס בלי ולידציה** - לבדוק סטטוס נוכחי לפני עדכון
 14. **אסור N+1 queries** - להשתמש ב-`joinedload`/`selectinload`
+15. **אסור אינדקס כפול על עמודת UNIQUE** - PostgreSQL כבר יוצר אינדקס ייחודי אוטומטית
+16. **אסור ולידציה צולבת רק בסכמה ללא בדיקה בשירות** - `model_validator` לא רואה ערכי DB; חובה `validate_against_existing()` בשכבת השירות

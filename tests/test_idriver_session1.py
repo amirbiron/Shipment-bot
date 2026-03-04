@@ -700,6 +700,36 @@ class TestDriverSearchSettingsUpdateSchema:
         assert update.future_only_enabled is True
         assert update.upcoming_timeframe is None
 
+    @pytest.mark.unit
+    def test_validate_against_existing_timeframe_change_blocks_violation(self) -> None:
+        """שינוי timeframe ל-non-all כש-DB מכיל future_only=True חייב להיכשל"""
+        update = DriverSearchSettingsUpdate(upcoming_timeframe="1_hour")
+        with pytest.raises(ValueError, match="עתידי בלבד"):
+            update.validate_against_existing(
+                existing_future_only_enabled=True,
+                existing_upcoming_timeframe="all",
+            )
+
+    @pytest.mark.unit
+    def test_validate_against_existing_future_only_change_blocks_violation(self) -> None:
+        """הפעלת future_only כש-DB מכיל timeframe שאינו all חייב להיכשל"""
+        update = DriverSearchSettingsUpdate(future_only_enabled=True)
+        with pytest.raises(ValueError, match="עתידי בלבד"):
+            update.validate_against_existing(
+                existing_future_only_enabled=False,
+                existing_upcoming_timeframe="1_hour",
+            )
+
+    @pytest.mark.unit
+    def test_validate_against_existing_valid_combination_passes(self) -> None:
+        """שינוי timeframe ל-non-all כש-DB מכיל future_only=False חייב לעבור"""
+        update = DriverSearchSettingsUpdate(upcoming_timeframe="2_hours")
+        # לא אמור לזרוק שגיאה
+        update.validate_against_existing(
+            existing_future_only_enabled=False,
+            existing_upcoming_timeframe="all",
+        )
+
 
 class TestDriverSearchCoordinateValidation:
     """בדיקות ולידציית קואורדינטות בחיפוש"""
