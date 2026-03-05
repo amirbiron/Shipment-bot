@@ -1905,15 +1905,14 @@ async def telegram_webhook(
 
     # "חזרה לתפריט" מתנהג כמו לחיצה על # (כולל איפוס state) — גם אם המשתמש הגיע עם state תקוע
     # סשן 9: DRIVER בזרימת סדרן מוחרג — מנוהל דרך בלוק DISPATCHER למטה
-    _driver_in_dispatcher_flow = (
-        user.role == UserRole.DRIVER
-        and isinstance(current_state, str)
+    _in_dispatcher_flow = (
+        isinstance(current_state, str)
         and current_state.startswith("DISPATCHER.")
     )
     if "חזרה לתפריט" in text and user.role not in (
         UserRole.COURIER,
         UserRole.STATION_OWNER,
-    ) and not _driver_in_dispatcher_flow:
+    ) and not _in_dispatcher_flow:
         response, new_state = await _route_to_role_menu(user, db, state_manager)
         _queue_response_send(background_tasks, send_chat_id, response)
         return {"ok": True, "new_state": new_state, "reset": True}
@@ -1996,7 +1995,7 @@ async def telegram_webhook(
 
     # כפתורי תפריט ראשי/שיווק - guard אחד
     if not is_in_multi_step_flow:
-        if user.role == UserRole.SENDER:
+        if user.role in (UserRole.SENDER, UserRole.ADMIN):
             for keyword, handler_fn in _SENDER_BUTTON_ROUTES:
                 if keyword in text:
                     response, new_state = await handler_fn(

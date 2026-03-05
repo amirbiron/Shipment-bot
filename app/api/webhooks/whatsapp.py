@@ -1470,16 +1470,15 @@ async def whatsapp_webhook(
                     continue
     
     
-                # סשן 9: DRIVER מוחרג רק כשנמצא בזרימת סדרן — נהג רגיל מקבל reset רגיל
-                _driver_in_dispatcher_flow = (
-                    user.role == UserRole.DRIVER
-                    and isinstance(_current_state_value, str)
+                # כל תפקיד שנמצא בזרימת סדרן מוחרג — מנוהל דרך בלוק DISPATCHER למטה
+                _in_dispatcher_flow = (
+                    isinstance(_current_state_value, str)
                     and _current_state_value.startswith("DISPATCHER.")
                 )
                 if "חזרה לתפריט" in text and (
                     (
                         user.role not in (UserRole.COURIER, UserRole.STATION_OWNER)
-                        and not _driver_in_dispatcher_flow
+                        and not _in_dispatcher_flow
                     )
                     or _admin_root_menu
                 ):
