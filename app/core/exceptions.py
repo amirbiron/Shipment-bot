@@ -249,10 +249,7 @@ class InsufficientCreditError(WalletException):
             error_code=ErrorCode.INSUFFICIENT_CREDIT,
             courier_id=courier_id,
             details={
-                "current_balance": current_balance,
-                "required_amount": required_amount,
-                "credit_limit": credit_limit,
-                "available_credit": current_balance - credit_limit
+                "message": "אין מספיק יתרה לביצוע הפעולה"
             }
         )
 

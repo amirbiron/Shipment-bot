@@ -26,7 +26,7 @@ class TestCorrelationId:
         cid = generate_correlation_id()
 
         assert cid is not None
-        assert len(cid) == 8
+        assert len(cid) == 16
         assert cid.isalnum()
 
     @pytest.mark.unit
@@ -44,7 +44,7 @@ class TestCorrelationId:
         result = set_correlation_id(None)
 
         assert result is not None
-        assert len(result) == 8
+        assert len(result) == 16
 
 
 class TestJSONFormatter:

@@ -191,7 +191,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         if not self._debug:
             response.headers["Content-Security-Policy"] = "upgrade-insecure-requests"
             response.headers["Strict-Transport-Security"] = (
-                "max-age=31536000; includeSubDomains"
+                "max-age=604800; includeSubDomains"
             )
 
         return response
