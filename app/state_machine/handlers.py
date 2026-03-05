@@ -942,6 +942,18 @@ class CourierStateHandler:
                 user, message, context, photo_file_id
             )
 
+        # שליח חסום — אסור לאפשר הגשה מחדש
+        if user.terms_accepted_at is not None and user.approval_status == ApprovalStatus.BLOCKED:
+            logger.warning(
+                "שליח חסום ניסה להירשם מחדש",
+                extra_data={"user_id": user.id},
+            )
+            response = MessageResponse(
+                "חשבונך חסום ולא ניתן להירשם מחדש.\n"
+                "לבירורים, פנה לתמיכה."
+            )
+            return response, CourierState.INITIAL.value, {}
+
         # שליח שנדחה/חדש — מתחיל רישום (מאפשר הגשה חוזרת)
         response = MessageResponse(
             "ברוכים הבאים למערכת משלוח בצ'יק! 🚚\n\n"

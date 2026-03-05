@@ -149,6 +149,27 @@ class TestCourierHandleInitialRegistrationCheck:
 
         assert next_state == CourierState.REGISTER_COLLECT_NAME.value
 
+    @pytest.mark.asyncio
+    async def test_blocked_courier_cannot_reregister(self, db_session, user_factory):
+        """שליח חסום — אסור לאפשר הגשה מחדש, צריך לחסום רישום"""
+        user = await user_factory(
+            name="חסום",
+            full_name="חסום חסום",
+            role=UserRole.COURIER,
+            approval_status=ApprovalStatus.BLOCKED,
+        )
+        user.terms_accepted_at = datetime.utcnow()
+        await db_session.commit()
+
+        handler = CourierStateHandler(db_session)
+        response, next_state, ctx = await handler._handle_initial(
+            user, "test", {}, ""
+        )
+
+        # שליח חסום לא צריך להגיע לרישום
+        assert next_state == CourierState.INITIAL.value
+        assert "חסום" in response.text
+
 
 # ============================================================================
 # תיקון #3: Race condition בארנק
