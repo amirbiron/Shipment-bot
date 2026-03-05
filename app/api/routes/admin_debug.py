@@ -25,7 +25,7 @@ from app.core.logging import get_logger
 from app.db.database import get_db
 from app.db.models.conversation_session import ConversationSession
 from app.db.models.outbox_message import MessageStatus, OutboxMessage
-from app.db.models.user import User
+from app.db.models.user import User, UserRole, ApprovalStatus
 
 logger = get_logger(__name__)
 
@@ -442,3 +442,311 @@ async def force_user_state(
         updated_at=session.updated_at,
         last_activity_at=session.last_activity_at,
     )
+
+
+# ---------------------------------------------------------------------------
+# ניהול תפקידים — חיפוש משתמש + שינוי תפקיד + דף ווב
+# ---------------------------------------------------------------------------
+
+# תפקידים תקינים לשינוי
+_VALID_ROLES = [r.value for r in UserRole]
+
+
+class RoleSearchResponse(BaseModel):
+    """תוצאת חיפוש משתמש לניהול תפקידים"""
+    user_id: int
+    name: str | None
+    phone: str | None
+    telegram_chat_id: str | None
+    role: str
+    approval_status: str | None
+
+
+class RoleChangeRequest(BaseModel):
+    """בקשת שינוי תפקיד"""
+    role: str = Field(..., description="תפקיד חדש")
+
+    @field_validator("role")
+    @classmethod
+    def validate_role(cls, v: str) -> str:
+        if v not in _VALID_ROLES:
+            raise ValueError(f"תפקיד לא תקין: {v}. תפקידים אפשריים: {_VALID_ROLES}")
+        return v
+
+
+class RoleChangeResponse(BaseModel):
+    """תוצאת שינוי תפקיד"""
+    user_id: int
+    name: str | None
+    old_role: str
+    new_role: str
+    approval_status: str | None
+
+
+@router.get(
+    "/roles/search",
+    response_model=list[RoleSearchResponse],
+    summary="חיפוש משתמשים לניהול תפקידים",
+    description="חיפוש לפי שם, טלפון, מזהה טלגרם או user_id.",
+    responses={200: {"description": "רשימת משתמשים תואמים"}},
+)
+async def search_users_for_roles(
+    q: str = Query(..., min_length=1, description="מחרוזת חיפוש"),
+    _: None = Depends(require_admin_api_key),
+    db: AsyncSession = Depends(get_db),
+) -> list[RoleSearchResponse]:
+    """חיפוש משתמשים לפי שם / טלפון / telegram_chat_id / user_id."""
+    from app.core.validation import PhoneNumberValidator
+
+    conditions = []
+    # חיפוש לפי user_id מספרי
+    if q.isdigit():
+        conditions.append(User.id == int(q))
+    # חיפוש לפי שם (ILIKE)
+    conditions.append(User.full_name.ilike(f"%{q}%"))
+    conditions.append(User.name.ilike(f"%{q}%"))
+    # חיפוש לפי טלפון
+    conditions.append(User.phone_number.ilike(f"%{q}%"))
+    # חיפוש לפי telegram_chat_id
+    conditions.append(User.telegram_chat_id == q)
+
+    from sqlalchemy import or_
+    result = await db.execute(
+        select(User).where(or_(*conditions)).limit(20)
+    )
+    users = result.scalars().all()
+
+    return [
+        RoleSearchResponse(
+            user_id=u.id,
+            name=u.full_name or u.name,
+            phone=PhoneNumberValidator.mask(u.phone_number) if u.phone_number else None,
+            telegram_chat_id=u.telegram_chat_id,
+            role=u.role.value if hasattr(u.role, "value") else str(u.role),
+            approval_status=u.approval_status.value if u.approval_status else None,
+        )
+        for u in users
+    ]
+
+
+@router.patch(
+    "/roles/{user_id}",
+    response_model=RoleChangeResponse,
+    summary="שינוי תפקיד משתמש",
+    description="שינוי תפקיד של משתמש לפי user_id.",
+    responses={
+        200: {"description": "התפקיד שונה בהצלחה"},
+        404: {"description": "משתמש לא נמצא"},
+    },
+)
+async def change_user_role(
+    user_id: int,
+    body: RoleChangeRequest,
+    _: None = Depends(require_admin_api_key),
+    db: AsyncSession = Depends(get_db),
+) -> RoleChangeResponse:
+    """שינוי תפקיד משתמש."""
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="משתמש לא נמצא")
+
+    old_role = user.role.value if hasattr(user.role, "value") else str(user.role)
+    new_role = UserRole(body.role)
+    user.role = new_role
+
+    # שליח — הגדרת approval_status אם לא מוגדר
+    if new_role == UserRole.COURIER and user.approval_status is None:
+        user.approval_status = ApprovalStatus.APPROVED
+
+    await db.commit()
+
+    logger.info(
+        "שינוי תפקיד ע\"י אדמין (פאנל)",
+        extra_data={
+            "user_id": user_id,
+            "old_role": old_role,
+            "new_role": body.role,
+        },
+    )
+
+    return RoleChangeResponse(
+        user_id=user.id,
+        name=user.full_name or user.name,
+        old_role=old_role,
+        new_role=body.role,
+        approval_status=user.approval_status.value if user.approval_status else None,
+    )
+
+
+from fastapi.responses import HTMLResponse
+
+
+@router.get(
+    "/roles",
+    response_class=HTMLResponse,
+    summary="דף ניהול תפקידים",
+    description="ממשק ווב לחיפוש משתמשים ושינוי תפקידים.",
+    include_in_schema=False,
+)
+async def roles_management_page(
+    _: None = Depends(require_admin_api_key),
+) -> HTMLResponse:
+    """דף HTML לניהול תפקידים — מוגן ב-API key."""
+    html = """<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ניהול תפקידים</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+         background: #f5f5f5; color: #333; padding: 20px; direction: rtl; }
+  .container { max-width: 800px; margin: 0 auto; }
+  h1 { margin-bottom: 20px; color: #1a73e8; }
+  .card { background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.12);
+          padding: 20px; margin-bottom: 16px; }
+  .search-box { display: flex; gap: 8px; margin-bottom: 20px; }
+  .search-box input { flex: 1; padding: 10px 14px; border: 1px solid #ddd;
+                       border-radius: 6px; font-size: 15px; }
+  .search-box button { padding: 10px 20px; background: #1a73e8; color: #fff;
+                        border: none; border-radius: 6px; cursor: pointer; font-size: 15px; }
+  .search-box button:hover { background: #1557b0; }
+  .api-key-box { margin-bottom: 16px; }
+  .api-key-box input { width: 100%; padding: 10px 14px; border: 1px solid #ddd;
+                        border-radius: 6px; font-size: 14px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 10px 12px; text-align: right; border-bottom: 1px solid #eee; }
+  th { background: #f8f9fa; font-weight: 600; }
+  select { padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; }
+  .btn-change { padding: 6px 14px; background: #34a853; color: #fff; border: none;
+                 border-radius: 4px; cursor: pointer; font-size: 13px; }
+  .btn-change:hover { background: #2d8e47; }
+  .msg { padding: 10px; border-radius: 6px; margin-bottom: 12px; display: none; }
+  .msg.success { background: #e6f4ea; color: #137333; display: block; }
+  .msg.error { background: #fce8e6; color: #c5221f; display: block; }
+  .empty { text-align: center; color: #888; padding: 30px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>ניהול תפקידים</h1>
+  <div class="card">
+    <div class="api-key-box">
+      <label><b>מפתח API:</b></label>
+      <input type="password" id="apiKey" placeholder="הזן X-Admin-API-Key">
+    </div>
+    <div class="search-box">
+      <input type="text" id="searchInput" placeholder="חיפוש לפי שם, טלפון, ID או telegram_chat_id">
+      <button onclick="searchUsers()">חיפוש</button>
+    </div>
+    <div id="message" class="msg"></div>
+    <div id="results">
+      <p class="empty">הזן מחרוזת חיפוש כדי למצוא משתמשים</p>
+    </div>
+  </div>
+</div>
+<script>
+const ROLES = ['sender','courier','driver','station_owner','admin'];
+const ROLE_LABELS = {
+  sender: 'שולח', courier: 'שליח', driver: 'נהג',
+  station_owner: 'בעל תחנה', admin: 'אדמין'
+};
+
+function getApiKey() {
+  return document.getElementById('apiKey').value.trim();
+}
+
+function showMsg(text, type) {
+  const el = document.getElementById('message');
+  el.textContent = text;
+  el.className = 'msg ' + type;
+  setTimeout(() => { el.className = 'msg'; }, 5000);
+}
+
+async function searchUsers() {
+  const q = document.getElementById('searchInput').value.trim();
+  if (!q) return;
+  const key = getApiKey();
+  if (!key) { showMsg('נדרש מפתח API', 'error'); return; }
+
+  try {
+    const basePath = window.location.pathname.replace(/\\/roles\\/?$/, '');
+    const resp = await fetch(basePath + '/roles/search?q=' + encodeURIComponent(q), {
+      headers: { 'X-Admin-API-Key': key }
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      showMsg(err.detail || 'שגיאה בחיפוש', 'error');
+      return;
+    }
+    const users = await resp.json();
+    renderResults(users);
+  } catch (e) {
+    showMsg('שגיאת רשת: ' + e.message, 'error');
+  }
+}
+
+function esc(str) {
+  const d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+}
+
+function renderResults(users) {
+  const el = document.getElementById('results');
+  if (!users.length) {
+    el.innerHTML = '<p class="empty">לא נמצאו משתמשים</p>';
+    return;
+  }
+  let html = '<table><thead><tr><th>ID</th><th>שם</th><th>טלפון</th><th>Telegram</th><th>תפקיד</th><th>פעולה</th></tr></thead><tbody>';
+  for (const u of users) {
+    const safeId = Number(u.user_id);
+    const opts = ROLES.map(r =>
+      '<option value="' + esc(r) + '"' + (r === u.role ? ' selected' : '') + '>' + esc(ROLE_LABELS[r] || r) + '</option>'
+    ).join('');
+    html += '<tr>' +
+      '<td>' + safeId + '</td>' +
+      '<td>' + esc(u.name || '-') + '</td>' +
+      '<td>' + esc(u.phone || '-') + '</td>' +
+      '<td>' + esc(u.telegram_chat_id || '-') + '</td>' +
+      '<td><select id="role-' + safeId + '">' + opts + '</select></td>' +
+      '<td><button class="btn-change" onclick="changeRole(' + safeId + ')">שנה</button></td>' +
+      '</tr>';
+  }
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+async function changeRole(userId) {
+  const key = getApiKey();
+  if (!key) { showMsg('נדרש מפתח API', 'error'); return; }
+  const role = document.getElementById('role-' + userId).value;
+
+  try {
+    const basePath = window.location.pathname.replace(/\\/roles\\/?$/, '');
+    const resp = await fetch(basePath + '/roles/' + userId, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'X-Admin-API-Key': key },
+      body: JSON.stringify({ role: role })
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      showMsg(err.detail || 'שגיאה בשינוי תפקיד', 'error');
+      return;
+    }
+    const data = await resp.json();
+    showMsg('תפקיד שונה: ' + (ROLE_LABELS[data.old_role]||data.old_role) + ' -> ' + (ROLE_LABELS[data.new_role]||data.new_role), 'success');
+  } catch (e) {
+    showMsg('שגיאת רשת: ' + e.message, 'error');
+  }
+}
+
+document.getElementById('searchInput').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') searchUsers();
+});
+</script>
+</body>
+</html>"""
+    return HTMLResponse(content=html)

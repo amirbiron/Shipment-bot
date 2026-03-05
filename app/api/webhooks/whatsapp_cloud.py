@@ -557,25 +557,12 @@ async def _route_message_to_handler(
 
             # מצב מיוחד: admin_handler מחזיר _ADMIN_SWITCH_* כשצריך לנתב לתפקיד חדש
             if isinstance(new_state, str) and new_state.startswith("_ADMIN_SWITCH_"):
-                # שמירת מפתחות אדמין לפני שהניתוב מוחק את ה-context
-                admin_ctx = await state_manager.get_context(user.id, "whatsapp")
                 background_tasks.add_task(
                     send_whatsapp_message, reply_to, response.text, response.keyboard
                 )
+                # _route_to_role_menu_wa שומר ומשחזר admin context אוטומטית,
+                # ומוסיף כפתור "חזרה לאדמין" לתגובה
                 response2, new_state2 = await _route_to_role_menu_wa(user, db, state_manager)
-                # שחזור מפתחות אדמין כדי שחזרה לאדמין תעבוד
-                _admin_keys = {
-                    k: admin_ctx[k]
-                    for k in ("original_role", "original_approval_status",
-                              "admin_station_id", "admin_target_role")
-                    if k in admin_ctx
-                }
-                if _admin_keys:
-                    ctx = await state_manager.get_context(user.id, "whatsapp")
-                    ctx.update(_admin_keys)
-                    await state_manager.force_state(
-                        user.id, "whatsapp", new_state2, context=ctx
-                    )
                 background_tasks.add_task(
                     send_whatsapp_message, reply_to, response2.text, response2.keyboard
                 )
@@ -765,7 +752,15 @@ async def _route_message_to_handler(
             # חשוב: קוראים ישירות ל-fallback ולא ל-_route_to_role_menu_wa כדי למנוע
             # לולאה (כי _route_to_role_menu_wa יזהה שהמשתמש סדרן ויחזיר לתפריט סדרן).
             if text and ("חזרה לתפריט נהג" in text or "חזרה לתפריט ראשי" in text):
-                if user.role == UserRole.COURIER:
+                # אדמין שהחליף תפקיד — שחזור ישיר לתפריט אדמין
+                # (לא _route_to_role_menu_wa — כי הוא יזהה סדרן ויחזור ללולאה)
+                _back_ctx_cl = await state_manager.get_context(user.id, "whatsapp")
+                if _back_ctx_cl.get("original_role") == "admin":
+                    from app.api.webhooks._admin_context import restore_admin_role_and_route
+                    response, new_state = await restore_admin_role_and_route(
+                        user, db, state_manager, "whatsapp"
+                    )
+                elif user.role == UserRole.COURIER:
                     await state_manager.force_state(
                         user.id, "whatsapp", CourierState.MENU.value, context={}
                     )
@@ -780,6 +775,11 @@ async def _route_message_to_handler(
             else:
                 handler = DispatcherStateHandler(db, station.id, platform="whatsapp")
                 response, new_state = await handler.handle_message(user, text, photo_file_id)
+                # הוספת כפתור "חזרה לאדמין" אם נדרש
+                _disp_ctx_cl = await state_manager.get_context(user.id, "whatsapp")
+                if _disp_ctx_cl.get("original_role") == "admin":
+                    from app.api.webhooks._admin_context import inject_admin_return_button
+                    inject_admin_return_button(response)
         else:
             logger.warning(
                 "Dispatcher station not found, resetting to menu",
@@ -799,11 +799,24 @@ async def _route_message_to_handler(
         station = await station_service.get_dispatcher_station(user.id)
 
         if station:
+            from app.api.webhooks._admin_context import (
+                save_admin_context as _save_ac_cl,
+                restore_admin_context as _restore_ac_cl,
+                inject_admin_return_button as _inject_btn_cl,
+            )
+            _dm_ak_cl = await _save_ac_cl(user.id, state_manager, "whatsapp")
             await state_manager.force_state(
                 user.id, "whatsapp", DispatcherState.MENU.value, context={}
             )
             handler = DispatcherStateHandler(db, station.id, platform="whatsapp")
             response, new_state = await handler.handle_message(user, "תפריט", None)
+            # שחזור admin context אחרי ה-handler
+            if _dm_ak_cl:
+                await _restore_ac_cl(
+                    user.id, state_manager, new_state, _dm_ak_cl, "whatsapp"
+                )
+            if _dm_ak_cl and _dm_ak_cl.get("original_role") == "admin":
+                _inject_btn_cl(response)
         else:
             logger.warning(
                 "Dispatcher clicked station menu but station not found",

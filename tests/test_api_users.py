@@ -27,7 +27,7 @@ class TestUserAPI:
         assert response.status_code == 200
         data = response.json()
         assert data["name"] == "Test User"
-        assert data["role"] == "SENDER"
+        assert data["role"] == "sender"
         # Phone should be normalized
         assert data["phone_number"] == "+972503333333"
 

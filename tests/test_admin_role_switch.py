@@ -630,3 +630,370 @@ class TestAdminBugFixes:
         }
         assert len(new_keys) == 4
         assert "original_approval_status" in new_keys
+
+    @pytest.mark.asyncio
+    async def test_inject_admin_return_button(self):
+        """הוספת כפתור 'חזרה לאדמין' לתגובה."""
+        from app.state_machine.handlers import MessageResponse
+        from app.api.webhooks._admin_context import inject_admin_return_button as _inject_admin_return_button
+
+        # עם keyboard קיים
+        response = MessageResponse("test", keyboard=[["כפתור 1"]])
+        _inject_admin_return_button(response)
+        flat = [btn for row in response.keyboard for btn in row]
+        assert "🔙 חזרה לאדמין" in flat
+
+        # ללא keyboard
+        response2 = MessageResponse("test", keyboard=None)
+        _inject_admin_return_button(response2)
+        assert response2.keyboard == [["🔙 חזרה לאדמין"]]
+
+        # לא מוסיף כפול
+        _inject_admin_return_button(response)
+        count = sum(
+            1 for row in response.keyboard for btn in row if "חזרה לאדמין" in btn
+        )
+        assert count == 1
+
+    @pytest.mark.asyncio
+    async def test_route_to_role_menu_preserves_admin_context(
+        self, db_session, user_factory
+    ):
+        """_route_to_role_menu שומרת admin context ומוסיפה כפתור 'חזרה לאדמין'."""
+        admin = await user_factory(
+            phone_number="+972500000032",
+            name="Admin Route Preserve",
+            role=UserRole.SENDER,  # שונה מ-ADMIN (כמו אחרי החלפת תפקיד)
+            platform="telegram",
+            telegram_chat_id="90032",
+        )
+        state_manager = StateManager(db_session)
+        # סימולציה: admin context קיים (כמו אחרי החלפת תפקיד)
+        await state_manager.force_state(
+            admin.id, "telegram", "SENDER.MENU",
+            context={
+                "original_role": "admin",
+                "original_approval_status": None,
+                "admin_station_id": None,
+                "admin_target_role": "sender",
+            },
+        )
+
+        from app.api.webhooks.telegram import _route_to_role_menu
+
+        response, new_state = await _route_to_role_menu(admin, db_session, state_manager)
+
+        # ולידציה: admin context נשמר
+        ctx = await state_manager.get_context(admin.id, "telegram")
+        assert ctx.get("original_role") == "admin"
+        assert ctx.get("admin_target_role") == "sender"
+
+        # ולידציה: כפתור "חזרה לאדמין" מופיע
+        flat = [btn for row in (response.keyboard or []) for btn in row]
+        assert "🔙 חזרה לאדמין" in flat
+
+    @pytest.mark.asyncio
+    async def test_route_to_role_menu_no_button_without_admin_context(
+        self, db_session, user_factory
+    ):
+        """_route_to_role_menu לא מוסיפה כפתור כשאין admin context."""
+        sender = await user_factory(
+            phone_number="+972500000033",
+            name="Regular Sender",
+            role=UserRole.SENDER,
+            platform="telegram",
+            telegram_chat_id="90033",
+        )
+        state_manager = StateManager(db_session)
+        await state_manager.force_state(
+            sender.id, "telegram", "SENDER.MENU", context={}
+        )
+
+        from app.api.webhooks.telegram import _route_to_role_menu
+
+        response, new_state = await _route_to_role_menu(sender, db_session, state_manager)
+
+        # ולידציה: אין כפתור "חזרה לאדמין" למשתמש רגיל
+        flat = [btn for row in (response.keyboard or []) for btn in row]
+        assert "🔙 חזרה לאדמין" not in flat
+
+
+# ============================================================================
+# בדיקות API endpoint לניהול תפקידים
+# ============================================================================
+
+
+class TestRoleManagementAPI:
+    """בדיקות endpoint שינוי תפקיד."""
+
+    @pytest.fixture(autouse=True)
+    def _set_admin_key(self):
+        """הגדרת ADMIN_API_KEY לבדיקות"""
+        from app.core.config import settings
+        with patch.object(settings, "ADMIN_API_KEY", "test-admin-key"):
+            yield
+
+    @pytest.mark.asyncio
+    async def test_update_role_to_admin(self, test_client, db_session, user_factory):
+        """שינוי תפקיד לאדמין דרך API."""
+        user = await user_factory(
+            phone_number="+972500000040",
+            name="Role Change Test",
+            role=UserRole.SENDER,
+            platform="telegram",
+            telegram_chat_id="90040",
+        )
+
+        resp = await test_client.patch(
+            f"/api/users/{user.id}/role",
+            json={"role": "admin"},
+            headers={"X-Admin-API-Key": "test-admin-key"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["role"] == "admin"
+        assert data["previous_role"] == "sender"
+
+    @pytest.mark.asyncio
+    async def test_update_role_requires_api_key(self, test_client, db_session, user_factory):
+        """בקשה ללא API key נדחית."""
+        user = await user_factory(
+            phone_number="+972500000041",
+            name="No Key Test",
+            role=UserRole.SENDER,
+            platform="telegram",
+            telegram_chat_id="90041",
+        )
+        resp = await test_client.patch(
+            f"/api/users/{user.id}/role",
+            json={"role": "admin"},
+        )
+        assert resp.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_update_role_wrong_api_key(self, test_client, db_session, user_factory):
+        """מפתח API שגוי נדחה."""
+        user = await user_factory(
+            phone_number="+972500000042",
+            name="Wrong Key Test",
+            role=UserRole.SENDER,
+            platform="telegram",
+            telegram_chat_id="90042",
+        )
+        resp = await test_client.patch(
+            f"/api/users/{user.id}/role",
+            json={"role": "admin"},
+            headers={"X-Admin-API-Key": "wrong-key"},
+        )
+        assert resp.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_update_role_invalid_role(self, test_client, db_session, user_factory):
+        """תפקיד לא תקין מחזיר שגיאת ולידציה."""
+        user = await user_factory(
+            phone_number="+972500000043",
+            name="Invalid Role Test",
+            role=UserRole.SENDER,
+            platform="telegram",
+            telegram_chat_id="90043",
+        )
+        resp = await test_client.patch(
+            f"/api/users/{user.id}/role",
+            json={"role": "superadmin"},
+            headers={"X-Admin-API-Key": "test-admin-key"},
+        )
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_update_role_user_not_found(self, test_client):
+        """משתמש לא קיים מחזיר 404."""
+        resp = await test_client.patch(
+            "/api/users/999999/role",
+            json={"role": "admin"},
+            headers={"X-Admin-API-Key": "test-admin-key"},
+        )
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_get_user_by_telegram_id(self, test_client, db_session, user_factory):
+        """חיפוש משתמש לפי Telegram Chat ID."""
+        user = await user_factory(
+            phone_number="+972500000044",
+            name="Telegram Lookup Test",
+            role=UserRole.DRIVER,
+            platform="telegram",
+            telegram_chat_id="90044",
+        )
+        resp = await test_client.get(
+            "/api/users/telegram/90044/role",
+            headers={"X-Admin-API-Key": "test-admin-key"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["id"] == user.id
+        assert data["role"] == "driver"
+
+    @pytest.mark.asyncio
+    async def test_courier_role_sets_approved(self, test_client, db_session, user_factory):
+        """שינוי לשליח מגדיר approval_status=APPROVED."""
+        user = await user_factory(
+            phone_number="+972500000045",
+            name="Courier Approval Test",
+            role=UserRole.SENDER,
+            platform="telegram",
+            telegram_chat_id="90045",
+        )
+        resp = await test_client.patch(
+            f"/api/users/{user.id}/role",
+            json={"role": "courier"},
+            headers={"X-Admin-API-Key": "test-admin-key"},
+        )
+        assert resp.status_code == 200
+
+        # ולידציה ב-DB
+        await db_session.refresh(user)
+        assert user.role == UserRole.COURIER
+        from app.db.models.user import ApprovalStatus
+        assert user.approval_status == ApprovalStatus.APPROVED
+
+
+class TestAdminDebugRoleManagement:
+    """בדיקות endpoints ניהול תפקידים בפאנל אדמין (/admin/debug/roles)."""
+
+    @pytest.fixture(autouse=True)
+    def _set_admin_key(self):
+        from app.core.config import settings
+        with patch.object(settings, "ADMIN_API_KEY", "test-admin-key"):
+            yield
+
+    @pytest.mark.asyncio
+    async def test_search_users_by_name(self, test_client, db_session, user_factory):
+        """חיפוש משתמש לפי שם."""
+        user = await user_factory(
+            phone_number="+972500000050",
+            name="חיפוש פאנל",
+            role=UserRole.SENDER,
+            platform="telegram",
+            telegram_chat_id="90050",
+        )
+        resp = await test_client.get(
+            "/api/admin/debug/roles/search?q=חיפוש פאנל",
+            headers={"X-Admin-API-Key": "test-admin-key"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert any(u["user_id"] == user.id for u in data)
+
+    @pytest.mark.asyncio
+    async def test_search_users_by_id(self, test_client, db_session, user_factory):
+        """חיפוש משתמש לפי user_id."""
+        user = await user_factory(
+            phone_number="+972500000051",
+            name="ID Search",
+            role=UserRole.SENDER,
+            platform="telegram",
+            telegram_chat_id="90051",
+        )
+        resp = await test_client.get(
+            f"/api/admin/debug/roles/search?q={user.id}",
+            headers={"X-Admin-API-Key": "test-admin-key"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert any(u["user_id"] == user.id for u in data)
+
+    @pytest.mark.asyncio
+    async def test_search_requires_api_key(self, test_client):
+        """חיפוש ללא API key נדחה."""
+        resp = await test_client.get(
+            "/api/admin/debug/roles/search?q=test",
+        )
+        assert resp.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_change_role_via_panel(self, test_client, db_session, user_factory):
+        """שינוי תפקיד דרך endpoint הפאנל."""
+        user = await user_factory(
+            phone_number="+972500000052",
+            name="Panel Role Change",
+            role=UserRole.SENDER,
+            platform="telegram",
+            telegram_chat_id="90052",
+        )
+        resp = await test_client.patch(
+            f"/api/admin/debug/roles/{user.id}",
+            json={"role": "admin"},
+            headers={"X-Admin-API-Key": "test-admin-key"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["old_role"] == "sender"
+        assert data["new_role"] == "admin"
+
+        # ולידציה ב-DB
+        await db_session.refresh(user)
+        assert user.role == UserRole.ADMIN
+
+    @pytest.mark.asyncio
+    async def test_change_role_courier_sets_approved(self, test_client, db_session, user_factory):
+        """שינוי לשליח דרך הפאנל מגדיר APPROVED."""
+        user = await user_factory(
+            phone_number="+972500000053",
+            name="Panel Courier",
+            role=UserRole.SENDER,
+            platform="telegram",
+            telegram_chat_id="90053",
+        )
+        resp = await test_client.patch(
+            f"/api/admin/debug/roles/{user.id}",
+            json={"role": "courier"},
+            headers={"X-Admin-API-Key": "test-admin-key"},
+        )
+        assert resp.status_code == 200
+        await db_session.refresh(user)
+        assert user.role == UserRole.COURIER
+        assert user.approval_status == ApprovalStatus.APPROVED
+
+    @pytest.mark.asyncio
+    async def test_change_role_invalid(self, test_client, db_session, user_factory):
+        """תפקיד לא תקין מחזיר 422."""
+        user = await user_factory(
+            phone_number="+972500000054",
+            name="Panel Invalid",
+            role=UserRole.SENDER,
+            platform="telegram",
+            telegram_chat_id="90054",
+        )
+        resp = await test_client.patch(
+            f"/api/admin/debug/roles/{user.id}",
+            json={"role": "superadmin"},
+            headers={"X-Admin-API-Key": "test-admin-key"},
+        )
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_change_role_user_not_found(self, test_client):
+        """משתמש לא קיים מחזיר 404."""
+        resp = await test_client.patch(
+            "/api/admin/debug/roles/999999",
+            json={"role": "admin"},
+            headers={"X-Admin-API-Key": "test-admin-key"},
+        )
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_roles_html_page(self, test_client):
+        """דף HTML נטען בהצלחה."""
+        resp = await test_client.get(
+            "/api/admin/debug/roles",
+            headers={"X-Admin-API-Key": "test-admin-key"},
+        )
+        assert resp.status_code == 200
+        assert "ניהול תפקידים" in resp.text
+        assert "text/html" in resp.headers.get("content-type", "")
+
+    @pytest.mark.asyncio
+    async def test_roles_html_page_requires_auth(self, test_client):
+        """דף HTML דורש API key."""
+        resp = await test_client.get("/api/admin/debug/roles")
+        assert resp.status_code == 401

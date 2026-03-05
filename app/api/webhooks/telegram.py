@@ -1176,8 +1176,33 @@ async def _route_to_role_menu(
     חובה: כל תפקיד (UserRole) חייב להיות מטופל כאן במפורש.
     אם מוסיפים תפקיד חדש - חובה להוסיף ענף כאן, אחרת ייפול ל-SENDER עם אזהרה בלוג.
 
+    שמירת admin context: אם המשתמש אדמין שהחליף תפקיד, הפונקציה שומרת
+    את מפתחות האדמין לפני הניתוב (שמוחק context) ומשחזרת אותם אחרי,
+    ומוסיפה כפתור "חזרה לאדמין" לתגובה.
+
     Returns: (response, new_state)
     """
+    # שמירת admin context לפני ניתוב (force_state מוחק context)
+    admin_keys = await _save_admin_context(user.id, state_manager, "telegram")
+
+    response, new_state = await _route_to_role_menu_inner(user, db, state_manager)
+
+    # שחזור admin context והוספת כפתור חזרה
+    if admin_keys and admin_keys.get("original_role") == "admin":
+        await _restore_admin_context(
+            user.id, state_manager, new_state, admin_keys, "telegram"
+        )
+        _inject_admin_return_button(response)
+
+    return response, new_state
+
+
+async def _route_to_role_menu_inner(
+    user: User,
+    db: AsyncSession,
+    state_manager: StateManager,
+) -> tuple[MessageResponse, str]:
+    """ניתוב פנימי לתפריט לפי תפקיד — ללא טיפול ב-admin context"""
     if user.role == UserRole.COURIER:
         await state_manager.force_state(
             user.id, "telegram", CourierState.MENU.value, context={}
@@ -1249,6 +1274,15 @@ async def _route_to_role_menu(
         extra_data={"user_id": user.id, "role": str(user.role)},
     )
     return await _sender_fallback(user, db, state_manager)
+
+
+# עזרי admin context — ייבוא מקובץ משותף
+from app.api.webhooks._admin_context import (
+    inject_admin_return_button as _inject_admin_return_button,
+    save_admin_context as _save_admin_context,
+    restore_admin_context as _restore_admin_context,
+    restore_admin_role_and_route as _restore_admin_role_and_route,
+)
 
 
 @router.post(
@@ -1933,28 +1967,9 @@ async def telegram_webhook(
     if "חזרה לאדמין" in text:
         context = await state_manager.get_context(user.id, "telegram")
         if context.get("original_role") == "admin":
-            original_approval = context.get("original_approval_status")
-            user.role = UserRole.ADMIN
-            # שחזור approval_status מקורי
-            if original_approval is not None:
-                user.approval_status = ApprovalStatus(original_approval) if original_approval else None
-            else:
-                user.approval_status = None
-            await db.commit()
-
-            from app.state_machine.admin_handler import AdminStateHandler
-
-            await state_manager.force_state(
-                user.id, "telegram", AdminState.MENU.value,
-                context={
-                    "original_role": None,
-                    "original_approval_status": None,
-                    "admin_station_id": None,
-                    "admin_target_role": None,
-                },
+            response, new_state = await _restore_admin_role_and_route(
+                user, db, state_manager, "telegram"
             )
-            handler = AdminStateHandler(db)
-            response, new_state = await handler.handle_message(user, "תפריט", None)
             _queue_response_send(background_tasks, send_chat_id, response)
             return {"ok": True, "new_state": new_state, "admin_return": True}
 
@@ -2162,11 +2177,22 @@ async def telegram_webhook(
 
         if station is not None:
             if is_dispatcher_menu_click:
+                _dm_admin_keys = await _save_admin_context(
+                    user.id, state_manager, "telegram"
+                )
                 await state_manager.force_state(
                     user.id, "telegram", DispatcherState.MENU.value, context={}
                 )
                 handler = DispatcherStateHandler(db, station.id)
                 response, new_state = await handler.handle_message(user, "תפריט", None)
+                # שחזור admin context אחרי ה-handler — כדי שלא יימחק ע"י force_state פנימי
+                if _dm_admin_keys:
+                    await _restore_admin_context(
+                        user.id, state_manager, new_state,
+                        _dm_admin_keys, "telegram",
+                    )
+                if _dm_admin_keys and _dm_admin_keys.get("original_role") == "admin":
+                    _inject_admin_return_button(response)
                 _queue_response_send(background_tasks, send_chat_id, response)
                 return {"ok": True, "new_state": new_state}
 
@@ -2174,7 +2200,14 @@ async def telegram_webhook(
             # חשוב: קוראים ישירות ל-fallback ולא ל-_route_to_role_menu כדי למנוע
             # לולאה (כי _route_to_role_menu יזהה שהמשתמש סדרן ויחזיר לתפריט סדרן)
             if "חזרה לתפריט נהג" in text or "חזרה לתפריט ראשי" in text:
-                if user.role == UserRole.COURIER:
+                # אדמין שהחליף תפקיד — שחזור ישיר לתפריט אדמין
+                # (לא _route_to_role_menu — כי הוא יזהה סדרן ויחזור ללולאה)
+                _back_ctx = await state_manager.get_context(user.id, "telegram")
+                if _back_ctx.get("original_role") == "admin":
+                    response, new_state = await _restore_admin_role_and_route(
+                        user, db, state_manager, "telegram"
+                    )
+                elif user.role == UserRole.COURIER:
                     await state_manager.force_state(
                         user.id, "telegram", CourierState.MENU.value, context={}
                     )
@@ -2208,6 +2241,10 @@ async def telegram_webhook(
             response, new_state = await handler.handle_message(
                 user, text, photo_file_id
             )
+            # הוספת כפתור "חזרה לאדמין" אם נדרש
+            _disp_ctx = await state_manager.get_context(user.id, "telegram")
+            if _disp_ctx.get("original_role") == "admin":
+                _inject_admin_return_button(response)
             _queue_response_send(background_tasks, send_chat_id, response)
             return {"ok": True, "new_state": new_state}
 
@@ -2240,6 +2277,10 @@ async def telegram_webhook(
             background_tasks=background_tasks,
         )
 
+        # הוספת כפתור "חזרה לאדמין" אם נדרש
+        _courier_ctx = await state_manager.get_context(user.id, "telegram")
+        if _courier_ctx.get("original_role") == "admin":
+            _inject_admin_return_button(response)
         _queue_response_send(background_tasks, send_chat_id, response)
         return {"ok": True, "new_state": new_state}
 
@@ -2253,7 +2294,11 @@ async def telegram_webhook(
         await session_service.touch_session(user.id)
 
         is_driver_flow = isinstance(current_state, str) and current_state.startswith("DRIVER.")
+        _drv_admin_keys = None
         if not is_driver_flow:
+            _drv_admin_keys = await _save_admin_context(
+                user.id, state_manager, "telegram"
+            )
             await state_manager.force_state(
                 user.id, "telegram", DriverState.INITIAL.value, context={}
             )
@@ -2262,6 +2307,19 @@ async def telegram_webhook(
             user, text, photo_file_id,
             location_lat=location_lat, location_lng=location_lng,
         )
+        # שחזור admin context אחרי ה-handler — כדי שלא יימחק ע"י force_state פנימי
+        if _drv_admin_keys:
+            await _restore_admin_context(
+                user.id, state_manager, new_state,
+                _drv_admin_keys, "telegram",
+            )
+        # הוספת כפתור "חזרה לאדמין" אם נדרש
+        if _drv_admin_keys and _drv_admin_keys.get("original_role") == "admin":
+            _inject_admin_return_button(response)
+        else:
+            _driver_ctx = await state_manager.get_context(user.id, "telegram")
+            if _driver_ctx.get("original_role") == "admin":
+                _inject_admin_return_button(response)
         _queue_response_send(background_tasks, send_chat_id, response)
         return {"ok": True, "new_state": new_state}
 
@@ -2280,23 +2338,10 @@ async def telegram_webhook(
 
             # מצב מיוחד: admin_handler מחזיר _ADMIN_SWITCH_* כשצריך לנתב לתפקיד חדש
             if isinstance(new_state, str) and new_state.startswith("_ADMIN_SWITCH_"):
-                # שמירת מפתחות אדמין לפני שהניתוב מוחק את ה-context
-                admin_ctx = await state_manager.get_context(user.id, "telegram")
                 _queue_response_send(background_tasks, send_chat_id, response)
+                # _route_to_role_menu שומר ומשחזר admin context אוטומטית,
+                # ומוסיף כפתור "חזרה לאדמין" לתגובה
                 response2, new_state2 = await _route_to_role_menu(user, db, state_manager)
-                # שחזור מפתחות אדמין כדי שחזרה לאדמין תעבוד
-                _admin_keys = {
-                    k: admin_ctx[k]
-                    for k in ("original_role", "original_approval_status",
-                              "admin_station_id", "admin_target_role")
-                    if k in admin_ctx
-                }
-                if _admin_keys:
-                    ctx = await state_manager.get_context(user.id, "telegram")
-                    ctx.update(_admin_keys)
-                    await state_manager.force_state(
-                        user.id, "telegram", new_state2, context=ctx
-                    )
                 _queue_response_send(background_tasks, send_chat_id, response2)
                 return {"ok": True, "new_state": new_state2, "admin_switch": True}
 
@@ -2322,6 +2367,10 @@ async def telegram_webhook(
             response, new_state = await handler.handle_message(
                 user_id=user.id, platform="telegram", message=text
             )
+            # הוספת כפתור "חזרה לאדמין" אם נדרש
+            _sender_ctx = await state_manager.get_context(user.id, "telegram")
+            if _sender_ctx.get("original_role") == "admin":
+                _inject_admin_return_button(response)
             _queue_response_send(background_tasks, send_chat_id, response)
             return {"ok": True, "new_state": new_state}
 
@@ -2339,6 +2388,10 @@ async def telegram_webhook(
             response, new_state = await handler.handle_message(
                 user_id=user.id, platform="telegram", message=text
             )
+            # הוספת כפתור "חזרה לאדמין" אם נדרש
+            _sender_ctx2 = await state_manager.get_context(user.id, "telegram")
+            if _sender_ctx2.get("original_role") == "admin":
+                _inject_admin_return_button(response)
             _queue_response_send(background_tasks, send_chat_id, response)
             return {"ok": True, "new_state": new_state}
 

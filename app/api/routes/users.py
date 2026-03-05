@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.db.database import get_db
-from app.db.models.user import User, UserRole
+from app.db.models.user import User, UserRole, ApprovalStatus
 from app.core.logging import get_logger
 from app.core.validation import PhoneNumberValidator, NameValidator, TextSanitizer
 from app.api.dependencies.admin_auth import require_admin_api_key
@@ -102,7 +102,7 @@ class UserResponse(BaseModel):
 
     @field_serializer("role")
     def serialize_role(self, v: UserRole) -> str:
-        return v.name
+        return v.value
 
 
 @router.post(
@@ -270,3 +270,130 @@ async def update_user(
         extra_data={"user_id": user_id, "updates": updates}
     )
     return UserResponse.model_validate(user)
+
+
+# ==================== ניהול תפקידים ====================
+
+
+class RoleUpdateRequest(BaseModel):
+    """סכמת בקשה לשינוי תפקיד"""
+    role: UserRole
+
+    @field_validator("role", mode="before")
+    @classmethod
+    def validate_role(cls, v: str | UserRole) -> UserRole:
+        """תמיכה בערכי Enum גם בפורמט 'ADMIN' וגם 'admin'"""
+        if isinstance(v, UserRole):
+            return v
+        if isinstance(v, str):
+            value = v.strip().lower()
+            try:
+                return UserRole(value)
+            except ValueError as e:
+                raise ValueError(
+                    f"תפקיד לא תקין. ערכים אפשריים: "
+                    f"{', '.join(r.value for r in UserRole)}"
+                ) from e
+        raise ValueError("תפקיד לא תקין")
+
+
+class RoleUpdateResponse(BaseModel):
+    id: int
+    phone_number: str
+    name: Optional[str]
+    role: UserRole
+    previous_role: UserRole
+
+    @field_serializer("role")
+    def serialize_role(self, v: UserRole) -> str:
+        return v.value
+
+    @field_serializer("previous_role")
+    def serialize_previous_role(self, v: UserRole) -> str:
+        return v.value
+
+
+@router.patch(
+    "/{user_id}/role",
+    response_model=RoleUpdateResponse,
+    summary="שינוי תפקיד משתמש (אדמין בלבד)",
+    description=(
+        "משנה את תפקיד המשתמש. דורש מפתח API של אדמין.\n\n"
+        "תפקידים אפשריים: sender, courier, driver, station_owner, admin.\n\n"
+        "שימוש: שליחת PATCH עם body: {\"role\": \"admin\"}"
+    ),
+    responses={
+        200: {"description": "התפקיד שונה בהצלחה"},
+        401: {"description": "חסר מפתח API"},
+        403: {"description": "מפתח API לא תקין"},
+        404: {"description": "המשתמש לא נמצא"},
+        422: {"description": "שגיאת ולידציה — תפקיד לא תקין"},
+    },
+    tags=["Users"],
+)
+async def update_user_role(
+    user_id: int,
+    role_update: RoleUpdateRequest,
+    _: None = Depends(require_admin_api_key),
+    db: AsyncSession = Depends(get_db),
+) -> RoleUpdateResponse:
+    """שינוי תפקיד משתמש — מוגן ב-API key של אדמין."""
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="המשתמש לא נמצא")
+
+    previous_role = user.role
+    user.role = role_update.role
+
+    # שליח — הגדרת approval_status אם לא מוגדר
+    if role_update.role == UserRole.COURIER and user.approval_status is None:
+        user.approval_status = ApprovalStatus.APPROVED
+
+    await db.commit()
+    await db.refresh(user)
+
+    logger.info(
+        "תפקיד משתמש שונה",
+        extra_data={
+            "user_id": user_id,
+            "previous_role": previous_role.value,
+            "new_role": role_update.role.value,
+        },
+    )
+
+    return RoleUpdateResponse(
+        id=user.id,
+        phone_number=user.phone_number,
+        name=user.name,
+        role=user.role,
+        previous_role=previous_role,
+    )
+
+
+@router.get(
+    "/telegram/{chat_id}/role",
+    response_model=UserResponse,
+    summary="קבלת משתמש לפי Telegram Chat ID (אדמין בלבד)",
+    description="מחזיר משתמש לפי מזהה צ'אט בטלגרם. שימושי למציאת ה-user_id לפני שינוי תפקיד.",
+    responses={
+        200: {"description": "המשתמש נמצא"},
+        401: {"description": "חסר מפתח API"},
+        403: {"description": "מפתח API לא תקין"},
+        404: {"description": "המשתמש לא נמצא"},
+    },
+    tags=["Users"],
+)
+async def get_user_by_telegram_id(
+    chat_id: str,
+    _: None = Depends(require_admin_api_key),
+    db: AsyncSession = Depends(get_db),
+) -> UserResponse:
+    """חיפוש משתמש לפי Telegram Chat ID — מוגן ב-API key של אדמין."""
+    result = await db.execute(
+        select(User).where(User.telegram_chat_id == chat_id)
+    )
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="המשתמש לא נמצא")
+    return user
