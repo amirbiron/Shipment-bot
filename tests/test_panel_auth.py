@@ -1,7 +1,7 @@
 """
 בדיקות אימות לפאנל ווב — OTP + JWT
 """
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
 
@@ -578,3 +578,53 @@ class TestOTPDelivery:
         assert msg is not None
         assert msg.platform == MessagePlatform.WHATSAPP
         assert msg.recipient_id == "+972501234567"
+
+    @pytest.mark.asyncio
+    async def test_redis_failure_prevents_outbox_commit(
+        self, test_client, user_factory, db_session,
+    ):
+        """כשל ב-store_otp (Redis) מונע commit של הודעת outbox — לא נשלח קוד שאי אפשר לאמת"""
+        user = await user_factory(
+            phone_number="+972501234567",
+            name="בעל תחנה Redis כשל",
+            role=UserRole.STATION_OWNER,
+            platform="telegram",
+            telegram_chat_id="111222333",
+        )
+        station = Station(name="תחנה", owner_id=user.id)
+        db_session.add(station)
+        await db_session.flush()
+        wallet = StationWallet(station_id=station.id)
+        db_session.add(wallet)
+        await db_session.commit()
+
+        with (
+            patch("app.workers.tasks.send_message") as mock_send,
+            patch(
+                "app.api.routes.panel.auth.store_otp",
+                new_callable=AsyncMock,
+                side_effect=ConnectionError("Redis connection refused"),
+            ),
+        ):
+            mock_send.delay = MagicMock()
+            response = await test_client.post("/api/panel/auth/request-otp", json={
+                "phone_number": "0501234567",
+            })
+
+            # תגובה צריכה להיות כישלון
+            assert response.status_code == 200
+            data = response.json()
+            assert data["success"] is False
+
+            # send_message לא נקרא
+            mock_send.delay.assert_not_called()
+
+        # אין הודעת outbox ב-DB — לא committed
+        from sqlalchemy import select
+        result = await db_session.execute(
+            select(OutboxMessage).where(
+                OutboxMessage.message_type == "panel_otp"
+            )
+        )
+        msg = result.scalar_one_or_none()
+        assert msg is None, "הודעת outbox נשמרה למרות כשל Redis — OTP לא ניתן לאימות"
