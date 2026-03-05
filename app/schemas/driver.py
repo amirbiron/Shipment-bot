@@ -135,6 +135,14 @@ class DriverSearchSettingsUpdate(BaseModel):
         1. future_only_enabled=True רק אם upcoming_timeframe='all'
         2. future_only_enabled=True חייב לכלול future_only_start_time
         """
+        # דילוג כשאף שדה רלוונטי לא עודכן — מונע חסימת עדכונים לא קשורים
+        if (
+            self.future_only_enabled is None
+            and self.upcoming_timeframe is None
+            and self.future_only_start_time is None
+        ):
+            return
+
         # חשב את הערכים הסופיים לאחר מיזוג העדכון
         final_future_only = (
             self.future_only_enabled

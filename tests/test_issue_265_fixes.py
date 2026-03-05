@@ -235,6 +235,52 @@ class TestSenderDuplicatePhoneRegistration:
         assert next_state == SenderState.REGISTER_COLLECT_PHONE.value
         assert "כבר רשום" in response.text
 
+    @pytest.mark.asyncio
+    async def test_user_not_found_returns_error(self, db_session, user_factory):
+        """משתמש שלא נמצא ב-DB — צריך להחזיר שגיאה ולא להצליח בשקט"""
+        handler = SenderStateHandler(db_session)
+        # מזהה משתמש שלא קיים
+        response, next_state, ctx = await handler._handle_collect_phone(
+            "0509876543", {}, 999999
+        )
+
+        assert next_state == SenderState.INITIAL.value
+        assert "שגיאה" in response.text
+
+
+# ============================================================================
+# תיקון: validate_against_existing מדלג כשאין שדות רלוונטיים
+# ============================================================================
+
+
+class TestValidateAgainstExistingSkipsIrrelevant:
+    """בדיקות שולידציה צולבת לא חוסמת עדכונים לא קשורים"""
+
+    def test_skips_when_no_relevant_fields(self):
+        """כשאף שדה רלוונטי לא עודכן — לא צריך לזרוק שגיאה"""
+        from app.schemas.driver import DriverSearchSettingsUpdate
+
+        # מצב DB שבור — future_only_enabled=True עם timeframe שאינו 'all'
+        update = DriverSearchSettingsUpdate(vehicle_type_filter="car")
+        # לא צריך לזרוק ValueError כי vehicle_type לא קשור
+        update.validate_against_existing(
+            existing_future_only_enabled=True,
+            existing_upcoming_timeframe="3h",
+            existing_future_only_start_time=None,
+        )
+
+    def test_validates_when_relevant_fields_present(self):
+        """כששדה רלוונטי כן עודכן — צריך לבצע ולידציה"""
+        from app.schemas.driver import DriverSearchSettingsUpdate
+
+        update = DriverSearchSettingsUpdate(future_only_enabled=True)
+        with pytest.raises(ValueError, match="מסגרת הזמן"):
+            update.validate_against_existing(
+                existing_future_only_enabled=False,
+                existing_upcoming_timeframe="3h",
+                existing_future_only_start_time=None,
+            )
+
 
 # ============================================================================
 # תיקון #3: Race condition בארנק
