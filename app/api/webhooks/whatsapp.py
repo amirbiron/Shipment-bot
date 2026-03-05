@@ -885,7 +885,7 @@ async def _route_to_role_menu_wa(
             await state_manager.force_state(
                 user.id, "whatsapp", AdminState.MENU.value, context={}
             )
-            handler = AdminStateHandler(db)
+            handler = AdminStateHandler(db, platform="whatsapp")
             return await handler.handle_message(user, "תפריט", None)
         return await _sender_fallback_wa(user, db, state_manager)
 
@@ -1394,7 +1394,7 @@ async def whatsapp_webhook(
                         "admin_target_role": None,
                     },
                 )
-                admin_handler = AdminStateHandler(db)
+                admin_handler = AdminStateHandler(db, platform="whatsapp")
                 response, new_state = await admin_handler.handle_message(user, "תפריט", None)
                 background_tasks.add_task(
                     send_whatsapp_message, reply_to, response.text, response.keyboard
@@ -1786,15 +1786,30 @@ async def whatsapp_webhook(
                         await state_manager.force_state(
                             user.id, "whatsapp", AdminState.MENU.value, context={}
                         )
-                    _admin_handler = AdminStateHandler(db)
+                    _admin_handler = AdminStateHandler(db, platform="whatsapp")
                     response, new_state = await _admin_handler.handle_message(user, text, photo_file_id)
 
                     # מצב מיוחד: admin_handler מחזיר _ADMIN_SWITCH_* כשצריך לנתב לתפקיד חדש
                     if isinstance(new_state, str) and new_state.startswith("_ADMIN_SWITCH_"):
+                        # שמירת מפתחות אדמין לפני שהניתוב מוחק את ה-context
+                        admin_ctx = await state_manager.get_context(user.id, "whatsapp")
                         background_tasks.add_task(
                             send_whatsapp_message, reply_to, response.text, response.keyboard
                         )
                         response2, new_state2 = await _route_to_role_menu_wa(user, db, state_manager)
+                        # שחזור מפתחות אדמין כדי שחזרה לאדמין תעבוד
+                        _admin_keys = {
+                            k: admin_ctx.get(k)
+                            for k in ("original_role", "original_approval_status",
+                                      "admin_station_id", "admin_target_role")
+                            if admin_ctx.get(k) is not None
+                        }
+                        if _admin_keys:
+                            ctx = await state_manager.get_context(user.id, "whatsapp")
+                            ctx.update(_admin_keys)
+                            await state_manager.force_state(
+                                user.id, "whatsapp", new_state2, context=ctx
+                            )
                         background_tasks.add_task(
                             send_whatsapp_message, reply_to, response2.text, response2.keyboard
                         )

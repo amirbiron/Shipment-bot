@@ -43,15 +43,16 @@ _BUTTON_TO_ROLE = {
 class AdminStateHandler:
     """Handler לתפריט אדמין — החלפת תפקיד זמנית"""
 
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession, platform: str = "telegram"):
         self.db = db
+        self.platform = platform
         self.state_manager = StateManager(db)
 
     async def handle_message(
         self, user: User, message: str, photo_file_id: str | None = None
     ) -> Tuple[MessageResponse, str]:
         """עיבוד הודעה נכנסת מאדמין"""
-        platform = user.platform or "telegram"
+        platform = self.platform
         current_state = await self.state_manager.get_current_state(user.id, platform)
         context = await self.state_manager.get_context(user.id, platform)
 

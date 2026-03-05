@@ -215,6 +215,76 @@ class TestAdminStateHandler:
         assert new_state == AdminState.SELECT_ROLE.value
 
     @pytest.mark.asyncio
+    async def test_switch_role_preserves_admin_context_after_route(
+        self, db_session, user_factory
+    ):
+        """מעבר תפקיד שומר מפתחות אדמין גם אחרי force_state של הניתוב"""
+        admin = await user_factory(
+            phone_number="+972500000009",
+            name="Admin",
+            role=UserRole.ADMIN,
+            platform="telegram",
+            telegram_chat_id="90009",
+        )
+        state_manager = StateManager(db_session)
+        await state_manager.force_state(
+            admin.id, "telegram", AdminState.SELECT_ROLE.value, context={}
+        )
+
+        handler = AdminStateHandler(db_session)
+        response, new_state = await handler.handle_message(admin, "שולח", None)
+        assert new_state.startswith("_ADMIN_SWITCH_")
+
+        # שמירת מפתחות אדמין לפני ניתוב (כמו שהוובהוק עושה)
+        admin_ctx = await state_manager.get_context(admin.id, "telegram")
+        assert admin_ctx.get("original_role") == "admin"
+
+        # סימולציה: הניתוב מוחק context (כמו _route_to_role_menu)
+        await state_manager.force_state(
+            admin.id, "telegram", "SENDER.MENU", context={}
+        )
+
+        # שחזור מפתחות אדמין (כמו שהתיקון בוובהוק עושה)
+        _admin_keys = {
+            k: admin_ctx.get(k)
+            for k in ("original_role", "original_approval_status",
+                      "admin_station_id", "admin_target_role")
+            if admin_ctx.get(k) is not None
+        }
+        ctx = await state_manager.get_context(admin.id, "telegram")
+        ctx.update(_admin_keys)
+        await state_manager.force_state(
+            admin.id, "telegram", "SENDER.MENU", context=ctx
+        )
+
+        # ולידציה שמפתחות אדמין נשמרו
+        final_ctx = await state_manager.get_context(admin.id, "telegram")
+        assert final_ctx.get("original_role") == "admin"
+        assert final_ctx.get("admin_target_role") == "sender"
+
+    @pytest.mark.asyncio
+    async def test_platform_parameter(self, db_session, user_factory):
+        """AdminStateHandler משתמש ב-platform שמועבר בבנאי"""
+        admin = await user_factory(
+            phone_number="+972500000013",
+            name="Admin WA",
+            role=UserRole.ADMIN,
+            platform="whatsapp",
+            telegram_chat_id="90013",
+        )
+        state_manager = StateManager(db_session)
+        await state_manager.force_state(
+            admin.id, "whatsapp", AdminState.MENU.value, context={}
+        )
+
+        handler = AdminStateHandler(db_session, platform="whatsapp")
+        response, new_state = await handler.handle_message(admin, "תפריט", None)
+
+        # ולידציה שה-state נכתב לפלטפורמה הנכונה
+        ctx = await state_manager.get_context(admin.id, "whatsapp")
+        assert new_state == AdminState.SELECT_ROLE.value
+
+    @pytest.mark.asyncio
     async def test_no_station_returns_error(self, db_session, user_factory):
         """ניסיון להחליף לסדרן ללא תחנה מחזיר שגיאה"""
         admin = await user_factory(
