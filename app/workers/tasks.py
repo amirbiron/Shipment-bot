@@ -182,6 +182,18 @@ async def _process_single_message(message: OutboxMessage) -> tuple:
     async with get_task_session() as db:
         outbox_service = OutboxService(db)
 
+        # בדיקה אטומית — דילוג על הודעה שכבר בעיבוד או נשלחה
+        # (מונע שליחה כפולה כשגם beat וגם send_message.delay רצים במקביל)
+        result = await db.execute(
+            select(OutboxMessage).where(
+                OutboxMessage.id == message.id,
+                OutboxMessage.status == MessageStatus.PENDING,
+            )
+        )
+        fresh_message = result.scalar_one_or_none()
+        if not fresh_message:
+            return True, "Already processed or in progress"
+
         # Mark as processing
         await outbox_service.mark_as_processing(message.id)
 
@@ -317,9 +329,28 @@ async def _process_single_message(message: OutboxMessage) -> tuple:
 
                 if success:
                     await outbox_service.mark_as_sent(message.id)
+                    logger.info(
+                        "הודעה ישירה נשלחה בהצלחה",
+                        extra_data={
+                            "message_id": message.id,
+                            "message_type": message.message_type,
+                            "platform": message.platform.value,
+                            "recipient_id": PhoneNumberValidator.mask(message.recipient_id)
+                            if message.platform == MessagePlatform.WHATSAPP
+                            else message.recipient_id,
+                        },
+                    )
                     return True, "Message sent successfully"
                 else:
                     await outbox_service.mark_as_failed(message.id, "Send failed")
+                    logger.warning(
+                        "שליחת הודעה ישירה נכשלה",
+                        extra_data={
+                            "message_id": message.id,
+                            "message_type": message.message_type,
+                            "platform": message.platform.value,
+                        },
+                    )
                     return False, "Send failed"
 
         except Exception as e:
