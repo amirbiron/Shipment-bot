@@ -182,20 +182,20 @@ async def _process_single_message(message: OutboxMessage) -> tuple:
     async with get_task_session() as db:
         outbox_service = OutboxService(db)
 
-        # בדיקה אטומית — דילוג על הודעה שכבר בעיבוד או נשלחה
-        # (מונע שליחה כפולה כשגם beat וגם send_message.delay רצים במקביל)
-        result = await db.execute(
-            select(OutboxMessage).where(
+        # נעילה אטומית — UPDATE ... WHERE status = 'PENDING'
+        # אם rowcount == 0, worker אחר כבר תפס את ההודעה (מונע שליחה כפולה)
+        from sqlalchemy import update as sa_update
+        claim_result = await db.execute(
+            sa_update(OutboxMessage)
+            .where(
                 OutboxMessage.id == message.id,
                 OutboxMessage.status == MessageStatus.PENDING,
             )
+            .values(status=MessageStatus.PROCESSING)
         )
-        fresh_message = result.scalar_one_or_none()
-        if not fresh_message:
+        await db.commit()
+        if claim_result.rowcount == 0:
             return True, "Already processed or in progress"
-
-        # Mark as processing
-        await outbox_service.mark_as_processing(message.id)
 
         try:
             content = message.message_content
