@@ -7,6 +7,7 @@ from app.api.webhooks.telegram import (
     _SENDER_BUTTON_ROUTES,
     _get_station_for_owner_or_downgrade,
     _handle_sender_join_as_courier,
+    _handle_sender_join_as_driver,
     _is_in_multi_step_flow,
     _parse_inbound_event,
     _store_inline_button_mapping,
@@ -20,7 +21,7 @@ from app.db.models.user import User, UserRole
 from app.db.models.station import Station
 from app.state_machine.manager import StateManager
 from app.state_machine.handlers import MessageResponse
-from app.state_machine.states import CourierState, SenderState
+from app.state_machine.states import CourierState, DriverState, SenderState
 
 
 class TestTelegramWebhookHelpers:
@@ -430,3 +431,23 @@ class TestTelegramWebhookHelpers:
         assert new_state == CourierState.REGISTER_COLLECT_NAME.value
         await db_session.refresh(sender)
         assert sender.role == UserRole.COURIER
+
+    @pytest.mark.asyncio
+    async def test_handle_sender_join_as_driver_changes_role_and_state(
+        self, db_session, user_factory
+    ):
+        sender = await user_factory(
+            phone_number="+972501199004",
+            name="Join Driver",
+            role=UserRole.SENDER,
+            platform="telegram",
+            telegram_chat_id="99004",
+        )
+        state_manager = StateManager(db_session)
+        response, new_state = await _handle_sender_join_as_driver(
+            sender, db_session, state_manager, "הצטרפות כנהג", None
+        )
+        assert response.text
+        assert new_state == DriverState.REGISTER_COLLECT_NAME.value
+        await db_session.refresh(sender)
+        assert sender.role == UserRole.DRIVER

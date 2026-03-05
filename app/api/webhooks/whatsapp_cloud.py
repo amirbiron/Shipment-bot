@@ -526,6 +526,22 @@ async def _route_message_to_handler(
             )
             return response.text, new_state
 
+        # הצטרפות כנהג (iDriver)
+        if "הצטרפות כנהג" in text or "נהג" in text:
+            from app.state_machine.driver_handler import DriverStateHandler
+
+            user.role = UserRole.DRIVER
+            await db.commit()
+            await state_manager.force_state(
+                user.id, "whatsapp", DriverState.INITIAL.value, context={}
+            )
+            handler = DriverStateHandler(db, platform="whatsapp")
+            response, new_state = await handler.handle_message(user, text, photo_file_id)
+            background_tasks.add_task(
+                send_whatsapp_message, reply_to, response.text, response.keyboard
+            )
+            return response.text, new_state
+
         # העלאת משלוח מהיר
         if "העלאת משלוח מהיר" in text or "משלוח מהיר" in text:
             if settings.WHATSAPP_GROUP_LINK:

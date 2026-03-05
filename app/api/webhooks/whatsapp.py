@@ -979,6 +979,7 @@ async def send_welcome_message(phone_number: str):
 
     keyboard = [
         ["🚚 הצטרפות למנוי וקבלת משלוחים"],
+        ["🚗 הצטרפות כנהג"],
         ["📦 העלאת משלוח מהיר"],
         ["🏪 הצטרפות כתחנה"],
         ["📞 פנייה לניהול"],
@@ -1391,6 +1392,36 @@ async def whatsapp_webhook(
                     )
                     continue
     
+                if (
+                    user.role in (UserRole.SENDER, UserRole.ADMIN) or _admin_root_menu
+                ) and ("הצטרפות כנהג" in text or "נהג" in text):
+                    # ניתוב לתהליך רישום כנהג (iDriver)
+                    from app.state_machine.driver_handler import DriverStateHandler
+
+                    user.role = UserRole.DRIVER
+                    await db.commit()
+
+                    await state_manager.force_state(
+                        user.id, "whatsapp", DriverState.INITIAL.value, context={}
+                    )
+
+                    handler = DriverStateHandler(db, platform="whatsapp")
+                    response, new_state = await handler.handle_message(
+                        user, text, photo_file_id
+                    )
+
+                    background_tasks.add_task(
+                        send_whatsapp_message, reply_to, response.text, response.keyboard
+                    )
+                    responses.append(
+                        {
+                            "from": sender_id,
+                            "response": response.text,
+                            "new_state": new_state,
+                        }
+                    )
+                    continue
+
                 if ("העלאת משלוח מהיר" in text or "משלוח מהיר" in text) and (
                     user.role in (UserRole.SENDER, UserRole.ADMIN) or _admin_root_menu
                 ):
