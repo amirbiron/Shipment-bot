@@ -159,9 +159,10 @@ async def list_senders(
         sort_order=sort_order,
     )
 
-    # חישוב סטטיסטיקות מצטברות על כל השולחים (לא רק העמוד הנוכחי)
+    # חישוב סטטיסטיקות מצטברות על כל השולחים (עם אותו פילטר חיפוש)
     total_deliveries, active_senders_count = await station_service.get_senders_aggregate_stats(
         station_id=auth.station_id,
+        search=search,
     )
 
     return PaginatedSendersResponse(

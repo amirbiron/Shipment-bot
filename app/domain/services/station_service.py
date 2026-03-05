@@ -1830,19 +1830,36 @@ class StationService:
     async def get_senders_aggregate_stats(
         self,
         station_id: int,
+        search: str | None = None,
     ) -> tuple[int, int]:
-        """סטטיסטיקות מצטברות על כל שולחי התחנה.
+        """סטטיסטיקות מצטברות על שולחי התחנה (עם אותו פילטר חיפוש).
+
+        Args:
+            station_id: מזהה התחנה
+            search: חיפוש לפי שם (אופציונלי) — אותו פילטר כמו ברשימת השולחים
 
         Returns:
-            (סה"כ משלוחים בתחנה, מספר שולחים עם משלוחים פעילים)
+            (סה"כ משלוחים, מספר שולחים עם משלוחים פעילים)
         """
         from sqlalchemy import func, case
 
-        # סה"כ משלוחים בתחנה
-        total_deliveries_result = await self.db.execute(
-            select(func.count(Delivery.id)).where(
-                Delivery.station_id == station_id
+        # בסיס — משלוחים בתחנה, עם סינון לפי שם שולח אם נדרש
+        base_filter = [Delivery.station_id == station_id]
+        if search:
+            safe_search = TextSanitizer.sanitize(search)
+            sender_ids_subq = (
+                select(User.id)
+                .where(
+                    (User.name.ilike(f"%{safe_search}%"))
+                    | (User.full_name.ilike(f"%{safe_search}%"))
+                )
+                .subquery()
             )
+            base_filter.append(Delivery.sender_id.in_(select(sender_ids_subq)))
+
+        # סה"כ משלוחים
+        total_deliveries_result = await self.db.execute(
+            select(func.count(Delivery.id)).where(*base_filter)
         )
         total_deliveries = total_deliveries_result.scalar() or 0
 
@@ -1850,7 +1867,7 @@ class StationService:
         active_senders_subq = (
             select(Delivery.sender_id)
             .where(
-                Delivery.station_id == station_id,
+                *base_filter,
                 Delivery.status.in_(ACTIVE_DELIVERY_STATUSES),
             )
             .group_by(Delivery.sender_id)

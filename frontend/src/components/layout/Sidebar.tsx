@@ -31,7 +31,7 @@ const NAV_ITEMS = [
   { to: "/owners", icon: Crown, label: "ניהול בעלים" },
   { to: "/settings", icon: Building2, label: "הגדרות תחנה" },
   { to: "/auto-block", icon: ShieldBan, label: "חסימה אוטומטית" },
-  { to: "/senders", icon: Send, label: "שולחים", end: true },
+  { to: "/senders", icon: Send, label: "שולחים" },
   { to: "/audit", icon: ClipboardList, label: "יומן ביקורת" },
 ];
 
