@@ -1401,8 +1401,13 @@ async def whatsapp_webhook(
                     user.role = UserRole.DRIVER
                     await db.commit()
 
+                    # שמירת דגל אדמין בקונטקסט כדי לאפשר חזרה לתפריט ראשי גם אם זיהוי אדמין נכשל
+                    driver_context: dict = {}
+                    if _admin_root_menu or is_admin_sender:
+                        driver_context["entered_as_admin"] = True
+
                     await state_manager.force_state(
-                        user.id, "whatsapp", DriverState.INITIAL.value, context={}
+                        user.id, "whatsapp", DriverState.INITIAL.value, context=driver_context
                     )
 
                     handler = DriverStateHandler(db, platform="whatsapp")
