@@ -2301,8 +2301,15 @@ async def telegram_webhook(
             _queue_response_send(background_tasks, send_chat_id, response)
             return {"ok": True, "new_state": new_state}
 
-        # פיצ'ר כבוי — fallback לשולח
-        response, new_state = await _sender_fallback(user, db, state_manager)
+        # פיצ'ר כבוי — ניתוב לשולח
+        if isinstance(current_state, str) and current_state.startswith("SENDER."):
+            # אדמין כבר במצב שולח — המשך טיפול רגיל
+            handler = SenderStateHandler(db)
+            response, new_state = await handler.handle_message(
+                user_id=user.id, platform="telegram", message=text
+            )
+        else:
+            response, new_state = await _sender_fallback(user, db, state_manager)
         _queue_response_send(background_tasks, send_chat_id, response)
         return {"ok": True, "new_state": new_state}
 

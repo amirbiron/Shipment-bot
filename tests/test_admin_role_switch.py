@@ -447,3 +447,65 @@ class TestAdminStates:
         assert AdminState.SELECT_ROLE in ADMIN_TRANSITIONS
         assert AdminState.SELECT_ROLE in ADMIN_TRANSITIONS[AdminState.MENU]
         assert AdminState.MENU in ADMIN_TRANSITIONS[AdminState.SELECT_ROLE]
+
+    @pytest.mark.asyncio
+    async def test_admin_transitions_registered_in_state_manager(self, db_session):
+        """ADMIN_TRANSITIONS רשום ב-StateManager._is_valid_transition"""
+        state_manager = StateManager(db_session)
+        assert state_manager._is_valid_transition(
+            AdminState.MENU.value, AdminState.SELECT_ROLE.value
+        ) is True
+        assert state_manager._is_valid_transition(
+            AdminState.SELECT_ROLE.value, AdminState.MENU.value
+        ) is True
+        # מעבר לא חוקי
+        assert state_manager._is_valid_transition(
+            AdminState.MENU.value, AdminState.MENU.value
+        ) is False
+
+    @pytest.mark.asyncio
+    async def test_transition_to_works_for_admin(self, db_session, user_factory):
+        """transition_to מצליח עבור מעברי admin ללא force_state"""
+        admin = await user_factory(
+            phone_number="+972500000020",
+            name="Admin Trans",
+            role=UserRole.ADMIN,
+            platform="telegram",
+            telegram_chat_id="90020",
+        )
+        state_manager = StateManager(db_session)
+        await state_manager.force_state(
+            admin.id, "telegram", AdminState.MENU.value, context={}
+        )
+        success = await state_manager.transition_to(
+            admin.id, "telegram", AdminState.SELECT_ROLE.value, {}
+        )
+        assert success is True
+        current = await state_manager.get_current_state(admin.id, "telegram")
+        assert current == AdminState.SELECT_ROLE.value
+
+    @pytest.mark.asyncio
+    async def test_disabled_feature_continues_sender_flow(self, db_session, user_factory):
+        """אדמין עם פיצ'ר כבוי ממשיך בזרימת שולח כשכבר במצב SENDER"""
+        admin = await user_factory(
+            phone_number="+972500000021",
+            name="Admin Disabled Flow",
+            role=UserRole.ADMIN,
+            platform="telegram",
+            telegram_chat_id="90021",
+        )
+        state_manager = StateManager(db_session)
+        # אדמין כבר ב-state שולח (אחרי fallback ראשון)
+        await state_manager.force_state(
+            admin.id, "telegram", "SENDER.MENU", context={}
+        )
+
+        # סימולציה: SenderStateHandler אמור לטפל בהודעה
+        from app.state_machine.handlers import SenderStateHandler
+        handler = SenderStateHandler(db_session)
+        response, new_state = await handler.handle_message(
+            user_id=admin.id, platform="telegram", message="תפריט"
+        )
+        # ולידציה שה-handler מחזיר state תקין (לא נופל)
+        assert response is not None
+        assert new_state is not None

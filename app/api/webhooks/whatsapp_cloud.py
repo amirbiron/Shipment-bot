@@ -586,8 +586,15 @@ async def _route_message_to_handler(
             )
             return response.text, new_state
 
-        # פיצ'ר כבוי — fallback לשולח
-        response, new_state = await _sender_fallback_wa(user, db, state_manager)
+        # פיצ'ר כבוי — ניתוב לשולח
+        if isinstance(current_state, str) and current_state.startswith("SENDER."):
+            # אדמין כבר במצב שולח — המשך טיפול רגיל
+            handler = SenderStateHandler(db)
+            response, new_state = await handler.handle_message(
+                user_id=user.id, platform="whatsapp", message=text
+            )
+        else:
+            response, new_state = await _sender_fallback_wa(user, db, state_manager)
         background_tasks.add_task(
             send_whatsapp_message, reply_to, response.text, response.keyboard
         )
