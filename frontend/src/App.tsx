@@ -19,6 +19,9 @@ const GroupSettingsPage = lazy(() => import("@/pages/GroupSettingsPage"));
 const OwnersPage = lazy(() => import("@/pages/OwnersPage"));
 const StationSettingsPage = lazy(() => import("@/pages/StationSettingsPage"));
 const AutoBlockPage = lazy(() => import("@/pages/AutoBlockPage"));
+const SendersPage = lazy(() => import("@/pages/SendersPage"));
+const SenderDetailPage = lazy(() => import("@/pages/SenderDetailPage"));
+const AuditPage = lazy(() => import("@/pages/AuditPage"));
 
 function PageLoader() {
   return (
@@ -51,6 +54,9 @@ export default function App() {
             <Route path="owners" element={<OwnersPage />} />
             <Route path="settings" element={<StationSettingsPage />} />
             <Route path="auto-block" element={<AutoBlockPage />} />
+            <Route path="senders" element={<SendersPage />} />
+            <Route path="senders/:id" element={<SenderDetailPage />} />
+            <Route path="audit" element={<AuditPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
