@@ -15,6 +15,8 @@ import {
   ShieldBan,
   Send,
   ClipboardList,
+  BellRing,
+  Layers,
 } from "lucide-react";
 import { useAuthStore } from "@/store/auth";
 import { cn } from "@/lib/utils";
@@ -33,6 +35,8 @@ const NAV_ITEMS = [
   { to: "/auto-block", icon: ShieldBan, label: "חסימה אוטומטית" },
   { to: "/senders", icon: Send, label: "שולחים" },
   { to: "/audit", icon: ClipboardList, label: "יומן ביקורת" },
+  { to: "/alerts", icon: BellRing, label: "התראות" },
+  { to: "/stations", icon: Layers, label: "מולטי-תחנה" },
 ];
 
 interface SidebarProps {

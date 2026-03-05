@@ -22,6 +22,8 @@ const AutoBlockPage = lazy(() => import("@/pages/AutoBlockPage"));
 const SendersPage = lazy(() => import("@/pages/SendersPage"));
 const SenderDetailPage = lazy(() => import("@/pages/SenderDetailPage"));
 const AuditPage = lazy(() => import("@/pages/AuditPage"));
+const AlertsPage = lazy(() => import("@/pages/AlertsPage"));
+const MultiStationPage = lazy(() => import("@/pages/MultiStationPage"));
 
 function PageLoader() {
   return (
@@ -57,6 +59,8 @@ export default function App() {
             <Route path="senders" element={<SendersPage />} />
             <Route path="senders/:id" element={<SenderDetailPage />} />
             <Route path="audit" element={<AuditPage />} />
+            <Route path="alerts" element={<AlertsPage />} />
+            <Route path="stations" element={<MultiStationPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
