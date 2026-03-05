@@ -95,7 +95,7 @@ class CourierState(str, Enum):
 # State transitions mapping
 SENDER_TRANSITIONS = {
     # Initial & Registration
-    SenderState.INITIAL: [SenderState.NEW, SenderState.REGISTER_COLLECT_NAME],
+    SenderState.INITIAL: [SenderState.NEW, SenderState.REGISTER_COLLECT_NAME, SenderState.MENU],
     SenderState.NEW: [SenderState.REGISTER_COLLECT_NAME],
     SenderState.REGISTER_COLLECT_NAME: [SenderState.REGISTER_COLLECT_PHONE, SenderState.MENU],
     SenderState.REGISTER_COLLECT_PHONE: [SenderState.MENU],
@@ -134,7 +134,7 @@ SENDER_TRANSITIONS = {
 
 COURIER_TRANSITIONS = {
     # Registration flow (KYC) [שלב 2]
-    CourierState.INITIAL: [CourierState.REGISTER_COLLECT_NAME],
+    CourierState.INITIAL: [CourierState.REGISTER_COLLECT_NAME, CourierState.MENU, CourierState.PENDING_APPROVAL],
     CourierState.NEW: [CourierState.REGISTER_COLLECT_NAME],
     CourierState.REGISTER_COLLECT_NAME: [CourierState.REGISTER_COLLECT_DOCUMENT],
     CourierState.REGISTER_COLLECT_DOCUMENT: [CourierState.REGISTER_COLLECT_SELFIE],

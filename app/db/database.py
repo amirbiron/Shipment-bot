@@ -34,11 +34,11 @@ async def get_db() -> AsyncSession:
 @asynccontextmanager
 async def get_task_session():
     """
-    Create a fresh database session for Celery tasks.
+    יצירת סשן DB עבור Celery tasks.
 
-    This creates a new engine and session bound to the current event loop,
-    avoiding the "attached to a different loop" error that occurs when
-    reusing module-level engines across different event loops in Celery workers.
+    יוצר engine חדש per-task ומשחרר אותו בסיום — הכרחי כי Celery
+    יוצר event loop חדש לכל task, ו-engine שנקשר ל-loop ישן ייכשל.
+    dispose() עטוף ב-try/finally כדי להבטיח שחרור גם בשגיאה.
     """
     task_engine = create_async_engine(
         settings.DATABASE_URL,
@@ -53,10 +53,11 @@ async def get_task_session():
         expire_on_commit=False
     )
 
-    async with task_session_maker() as session:
-        try:
-            yield session
-        finally:
-            await session.close()
-
-    await task_engine.dispose()
+    try:
+        async with task_session_maker() as session:
+            try:
+                yield session
+            finally:
+                await session.close()
+    finally:
+        await task_engine.dispose()

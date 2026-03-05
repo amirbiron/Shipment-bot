@@ -73,8 +73,10 @@ class WalletService:
         fee: float
     ) -> Tuple[bool, str]:
         """
-        Check if courier can capture a delivery based on credit.
-        Returns (can_capture, reason_message)
+        בדיקת יתרה ראשונית (pre-check) — האם השליח יכול לתפוס משלוח.
+
+        זוהי בדיקה ללא נעילה — ההגנה האמיתית מפני race condition נמצאת
+        ב-debit_for_capture() שמשתמש ב-with_for_update() ובודק מחדש.
         """
         wallet = await self.get_or_create_wallet(courier_id)
         future_balance = wallet.balance - Decimal(str(fee))
