@@ -256,6 +256,16 @@ class InsufficientCreditError(WalletException):
             }
         )
 
+    def to_dict(self) -> dict[str, Any]:
+        """מחזיר הודעה כללית בלבד — מסתיר נתונים פיננסיים ו-courier_id מתגובת API"""
+        return {
+            "error": {
+                "code": self.error_code.value,
+                "message": "אין מספיק יתרה לביצוע הפעולה",
+                "details": {}
+            }
+        }
+
 
 class WalletNotFoundError(WalletException):
     """Raised when wallet is not found"""

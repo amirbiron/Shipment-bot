@@ -142,7 +142,7 @@ class CorrelationIdFilter(logging.Filter):
 
 def generate_correlation_id() -> str:
     """Generate a new correlation ID"""
-    return str(uuid.uuid4())[:8]
+    return uuid.uuid4().hex[:16]
 
 
 def set_correlation_id(correlation_id: str | None = None) -> str:
