@@ -628,23 +628,50 @@ class TestPhoneValidation:
 ```
 app/
 ├── api/
-│   ├── routes/          # נקודות קצה API
-│   └── webhooks/        # Telegram/WhatsApp webhooks
+│   ├── routes/                    # נקודות קצה API
+│   └── webhooks/                  # Telegram/WhatsApp webhooks
+│       ├── telegram.py            # Telegram webhook handler
+│       ├── whatsapp.py            # WhatsApp WPPConnect webhook
+│       └── whatsapp_cloud.py      # WhatsApp Cloud API webhook
 ├── core/
-│   ├── config.py        # הגדרות
-│   ├── logging.py       # לוגים מובנים
-│   ├── validation.py    # ולידטורים
-│   ├── exceptions.py    # exceptions מותאמים
+│   ├── config.py                  # הגדרות
+│   ├── logging.py                 # לוגים מובנים
+│   ├── validation.py              # ולידטורים
+│   ├── exceptions.py              # exceptions מותאמים
 │   ├── circuit_breaker.py
-│   └── middleware.py    # middleware לבקשות
+│   └── middleware.py              # middleware לבקשות
 ├── db/
-│   ├── models/          # מודלים של SQLAlchemy
-│   └── database.py      # חיבור לDB
+│   ├── models/                    # מודלים של SQLAlchemy
+│   │   ├── user.py                # משתמשים + UserRole
+│   │   ├── delivery.py            # משלוחים
+│   │   ├── courier_wallet.py      # ארנקי שליחים
+│   │   ├── driver_profile.py      # פרופיל נהג (iDriver)
+│   │   ├── driver_search.py       # חיפושי נהג
+│   │   ├── driver_search_settings.py  # הגדרות חיפוש נהג
+│   │   └── driver_session.py      # סשן 24 שעות נהג
+│   └── database.py                # חיבור לDB
 ├── domain/
-│   └── services/        # לוגיקה עסקית
-├── state_machine/       # זרימת שיחה
+│   └── services/                  # לוגיקה עסקית
+│       ├── driver_registration_service.py  # רישום נהג
+│       ├── driver_verification_service.py  # אימות חרדי
+│       ├── driver_menu_service.py          # תפריט + הגדרות
+│       ├── driver_search_service.py        # חיפוש נסיעות
+│       ├── driver_session_service.py       # סשן 24 שעות
+│       ├── driver_subscription_service.py  # מנויים
+│       ├── city_abbreviation_service.py    # קיצורי ערים
+│       ├── ride_posting_service.py         # פרסום נסיעות
+│       └── pricing_service.py             # מחירון
+├── schemas/
+│   └── driver.py                  # סכמות Pydantic לנהג
+├── state_machine/                 # זרימת שיחה
+│   ├── states.py                  # Enums + TRANSITIONS
+│   ├── manager.py                 # StateManager
+│   ├── handlers.py                # Sender + Courier handlers
+│   ├── driver_handler.py          # Driver handler (iDriver)
+│   ├── dispatcher_handler.py      # Dispatcher handler
+│   └── station_owner_handler.py   # Station Owner handler
 └── workers/
-    └── tasks.py         # משימות Celery
+    └── tasks.py                   # משימות Celery
 ```
 
 ---
