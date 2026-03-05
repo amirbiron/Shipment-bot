@@ -163,12 +163,14 @@ export default function AlertsPage() {
     const historyAlerts = history?.alerts ?? [];
     const combined = [...liveAlerts, ...historyAlerts];
     const seen = new Set<string>();
-    return combined.filter((a) => {
-      const key = `${a.station_id}-${a.type}-${a.timestamp}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+    return combined
+      .filter((a) => {
+        const key = `${a.station_id}-${a.type}-${a.timestamp}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
   })();
 
   return (
