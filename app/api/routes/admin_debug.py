@@ -555,12 +555,9 @@ async def change_user_role(
     new_role = UserRole(body.role)
     user.role = new_role
 
-    # שליח חדש — הגדרת APPROVED כדי לדלג על מסך ממתין
-    if new_role == UserRole.COURIER:
+    # שליח — הגדרת approval_status אם לא מוגדר
+    if new_role == UserRole.COURIER and user.approval_status is None:
         user.approval_status = ApprovalStatus.APPROVED
-    # אדמין — ניקוי approval_status
-    elif new_role == UserRole.ADMIN:
-        user.approval_status = None
 
     await db.commit()
 
@@ -691,6 +688,12 @@ async function searchUsers() {
   }
 }
 
+function esc(str) {
+  const d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+}
+
 function renderResults(users) {
   const el = document.getElementById('results');
   if (!users.length) {
@@ -699,16 +702,17 @@ function renderResults(users) {
   }
   let html = '<table><thead><tr><th>ID</th><th>שם</th><th>טלפון</th><th>Telegram</th><th>תפקיד</th><th>פעולה</th></tr></thead><tbody>';
   for (const u of users) {
+    const safeId = Number(u.user_id);
     const opts = ROLES.map(r =>
-      '<option value="' + r + '"' + (r === u.role ? ' selected' : '') + '>' + (ROLE_LABELS[r] || r) + '</option>'
+      '<option value="' + esc(r) + '"' + (r === u.role ? ' selected' : '') + '>' + esc(ROLE_LABELS[r] || r) + '</option>'
     ).join('');
     html += '<tr>' +
-      '<td>' + u.user_id + '</td>' +
-      '<td>' + (u.name || '-') + '</td>' +
-      '<td>' + (u.phone || '-') + '</td>' +
-      '<td>' + (u.telegram_chat_id || '-') + '</td>' +
-      '<td><select id="role-' + u.user_id + '">' + opts + '</select></td>' +
-      '<td><button class="btn-change" onclick="changeRole(' + u.user_id + ')">שנה</button></td>' +
+      '<td>' + safeId + '</td>' +
+      '<td>' + esc(u.name || '-') + '</td>' +
+      '<td>' + esc(u.phone || '-') + '</td>' +
+      '<td>' + esc(u.telegram_chat_id || '-') + '</td>' +
+      '<td><select id="role-' + safeId + '">' + opts + '</select></td>' +
+      '<td><button class="btn-change" onclick="changeRole(' + safeId + ')">שנה</button></td>' +
       '</tr>';
   }
   html += '</tbody></table>';
