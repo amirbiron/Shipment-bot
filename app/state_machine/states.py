@@ -569,3 +569,28 @@ DRIVER_TRANSITIONS: dict[DriverState, list[DriverState]] = {
     DriverState.SUBSCRIPTION_VIEW: [DriverState.SUBSCRIPTION_PURCHASE, DriverState.MENU],
     DriverState.SUBSCRIPTION_PURCHASE: [DriverState.SUBSCRIPTION_VIEW, DriverState.MENU],
 }
+
+
+# ============================================================================
+# תפריט אדמין — החלפת תפקיד לצורך בדיקות
+# ============================================================================
+
+
+class AdminState(str, Enum):
+    """
+    מצבי שיחה לאדמין.
+
+    אדמין יכול להחליף תפקיד זמנית כדי לחקור תפריטים של תפקידים אחרים.
+    """
+
+    # תפריט אדמין ראשי
+    MENU = "ADMIN.MENU"
+
+    # בחירת תפקיד להחלפה
+    SELECT_ROLE = "ADMIN.SELECT_ROLE"
+
+
+ADMIN_TRANSITIONS: dict[AdminState, list[AdminState]] = {
+    AdminState.MENU: [AdminState.SELECT_ROLE],
+    AdminState.SELECT_ROLE: [AdminState.MENU],
+}

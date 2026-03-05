@@ -214,6 +214,9 @@ class Settings(BaseSettings):
 
         return self
 
+    # ניהול תפקידים לאדמין — החלפת תפקיד לצורך בדיקות
+    ADMIN_ROLE_SWITCH_ENABLED: bool = True
+
     # File Upload
     UPLOAD_DIR: str = "./uploads"
     MAX_FILE_SIZE: int = 10 * 1024 * 1024  # 10MB

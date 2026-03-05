@@ -875,7 +875,21 @@ async def _route_to_role_menu_wa(
         handler = DriverStateHandler(db, platform="whatsapp")
         return await handler.handle_message(user, "תפריט", None)
 
-    if user.role == UserRole.SENDER or user.role == UserRole.ADMIN:
+    if user.role == UserRole.ADMIN:
+        from app.core.config import settings as _settings
+
+        if _settings.ADMIN_ROLE_SWITCH_ENABLED:
+            from app.state_machine.admin_handler import AdminStateHandler
+            from app.state_machine.states import AdminState
+
+            await state_manager.force_state(
+                user.id, "whatsapp", AdminState.MENU.value, context={}
+            )
+            handler = AdminStateHandler(db)
+            return await handler.handle_message(user, "תפריט", None)
+        return await _sender_fallback_wa(user, db, state_manager)
+
+    if user.role == UserRole.SENDER:
         # בדיקה אם המשתמש הוא סדרן פעיל — סדרנים שאינם שליחים נכנסים ישירות לתפריט סדרן
         from app.domain.services.station_service import StationService
 
@@ -1347,7 +1361,7 @@ async def whatsapp_webhook(
             _is_in_multi_step_flow = _is_courier_in_registration or (
                 isinstance(_current_state_value, str)
                 and (
-                    _current_state_value.startswith(("DISPATCHER.", "STATION.", "DRIVER."))
+                    _current_state_value.startswith(("DISPATCHER.", "STATION.", "DRIVER.", "ADMIN."))
                     # הגנה על זרימות שולח: מונע "תחנה" וכו' מלתפוס כתובות כמו "תחנה מרכזית"
                     or (
                         _current_state_value.startswith("SENDER.")
@@ -1357,7 +1371,36 @@ async def whatsapp_webhook(
             )
             _context = await state_manager.get_context(user.id, "whatsapp")
             _admin_root_menu = bool(_context.get("admin_root_menu")) and is_admin_sender
-    
+
+            # חזרה לאדמין — אדמין שהחליף תפקיד רוצה לחזור
+            if "חזרה לאדמין" in text and _context.get("original_role") == "admin":
+                original_approval = _context.get("original_approval_status")
+                user.role = UserRole.ADMIN
+                if original_approval is not None:
+                    user.approval_status = ApprovalStatus(original_approval) if original_approval else None
+                else:
+                    user.approval_status = None
+                await db.commit()
+
+                from app.state_machine.admin_handler import AdminStateHandler
+                from app.state_machine.states import AdminState
+
+                await state_manager.force_state(
+                    user.id, "whatsapp", AdminState.MENU.value,
+                    context={
+                        "original_role": None,
+                        "original_approval_status": None,
+                        "admin_station_id": None,
+                        "admin_target_role": None,
+                    },
+                )
+                admin_handler = AdminStateHandler(db)
+                response, new_state = await admin_handler.handle_message(user, "תפריט", None)
+                background_tasks.add_task(
+                    send_whatsapp_message, reply_to, response.text, response.keyboard
+                )
+                continue
+
             if not _is_in_multi_step_flow:
                 if (
                     user.role in (UserRole.SENDER, UserRole.ADMIN) or _admin_root_menu
@@ -1730,6 +1773,54 @@ async def whatsapp_webhook(
                 )
                 continue
     
+            # ניתוב אדמין — תפריט אדמין או המשך זרימת בחירת תפקיד
+            if user.role == UserRole.ADMIN:
+                from app.core.config import settings as _wa_settings
+
+                if _wa_settings.ADMIN_ROLE_SWITCH_ENABLED:
+                    from app.state_machine.admin_handler import AdminStateHandler
+                    from app.state_machine.states import AdminState
+
+                    is_admin_flow = isinstance(current_state, str) and current_state.startswith("ADMIN.")
+                    if not is_admin_flow:
+                        await state_manager.force_state(
+                            user.id, "whatsapp", AdminState.MENU.value, context={}
+                        )
+                    _admin_handler = AdminStateHandler(db)
+                    response, new_state = await _admin_handler.handle_message(user, text, photo_file_id)
+
+                    # מצב מיוחד: admin_handler מחזיר _ADMIN_SWITCH_* כשצריך לנתב לתפקיד חדש
+                    if isinstance(new_state, str) and new_state.startswith("_ADMIN_SWITCH_"):
+                        background_tasks.add_task(
+                            send_whatsapp_message, reply_to, response.text, response.keyboard
+                        )
+                        response2, new_state2 = await _route_to_role_menu_wa(user, db, state_manager)
+                        background_tasks.add_task(
+                            send_whatsapp_message, reply_to, response2.text, response2.keyboard
+                        )
+                        responses.append(
+                            {"from": sender_id, "response": response2.text, "new_state": new_state2}
+                        )
+                        continue
+
+                    background_tasks.add_task(
+                        send_whatsapp_message, reply_to, response.text, response.keyboard
+                    )
+                    responses.append(
+                        {"from": sender_id, "response": response.text, "new_state": new_state}
+                    )
+                    continue
+
+                # פיצ'ר כבוי — fallback לשולח
+                response, new_state = await _sender_fallback_wa(user, db, state_manager)
+                background_tasks.add_task(
+                    send_whatsapp_message, reply_to, response.text, response.keyboard
+                )
+                responses.append(
+                    {"from": sender_id, "response": response.text, "new_state": new_state}
+                )
+                continue
+
             # Route based on user role
             if user.role == UserRole.COURIER:
                 # שמירת המצב הקודם לפני הטיפול בהודעה
@@ -1816,6 +1907,7 @@ async def whatsapp_webhook(
                 and not current_state.startswith("DISPATCHER.")
                 and not current_state.startswith("STATION.")
                 and not current_state.startswith("DRIVER.")
+                and not current_state.startswith("ADMIN.")
                 and current_state not in ["INITIAL", "SENDER.INITIAL"]
             ):
                 handler = SenderStateHandler(db)

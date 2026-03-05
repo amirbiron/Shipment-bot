@@ -28,6 +28,7 @@ from app.state_machine.states import (
     StationOwnerState,
     SenderState,
     DriverState,
+    AdminState,
 )
 from app.state_machine.dispatcher_handler import DispatcherStateHandler
 from app.state_machine.station_owner_handler import StationOwnerStateHandler
@@ -574,7 +575,7 @@ def _is_in_multi_step_flow(
         return True
 
     if isinstance(current_state, str) and current_state.startswith(
-        ("DISPATCHER.", "STATION.", "DRIVER.")
+        ("DISPATCHER.", "STATION.", "DRIVER.", "ADMIN.")
     ):
         return True
 
@@ -1218,7 +1219,19 @@ async def _route_to_role_menu(
         handler = DriverStateHandler(db, platform="telegram")
         return await handler.handle_message(user, "תפריט", None)
 
-    if user.role == UserRole.SENDER or user.role == UserRole.ADMIN:
+    if user.role == UserRole.ADMIN:
+        if settings.ADMIN_ROLE_SWITCH_ENABLED:
+            from app.state_machine.admin_handler import AdminStateHandler
+
+            await state_manager.force_state(
+                user.id, "telegram", AdminState.MENU.value, context={}
+            )
+            handler = AdminStateHandler(db)
+            return await handler.handle_message(user, "תפריט", None)
+        # פיצ'ר כבוי — fallback לשולח
+        return await _sender_fallback(user, db, state_manager)
+
+    if user.role == UserRole.SENDER:
         # בדיקה אם המשתמש הוא סדרן פעיל — סדרנים שאינם שליחים נכנסים ישירות לתפריט סדרן
         dispatcher_station = await _get_dispatcher_station(user, db)
         if dispatcher_station is not None:
@@ -1228,7 +1241,6 @@ async def _route_to_role_menu(
             handler = DispatcherStateHandler(db, dispatcher_station.id)
             return await handler.handle_message(user, "תפריט", None)
 
-        # ADMIN מנוהל דרך ממשק אחר - בבוט מקבל תפריט שולח
         return await _sender_fallback(user, db, state_manager)
 
     # תפקיד לא מוכר - אזהרה בלוג ו-fallback לשולח
@@ -1917,6 +1929,35 @@ async def telegram_webhook(
         _queue_response_send(background_tasks, send_chat_id, response)
         return {"ok": True, "new_state": new_state, "reset": True}
 
+    # חזרה לאדמין — אדמין שהחליף תפקיד רוצה לחזור
+    if "חזרה לאדמין" in text:
+        context = await state_manager.get_context(user.id, "telegram")
+        if context.get("original_role") == "admin":
+            original_approval = context.get("original_approval_status")
+            user.role = UserRole.ADMIN
+            # שחזור approval_status מקורי
+            if original_approval is not None:
+                user.approval_status = ApprovalStatus(original_approval) if original_approval else None
+            else:
+                user.approval_status = None
+            await db.commit()
+
+            from app.state_machine.admin_handler import AdminStateHandler
+
+            await state_manager.force_state(
+                user.id, "telegram", AdminState.MENU.value,
+                context={
+                    "original_role": None,
+                    "original_approval_status": None,
+                    "admin_station_id": None,
+                    "admin_target_role": None,
+                },
+            )
+            handler = AdminStateHandler(db)
+            response, new_state = await handler.handle_message(user, "תפריט", None)
+            _queue_response_send(background_tasks, send_chat_id, response)
+            return {"ok": True, "new_state": new_state, "admin_return": True}
+
     # הגנה מפני state תקוע שלא תואם role (למשל role שונה חיצונית בזמן זרימה)
     # בלי זה, המשתמש יכול להיתקע בלולאה של הודעת welcome ללא reset אמיתי.
     if isinstance(current_state, str):
@@ -1962,10 +2003,7 @@ async def telegram_webhook(
             _queue_response_send(background_tasks, send_chat_id, response)
             return {"ok": True, "new_state": new_state, "reset": True}
 
-        if current_state.startswith("SENDER.") and user.role not in (
-            UserRole.SENDER,
-            UserRole.ADMIN,
-        ):
+        if current_state.startswith("SENDER.") and user.role != UserRole.SENDER:
             logger.warning(
                 "Stale sender state for role-mismatched user; resetting to role menu",
                 extra_data={
@@ -1991,11 +2029,24 @@ async def telegram_webhook(
             _queue_response_send(background_tasks, send_chat_id, response)
             return {"ok": True, "new_state": new_state, "reset": True}
 
+        if current_state.startswith("ADMIN.") and user.role != UserRole.ADMIN:
+            logger.warning(
+                "Stale admin state for role-mismatched user; resetting to role menu",
+                extra_data={
+                    "user_id": user.id,
+                    "role": str(user.role),
+                    "state": current_state,
+                },
+            )
+            response, new_state = await _route_to_role_menu(user, db, state_manager)
+            _queue_response_send(background_tasks, send_chat_id, response)
+            return {"ok": True, "new_state": new_state, "reset": True}
+
     is_in_multi_step_flow = _is_in_multi_step_flow(user, current_state)
 
     # כפתורי תפריט ראשי/שיווק - guard אחד
     if not is_in_multi_step_flow:
-        if user.role in (UserRole.SENDER, UserRole.ADMIN):
+        if user.role in (UserRole.SENDER,):
             for keyword, handler_fn in _SENDER_BUTTON_ROUTES:
                 if keyword in text:
                     response, new_state = await handler_fn(
@@ -2212,8 +2263,38 @@ async def telegram_webhook(
         _queue_response_send(background_tasks, send_chat_id, response)
         return {"ok": True, "new_state": new_state}
 
-    if user.role in (UserRole.SENDER, UserRole.ADMIN):
-        # התחלת זרימת שולח רק עבור שולח/אדמין (guard תפקיד - מונע יירוט תפקידים אחרים)
+    if user.role == UserRole.ADMIN:
+        # ניתוב אדמין — תפריט אדמין או המשך זרימת בחירת תפקיד
+        is_admin_flow = isinstance(current_state, str) and current_state.startswith("ADMIN.")
+        if settings.ADMIN_ROLE_SWITCH_ENABLED:
+            from app.state_machine.admin_handler import AdminStateHandler
+
+            if not is_admin_flow:
+                await state_manager.force_state(
+                    user.id, "telegram", AdminState.MENU.value, context={}
+                )
+            admin_handler = AdminStateHandler(db)
+            response, new_state = await admin_handler.handle_message(user, text, photo_file_id)
+
+            # מצב מיוחד: admin_handler מחזיר _ADMIN_SWITCH_* כשצריך לנתב לתפקיד חדש
+            if isinstance(new_state, str) and new_state.startswith("_ADMIN_SWITCH_"):
+                # שליחת הודעת מעבר לפני ניתוב
+                _queue_response_send(background_tasks, send_chat_id, response)
+                # הניתוב ייקרא אוטומטית בהודעה הבאה כי role כבר שונה ב-DB
+                response2, new_state2 = await _route_to_role_menu(user, db, state_manager)
+                _queue_response_send(background_tasks, send_chat_id, response2)
+                return {"ok": True, "new_state": new_state2, "admin_switch": True}
+
+            _queue_response_send(background_tasks, send_chat_id, response)
+            return {"ok": True, "new_state": new_state}
+
+        # פיצ'ר כבוי — fallback לשולח
+        response, new_state = await _sender_fallback(user, db, state_manager)
+        _queue_response_send(background_tasks, send_chat_id, response)
+        return {"ok": True, "new_state": new_state}
+
+    if user.role == UserRole.SENDER:
+        # התחלת זרימת שולח (guard תפקיד - מונע יירוט תפקידים אחרים)
         if "שלוח" in text or "חבילה" in text:
             handler = SenderStateHandler(db)
             response, new_state = await handler.handle_message(
@@ -2229,6 +2310,7 @@ async def telegram_webhook(
             and not current_state.startswith("DISPATCHER.")
             and not current_state.startswith("STATION.")
             and not current_state.startswith("DRIVER.")
+            and not current_state.startswith("ADMIN.")
             and current_state not in ["INITIAL", "SENDER.INITIAL"]
         ):
             handler = SenderStateHandler(db)
