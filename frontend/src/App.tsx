@@ -16,6 +16,9 @@ const WalletPage = lazy(() => import("@/pages/WalletPage"));
 const BlacklistPage = lazy(() => import("@/pages/BlacklistPage"));
 const ReportsPage = lazy(() => import("@/pages/ReportsPage"));
 const GroupSettingsPage = lazy(() => import("@/pages/GroupSettingsPage"));
+const OwnersPage = lazy(() => import("@/pages/OwnersPage"));
+const StationSettingsPage = lazy(() => import("@/pages/StationSettingsPage"));
+const AutoBlockPage = lazy(() => import("@/pages/AutoBlockPage"));
 
 function PageLoader() {
   return (
@@ -45,6 +48,9 @@ export default function App() {
             <Route path="blacklist" element={<BlacklistPage />} />
             <Route path="reports" element={<ReportsPage />} />
             <Route path="groups" element={<GroupSettingsPage />} />
+            <Route path="owners" element={<OwnersPage />} />
+            <Route path="settings" element={<StationSettingsPage />} />
+            <Route path="auto-block" element={<AutoBlockPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

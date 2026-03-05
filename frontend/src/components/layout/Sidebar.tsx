@@ -10,6 +10,9 @@ import {
   Settings,
   LogOut,
   X,
+  Crown,
+  Building2,
+  ShieldBan,
 } from "lucide-react";
 import { useAuthStore } from "@/store/auth";
 import { cn } from "@/lib/utils";
@@ -23,6 +26,9 @@ const NAV_ITEMS = [
   { to: "/blacklist", icon: Ban, label: "רשימה שחורה" },
   { to: "/reports", icon: BarChart3, label: "דוחות" },
   { to: "/groups", icon: Settings, label: "הגדרות קבוצות" },
+  { to: "/owners", icon: Crown, label: "ניהול בעלים" },
+  { to: "/settings", icon: Building2, label: "הגדרות תחנה" },
+  { to: "/auto-block", icon: ShieldBan, label: "חסימה אוטומטית" },
 ];
 
 interface SidebarProps {
