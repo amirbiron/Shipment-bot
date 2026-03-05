@@ -1276,44 +1276,13 @@ async def _route_to_role_menu_inner(
     return await _sender_fallback(user, db, state_manager)
 
 
-def _inject_admin_return_button(response: MessageResponse) -> None:
-    """הוספת כפתור 'חזרה לאדמין' לתגובה — רק אם לא קיים כבר"""
-    btn_text = "🔙 חזרה לאדמין"
-    if response.keyboard is not None:
-        if any(btn_text in btn for row in response.keyboard for btn in row):
-            return
-        response.keyboard.append([btn_text])
-    else:
-        response.keyboard = [[btn_text]]
-
-
-_ADMIN_CONTEXT_KEYS = (
-    "original_role", "original_approval_status",
-    "admin_station_id", "admin_target_role",
+# עזרי admin context — ייבוא מקובץ משותף
+from app.api.webhooks._admin_context import (
+    inject_admin_return_button as _inject_admin_return_button,
+    save_admin_context as _save_admin_context,
+    restore_admin_context as _restore_admin_context,
+    restore_admin_role_and_route as _restore_admin_role_and_route,
 )
-
-
-async def _save_admin_context(
-    user_id: int, state_manager: StateManager, platform: str = "telegram",
-) -> dict:
-    """שמירת מפתחות אדמין מהקונטקסט לפני ניתוב שמוחק context"""
-    ctx = await state_manager.get_context(user_id, platform)
-    return {k: ctx[k] for k in _ADMIN_CONTEXT_KEYS if k in ctx}
-
-
-async def _restore_admin_context(
-    user_id: int,
-    state_manager: StateManager,
-    new_state: str,
-    admin_keys: dict,
-    platform: str = "telegram",
-) -> None:
-    """שחזור מפתחות אדמין אחרי ניתוב שמחק context"""
-    if not admin_keys:
-        return
-    ctx = await state_manager.get_context(user_id, platform)
-    ctx.update(admin_keys)
-    await state_manager.force_state(user_id, platform, new_state, context=ctx)
 
 
 @router.post(
@@ -1998,28 +1967,9 @@ async def telegram_webhook(
     if "חזרה לאדמין" in text:
         context = await state_manager.get_context(user.id, "telegram")
         if context.get("original_role") == "admin":
-            original_approval = context.get("original_approval_status")
-            user.role = UserRole.ADMIN
-            # שחזור approval_status מקורי
-            if original_approval is not None:
-                user.approval_status = ApprovalStatus(original_approval) if original_approval else None
-            else:
-                user.approval_status = None
-            await db.commit()
-
-            from app.state_machine.admin_handler import AdminStateHandler
-
-            await state_manager.force_state(
-                user.id, "telegram", AdminState.MENU.value,
-                context={
-                    "original_role": None,
-                    "original_approval_status": None,
-                    "admin_station_id": None,
-                    "admin_target_role": None,
-                },
+            response, new_state = await _restore_admin_role_and_route(
+                user, db, state_manager, "telegram"
             )
-            handler = AdminStateHandler(db)
-            response, new_state = await handler.handle_message(user, "תפריט", None)
             _queue_response_send(background_tasks, send_chat_id, response)
             return {"ok": True, "new_state": new_state, "admin_return": True}
 
@@ -2249,11 +2199,12 @@ async def telegram_webhook(
             # חשוב: קוראים ישירות ל-fallback ולא ל-_route_to_role_menu כדי למנוע
             # לולאה (כי _route_to_role_menu יזהה שהמשתמש סדרן ויחזיר לתפריט סדרן)
             if "חזרה לתפריט נהג" in text or "חזרה לתפריט ראשי" in text:
-                # אדמין שהחליף תפקיד — חזרה לאדמין (לא לתפקיד שאליו הוחלף)
+                # אדמין שהחליף תפקיד — שחזור ישיר לתפריט אדמין
+                # (לא _route_to_role_menu — כי הוא יזהה סדרן ויחזור ללולאה)
                 _back_ctx = await state_manager.get_context(user.id, "telegram")
                 if _back_ctx.get("original_role") == "admin":
-                    response, new_state = await _route_to_role_menu(
-                        user, db, state_manager
+                    response, new_state = await _restore_admin_role_and_route(
+                        user, db, state_manager, "telegram"
                     )
                 elif user.role == UserRole.COURIER:
                     await state_manager.force_state(

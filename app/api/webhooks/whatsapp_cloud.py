@@ -752,11 +752,13 @@ async def _route_message_to_handler(
             # חשוב: קוראים ישירות ל-fallback ולא ל-_route_to_role_menu_wa כדי למנוע
             # לולאה (כי _route_to_role_menu_wa יזהה שהמשתמש סדרן ויחזיר לתפריט סדרן).
             if text and ("חזרה לתפריט נהג" in text or "חזרה לתפריט ראשי" in text):
-                # אדמין שהחליף תפקיד — חזרה לאדמין
+                # אדמין שהחליף תפקיד — שחזור ישיר לתפריט אדמין
+                # (לא _route_to_role_menu_wa — כי הוא יזהה סדרן ויחזור ללולאה)
                 _back_ctx_cl = await state_manager.get_context(user.id, "whatsapp")
                 if _back_ctx_cl.get("original_role") == "admin":
-                    response, new_state = await _route_to_role_menu_wa(
-                        user, db, state_manager
+                    from app.api.webhooks._admin_context import restore_admin_role_and_route
+                    response, new_state = await restore_admin_role_and_route(
+                        user, db, state_manager, "whatsapp"
                     )
                 elif user.role == UserRole.COURIER:
                     await state_manager.force_state(
@@ -776,8 +778,8 @@ async def _route_message_to_handler(
                 # הוספת כפתור "חזרה לאדמין" אם נדרש
                 _disp_ctx_cl = await state_manager.get_context(user.id, "whatsapp")
                 if _disp_ctx_cl.get("original_role") == "admin":
-                    from app.api.webhooks.whatsapp import _inject_admin_return_button_wa
-                    _inject_admin_return_button_wa(response)
+                    from app.api.webhooks._admin_context import inject_admin_return_button
+                    inject_admin_return_button(response)
         else:
             logger.warning(
                 "Dispatcher station not found, resetting to menu",

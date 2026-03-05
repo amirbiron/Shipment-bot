@@ -811,44 +811,13 @@ async def _sender_fallback_wa(
     )
 
 
-def _inject_admin_return_button_wa(response: object) -> None:
-    """הוספת כפתור 'חזרה לאדמין' לתגובה — רק אם לא קיים כבר (WhatsApp)"""
-    btn_text = "🔙 חזרה לאדמין"
-    if response.keyboard is not None:
-        if any(btn_text in btn for row in response.keyboard for btn in row):
-            return
-        response.keyboard.append([btn_text])
-    else:
-        response.keyboard = [[btn_text]]
-
-
-_ADMIN_CONTEXT_KEYS_WA = (
-    "original_role", "original_approval_status",
-    "admin_station_id", "admin_target_role",
+# עזרי admin context — ייבוא מקובץ משותף
+from app.api.webhooks._admin_context import (
+    inject_admin_return_button as _inject_admin_return_button_wa,
+    save_admin_context as _save_admin_context_wa,
+    restore_admin_context as _restore_admin_context_wa,
+    restore_admin_role_and_route as _restore_admin_role_and_route_wa,
 )
-
-
-async def _save_admin_context_wa(
-    user_id: int, state_manager: "StateManager", platform: str = "whatsapp",
-) -> dict:
-    """שמירת מפתחות אדמין מהקונטקסט לפני ניתוב שמוחק context"""
-    ctx = await state_manager.get_context(user_id, platform)
-    return {k: ctx[k] for k in _ADMIN_CONTEXT_KEYS_WA if k in ctx}
-
-
-async def _restore_admin_context_wa(
-    user_id: int,
-    state_manager: "StateManager",
-    new_state: str,
-    admin_keys: dict,
-    platform: str = "whatsapp",
-) -> None:
-    """שחזור מפתחות אדמין אחרי ניתוב שמחק context"""
-    if not admin_keys:
-        return
-    ctx = await state_manager.get_context(user_id, platform)
-    ctx.update(admin_keys)
-    await state_manager.force_state(user_id, platform, new_state, context=ctx)
 
 
 async def _route_to_role_menu_wa(
@@ -1757,13 +1726,14 @@ async def whatsapp_webhook(
                     # חשוב: קוראים ישירות ל-fallback ולא ל-_route_to_role_menu_wa כדי למנוע
                     # לולאה (כי _route_to_role_menu_wa יזהה שהמשתמש סדרן ויחזיר לתפריט סדרן)
                     if "חזרה לתפריט נהג" in text or "חזרה לתפריט ראשי" in text:
-                        # אדמין שהחליף תפקיד — חזרה לאדמין
+                        # אדמין שהחליף תפקיד — שחזור ישיר לתפריט אדמין
+                        # (לא _route_to_role_menu_wa — כי הוא יזהה סדרן ויחזור ללולאה)
                         _back_ctx_wa = await state_manager.get_context(
                             user.id, "whatsapp"
                         )
                         if _back_ctx_wa.get("original_role") == "admin":
-                            response, new_state = await _route_to_role_menu_wa(
-                                user, db, state_manager
+                            response, new_state = await _restore_admin_role_and_route_wa(
+                                user, db, state_manager, "whatsapp"
                             )
                         elif user.role == UserRole.COURIER:
                             await state_manager.force_state(
