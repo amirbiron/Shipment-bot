@@ -182,8 +182,20 @@ async def _process_single_message(message: OutboxMessage) -> tuple:
     async with get_task_session() as db:
         outbox_service = OutboxService(db)
 
-        # Mark as processing
-        await outbox_service.mark_as_processing(message.id)
+        # נעילה אטומית — UPDATE ... WHERE status = 'PENDING'
+        # אם rowcount == 0, worker אחר כבר תפס את ההודעה (מונע שליחה כפולה)
+        from sqlalchemy import update as sa_update
+        claim_result = await db.execute(
+            sa_update(OutboxMessage)
+            .where(
+                OutboxMessage.id == message.id,
+                OutboxMessage.status == MessageStatus.PENDING,
+            )
+            .values(status=MessageStatus.PROCESSING)
+        )
+        await db.commit()
+        if claim_result.rowcount == 0:
+            return True, "Already processed or in progress"
 
         try:
             content = message.message_content
@@ -317,9 +329,28 @@ async def _process_single_message(message: OutboxMessage) -> tuple:
 
                 if success:
                     await outbox_service.mark_as_sent(message.id)
+                    logger.info(
+                        "הודעה ישירה נשלחה בהצלחה",
+                        extra_data={
+                            "message_id": message.id,
+                            "message_type": message.message_type,
+                            "platform": message.platform.value,
+                            "recipient_id": PhoneNumberValidator.mask(message.recipient_id)
+                            if message.platform == MessagePlatform.WHATSAPP
+                            else message.recipient_id,
+                        },
+                    )
                     return True, "Message sent successfully"
                 else:
                     await outbox_service.mark_as_failed(message.id, "Send failed")
+                    logger.warning(
+                        "שליחת הודעה ישירה נכשלה",
+                        extra_data={
+                            "message_id": message.id,
+                            "message_type": message.message_type,
+                            "platform": message.platform.value,
+                        },
+                    )
                     return False, "Send failed"
 
         except Exception as e:

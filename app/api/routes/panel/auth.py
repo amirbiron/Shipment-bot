@@ -205,26 +205,32 @@ async def request_otp(
     if platform_str == "telegram" and user.telegram_chat_id:
         platform = MessagePlatform.TELEGRAM
         recipient_id = user.telegram_chat_id
-    else:
+    elif user.phone_number:
         platform = MessagePlatform.WHATSAPP
         recipient_id = user.phone_number
+        if platform_str == "telegram":
+            logger.warning(
+                "שליחת OTP דרך WhatsApp כי אין telegram_chat_id — "
+                "המשתמש רשום כטלגרם אבל אף פעם לא פתח את הבוט",
+                extra_data={
+                    "user_id": user.id,
+                    "phone": PhoneNumberValidator.mask(user.phone_number),
+                },
+            )
+    else:
+        logger.error(
+            "אין אמצעי שליחה עבור OTP — אין telegram_chat_id ואין phone_number",
+            extra_data={"user_id": user.id},
+        )
+        return ActionResponse(success=True, message=_OTP_GENERIC_RESPONSE)
 
-    outbox = OutboxService(db)
-    await outbox.queue_message(
-        platform=platform,
-        recipient_id=recipient_id,
-        message_type="panel_otp",
-        message_content={"message_text": otp_message},
-    )
-    await db.commit()
-
-    # שמירת OTP ב-Redis רק אחרי commit מוצלח — מבטיח שההודעה באמת תישלח
-    # אם Redis נופל, המשתמש יקבל הודעה אבל ההתחברות תיכשל — לוג ברור + תגובה ידידותית
+    # שמירת OTP ב-Redis לפני commit של ההודעה — מבטיח שהקוד ניתן לאימות
+    # לפני שההודעה קיימת ב-outbox. אם Redis כושל, לא עושים commit ולא שולחים כלום.
     try:
         await store_otp(user.id, otp)
     except Exception as e:
         logger.error(
-            "כשלון בשמירת OTP ב-Redis — המשתמש יקבל הודעה אך לא יוכל להתחבר",
+            "כשלון בשמירת OTP ב-Redis — לא שולחים הודעה",
             extra_data={
                 "user_id": user.id,
                 "error": str(e),
@@ -234,6 +240,26 @@ async def request_otp(
         return ActionResponse(
             success=False,
             message="אירעה שגיאה בשליחת קוד הכניסה, נסה שוב בעוד דקה",
+        )
+
+    outbox = OutboxService(db)
+    msg = await outbox.queue_message(
+        platform=platform,
+        recipient_id=recipient_id,
+        message_type="panel_otp",
+        message_content={"message_text": otp_message},
+    )
+    await db.commit()
+
+    # שליחה מיידית — לא מחכים ל-beat scheduler (10 שניות + backlog)
+    # אם Celery broker לא זמין, ההודעה תישלח דרך ה-beat הרגיל
+    try:
+        from app.workers.tasks import send_message
+        send_message.delay(msg.id)
+    except Exception as e:
+        logger.warning(
+            "לא ניתן לשלוח OTP מיידית דרך Celery — ייאסף ב-beat הבא",
+            extra_data={"message_id": msg.id, "error": str(e)},
         )
 
     logger.info(

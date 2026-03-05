@@ -1,6 +1,8 @@
 """
 בדיקות אימות לפאנל ווב — OTP + JWT
 """
+from unittest.mock import patch, MagicMock
+
 import pytest
 
 from app.core.auth import (
@@ -12,6 +14,7 @@ from app.core.auth import (
     verify_token,
 )
 from app.db.models.user import UserRole
+from app.db.models.outbox_message import OutboxMessage, MessagePlatform, MessageStatus
 from app.db.models.station import Station
 from app.db.models.station_wallet import StationWallet
 
@@ -467,3 +470,111 @@ class TestStationOwnerWithoutStations:
         # חייב להיות 401 (אותו דבר כמו OTP שגוי) — לא 403
         assert response.status_code == 401
         assert response.json()["detail"] == "קוד שגוי או פג תוקף"
+
+
+class TestOTPDelivery:
+    """בדיקות שליחת OTP — dispatch מיידי וזיהוי פלטפורמה"""
+
+    @pytest.mark.asyncio
+    async def test_otp_triggers_immediate_celery_task(
+        self, test_client, user_factory, db_session,
+    ):
+        """בקשת OTP מפעילה send_message.delay מיד — לא מחכה ל-beat"""
+        user = await user_factory(
+            phone_number="+972501234567",
+            name="בעל תחנה",
+            role=UserRole.STATION_OWNER,
+            platform="telegram",
+            telegram_chat_id="123456789",
+        )
+        station = Station(name="תחנת בדיקה", owner_id=user.id)
+        db_session.add(station)
+        await db_session.flush()
+        wallet = StationWallet(station_id=station.id)
+        db_session.add(wallet)
+        await db_session.commit()
+
+        with patch("app.workers.tasks.send_message") as mock_send:
+            mock_send.delay = MagicMock()
+            response = await test_client.post("/api/panel/auth/request-otp", json={
+                "phone_number": "0501234567",
+            })
+            assert response.status_code == 200
+            # ולידציה ש-send_message.delay נקרא עם message ID
+            mock_send.delay.assert_called_once()
+            msg_id = mock_send.delay.call_args[0][0]
+            assert isinstance(msg_id, int)
+
+    @pytest.mark.asyncio
+    async def test_otp_sent_via_telegram_when_chat_id_exists(
+        self, test_client, user_factory, db_session,
+    ):
+        """OTP נשלח דרך טלגרם כשיש telegram_chat_id"""
+        user = await user_factory(
+            phone_number="+972501234567",
+            name="בעל תחנה טלגרם",
+            role=UserRole.STATION_OWNER,
+            platform="telegram",
+            telegram_chat_id="987654321",
+        )
+        station = Station(name="תחנה", owner_id=user.id)
+        db_session.add(station)
+        await db_session.flush()
+        wallet = StationWallet(station_id=station.id)
+        db_session.add(wallet)
+        await db_session.commit()
+
+        with patch("app.workers.tasks.send_message") as mock_send:
+            mock_send.delay = MagicMock()
+            await test_client.post("/api/panel/auth/request-otp", json={
+                "phone_number": "0501234567",
+            })
+
+        # בדיקה שההודעה ב-outbox היא טלגרם
+        from sqlalchemy import select
+        result = await db_session.execute(
+            select(OutboxMessage).where(
+                OutboxMessage.message_type == "panel_otp"
+            )
+        )
+        msg = result.scalar_one_or_none()
+        assert msg is not None
+        assert msg.platform == MessagePlatform.TELEGRAM
+        assert msg.recipient_id == "987654321"
+
+    @pytest.mark.asyncio
+    async def test_otp_falls_back_to_whatsapp_without_chat_id(
+        self, test_client, user_factory, db_session,
+    ):
+        """OTP נופל ל-WhatsApp כשאין telegram_chat_id — עם warning בלוג"""
+        user = await user_factory(
+            phone_number="+972501234567",
+            name="בעל תחנה בלי צ'אט",
+            role=UserRole.STATION_OWNER,
+            platform="telegram",
+            telegram_chat_id=None,  # אין chat_id
+        )
+        station = Station(name="תחנה", owner_id=user.id)
+        db_session.add(station)
+        await db_session.flush()
+        wallet = StationWallet(station_id=station.id)
+        db_session.add(wallet)
+        await db_session.commit()
+
+        with patch("app.workers.tasks.send_message") as mock_send:
+            mock_send.delay = MagicMock()
+            await test_client.post("/api/panel/auth/request-otp", json={
+                "phone_number": "0501234567",
+            })
+
+        # בדיקה שההודעה ב-outbox היא WhatsApp (fallback)
+        from sqlalchemy import select
+        result = await db_session.execute(
+            select(OutboxMessage).where(
+                OutboxMessage.message_type == "panel_otp"
+            )
+        )
+        msg = result.scalar_one_or_none()
+        assert msg is not None
+        assert msg.platform == MessagePlatform.WHATSAPP
+        assert msg.recipient_id == "+972501234567"
