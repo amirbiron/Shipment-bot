@@ -164,7 +164,7 @@ export default function AlertsPage() {
     const combined = [...liveAlerts, ...historyAlerts];
     const seen = new Set<string>();
     return combined.filter((a) => {
-      const key = `${a.type}-${a.timestamp}`;
+      const key = `${a.station_id}-${a.type}-${a.timestamp}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
