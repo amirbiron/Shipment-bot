@@ -630,3 +630,89 @@ class TestAdminBugFixes:
         }
         assert len(new_keys) == 4
         assert "original_approval_status" in new_keys
+
+    @pytest.mark.asyncio
+    async def test_inject_admin_return_button(self):
+        """הוספת כפתור 'חזרה לאדמין' לתגובה."""
+        from app.state_machine.handlers import MessageResponse
+        from app.api.webhooks.telegram import _inject_admin_return_button
+
+        # עם keyboard קיים
+        response = MessageResponse("test", keyboard=[["כפתור 1"]])
+        _inject_admin_return_button(response)
+        flat = [btn for row in response.keyboard for btn in row]
+        assert "🔙 חזרה לאדמין" in flat
+
+        # ללא keyboard
+        response2 = MessageResponse("test", keyboard=None)
+        _inject_admin_return_button(response2)
+        assert response2.keyboard == [["🔙 חזרה לאדמין"]]
+
+        # לא מוסיף כפול
+        _inject_admin_return_button(response)
+        count = sum(
+            1 for row in response.keyboard for btn in row if "חזרה לאדמין" in btn
+        )
+        assert count == 1
+
+    @pytest.mark.asyncio
+    async def test_route_to_role_menu_preserves_admin_context(
+        self, db_session, user_factory
+    ):
+        """_route_to_role_menu שומרת admin context ומוסיפה כפתור 'חזרה לאדמין'."""
+        admin = await user_factory(
+            phone_number="+972500000032",
+            name="Admin Route Preserve",
+            role=UserRole.SENDER,  # שונה מ-ADMIN (כמו אחרי החלפת תפקיד)
+            platform="telegram",
+            telegram_chat_id="90032",
+        )
+        state_manager = StateManager(db_session)
+        # סימולציה: admin context קיים (כמו אחרי החלפת תפקיד)
+        await state_manager.force_state(
+            admin.id, "telegram", "SENDER.MENU",
+            context={
+                "original_role": "admin",
+                "original_approval_status": None,
+                "admin_station_id": None,
+                "admin_target_role": "sender",
+            },
+        )
+
+        from app.api.webhooks.telegram import _route_to_role_menu
+
+        response, new_state = await _route_to_role_menu(admin, db_session, state_manager)
+
+        # ולידציה: admin context נשמר
+        ctx = await state_manager.get_context(admin.id, "telegram")
+        assert ctx.get("original_role") == "admin"
+        assert ctx.get("admin_target_role") == "sender"
+
+        # ולידציה: כפתור "חזרה לאדמין" מופיע
+        flat = [btn for row in (response.keyboard or []) for btn in row]
+        assert "🔙 חזרה לאדמין" in flat
+
+    @pytest.mark.asyncio
+    async def test_route_to_role_menu_no_button_without_admin_context(
+        self, db_session, user_factory
+    ):
+        """_route_to_role_menu לא מוסיפה כפתור כשאין admin context."""
+        sender = await user_factory(
+            phone_number="+972500000033",
+            name="Regular Sender",
+            role=UserRole.SENDER,
+            platform="telegram",
+            telegram_chat_id="90033",
+        )
+        state_manager = StateManager(db_session)
+        await state_manager.force_state(
+            sender.id, "telegram", "SENDER.MENU", context={}
+        )
+
+        from app.api.webhooks.telegram import _route_to_role_menu
+
+        response, new_state = await _route_to_role_menu(sender, db_session, state_manager)
+
+        # ולידציה: אין כפתור "חזרה לאדמין" למשתמש רגיל
+        flat = [btn for row in (response.keyboard or []) for btn in row]
+        assert "🔙 חזרה לאדמין" not in flat
