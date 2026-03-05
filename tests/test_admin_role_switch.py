@@ -194,6 +194,27 @@ class TestAdminStateHandler:
         assert owner.is_active is True
 
     @pytest.mark.asyncio
+    async def test_back_button_returns_to_menu(self, db_session, user_factory):
+        """כפתור חזרה ב-SELECT_ROLE מחזיר לתפריט אדמין"""
+        admin = await user_factory(
+            phone_number="+972500000008",
+            name="Admin",
+            role=UserRole.ADMIN,
+            platform="telegram",
+            telegram_chat_id="90008",
+        )
+        state_manager = StateManager(db_session)
+        await state_manager.force_state(
+            admin.id, "telegram", AdminState.SELECT_ROLE.value, context={}
+        )
+
+        handler = AdminStateHandler(db_session)
+        response, new_state = await handler.handle_message(admin, "חזרה", None)
+
+        assert "תפריט מנהל" in response.text
+        assert new_state == AdminState.SELECT_ROLE.value
+
+    @pytest.mark.asyncio
     async def test_no_station_returns_error(self, db_session, user_factory):
         """ניסיון להחליף לסדרן ללא תחנה מחזיר שגיאה"""
         admin = await user_factory(

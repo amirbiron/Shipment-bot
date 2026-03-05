@@ -110,6 +110,10 @@ class AdminStateHandler:
         self, user: User, message: str, context: dict
     ) -> Tuple[MessageResponse, str, dict]:
         """בחירת תפקיד להחלפה"""
+        # חזרה לתפריט אדמין
+        if "חזרה" in message:
+            return await self._handle_menu(user, message, context)
+
         # בדיקה אם המשתמש בחר תפקיד
         selected_role = None
         for label, role_key in _BUTTON_TO_ROLE.items():
@@ -133,9 +137,6 @@ class AdminStateHandler:
                 ["חזרה"],
             ]
             return MessageResponse(text=text, keyboard=keyboard), AdminState.SELECT_ROLE.value, {}
-
-        if "חזרה" in message:
-            return await self._handle_menu(user, message, context)
 
         # החלפת תפקיד
         return await self._switch_to_role(user, selected_role, context)
