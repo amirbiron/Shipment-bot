@@ -1,379 +1,631 @@
-# סקירת קוד - בוט משלוחים (Shipment Bot) 
+# קוד ריוויו מקיף - Shipment Bot
+
+> תאריך: 2026-03-05
+> סריקה אוטומטית של כל שכבות המערכת: תשתית ליבה, מכונת מצבים, שירותים עסקיים, webhooks, בדיקות ותשתית
+
+---
 
 ## תוכן עניינים
-1. [סקירה כללית](#סקירה-כללית)
-2. [ארכיטקטורה](#ארכיטקטורה)
-3. [טכנולוגיות](#טכנולוגיות)
-4. [מבנה הקוד](#מבנה-הקוד)
-5. [נקודות חזקות](#נקודות-חזקות)
-6. [נקודות לשיפור](#נקודות-לשיפור)
-7. [המלצות](#המלצות)
-8. [סיכום](#סיכום)
+
+1. [סיכום מנהלים](#סיכום-מנהלים)
+2. [ממצאים קריטיים](#ממצאים-קריטיים)
+3. [אבטחה ופרטיות](#אבטחה-ופרטיות)
+4. [ביצועים ויציבות](#ביצועים-ויציבות)
+5. [מכונת מצבים](#מכונת-מצבים)
+6. [שירותים עסקיים](#שירותים-עסקיים)
+7. [תשתית ליבה](#תשתית-ליבה)
+8. [בדיקות וכיסוי קוד](#בדיקות-וכיסוי-קוד)
+9. [הצעות לפיצ'רים חדשים](#הצעות-לפיצרים-חדשים)
+10. [תוכנית פעולה מתועדפת](#תוכנית-פעולה-מתועדפת)
 
 ---
 
-## סקירה כללית
+## סיכום מנהלים
 
-### מטרת הפרויקט
-בוט משלוחים הוא מערכת לניהול שליחויות הפועלת דרך WhatsApp ו-Telegram. המערכת מאפשרת:
-- **לשולחים** - ליצור בקשות משלוח עם פרטי איסוף ומסירה
-- **לשליחים** - לתפוס משלוחים, לנהל ארנק דיגיטלי ולדווח על השלמת משלוחים
-- **למנהלים** - לאשר שליחים חדשים ולנהל את המערכת
+המערכת בנויה בצורה מוצקה עם ארכיטקטורה ברורה, אך נמצאו **12 ממצאים קריטיים** שדורשים טיפול מיידי, **23 ממצאים בינוניים** לטיפול בטווח הקצר, ו-**15 שיפורים** מומלצים לטווח הארוך.
 
-### סטטיסטיקות קוד
+### טבלת ציון לפי תחום
+
+| תחום | ציון | הערות |
+|------|------|-------|
+| Webhooks + ניתוב | 9/10 | כל התפקידים מטופלים, guard functions תקינים, OpenAPI מתועד |
+| מסיכת טלפונים בלוגים | 9/10 | שימוש עקבי ב-`PhoneNumberValidator.mask()` |
+| מכונת מצבים | 7/10 | חסרים handlers, בדיקות רישום קיים חסרות בשולח/שליח |
+| שירותים עסקיים | 6/10 | חסרות בדיקות authorization ו-validate_against_existing |
+| פעולות ארנק | 5/10 | חסר `with_for_update()` בחלק מהפעולות |
+| בדיקות | 6/10 | כיסוי טוב ל-webhooks, פערים גדולים בשירותים ו-API routes |
+| תשתית | 7/10 | circuit breaker ו-middleware טובים, בעיית ביצועים ב-DB |
+
+---
+
+## ממצאים קריטיים
+
+### 1. יצירת Engine חדש בכל Task של Celery
+
+**קובץ:** `app/db/database.py` שורות 43-62
+**חומרה:** קריטית
+
+`get_task_session()` יוצר `create_async_engine()` חדש **בכל קריאה**. כל engine מקים connection pool חדש — זה גורם ל:
+- דליפת זיכרון (engines ישנים לא מתפנים מיד)
+- מיצוי חיבורים ל-DB
+- איטיות בביצוע tasks
+
+```python
+# מצב נוכחי - בעייתי
+async def get_task_session():
+    task_engine = create_async_engine(...)  # engine חדש בכל קריאה!
+    ...
+    await task_engine.dispose()
+
+# מומלץ - singleton per worker
+_task_engine = None
+
+async def get_task_engine():
+    global _task_engine
+    if _task_engine is None:
+        _task_engine = create_async_engine(...)
+    return _task_engine
+```
+
+---
+
+### 2. חסרה בדיקת רישום קיים ב-`_handle_initial()` של שולח ושליח
+
+**קובץ:** `app/state_machine/handlers.py` שורות 150-155 (שולח), 854-864 (שליח)
+**חומרה:** קריטית
+**הפרת כלל:** CLAUDE.md כלל #18
+
+כשמשתמש רשום מקבל reset ל-INITIAL (דרך `/start` או `_route_to_role_menu`), ה-handler מתחיל רישום מחדש **בלי לבדוק אם כבר רשום**. זה עלול לדרוס נתונים קיימים.
+
+```python
+# מצב נוכחי - חסרה בדיקה
+async def _handle_initial(self, user, message, context):
+    return welcome_response, State.REGISTER_STEP_1.value, {}
+
+# מומלץ - כמו שכבר מיושם ב-DriverStateHandler שורות 291-295
+async def _handle_initial(self, user, message, context):
+    profile = await self._get_profile(user.id)
+    if profile and profile.is_registration_complete:
+        return response, State.MENU.value, {}
+    # ... המשך רישום רגיל
+```
+
+---
+
+### 3. פעולות ארנק ללא `with_for_update()` — מירוץ תהליכים
+
+**קובץ:** `app/domain/services/wallet_service.py` שורות 65-85
+**חומרה:** קריטית
+**הפרת כלל:** CLAUDE.md כלל #10
+
+`get_balance()` ו-`check_can_capture()` קוראים יתרה **בלי נעילת שורה**. בתנאי מירוץ (שני שליחים תופסים משלוח במקביל), שניהם יכולים לעבור את הבדיקה ולגרום ליתרה שלילית.
+
+```python
+# מומלץ - נעילת שורה לפני קריאה קריטית
+async def check_can_capture(self, courier_id: int, amount: Decimal) -> bool:
+    wallet = await session.execute(
+        select(CourierWallet)
+        .where(CourierWallet.courier_id == courier_id)
+        .with_for_update()  # נעילת שורה
+    )
+```
+
+---
+
+### 4. Handler חסר ל-`REGISTER_COLLECT_PHONE` בשולח
+
+**קובץ:** `app/state_machine/states.py` שורה 101 (מעבר מוגדר), `app/state_machine/handlers.py` (handler חסר)
+**חומרה:** קריטית
+
+המעבר `REGISTER_COLLECT_NAME → REGISTER_COLLECT_PHONE` מוגדר ב-TRANSITIONS, אבל **אין handler מתאים**. אם ה-state machine מגיע ל-state הזה, הוא נופל ל-`_handle_unknown()`.
+
+---
+
+### 5. חסרות קריאות ל-`validate_against_existing()` בשירותי נהג
+
+**קובץ:** `app/domain/services/driver_menu_service.py` שורות 212-284
+**חומרה:** קריטית
+**הפרת כלל:** CLAUDE.md כלל #16
+
+3 מתוך 5 מתודות עדכון (`update_vehicle_type`, `update_trip_type`, `update_show_deliveries`) יוצרות `DriverSearchSettingsUpdate` **בלי לקרוא ל-`validate_against_existing()`**. ולידציה צולבת לא תתפוס שילובים לא תקינים.
+
+רק `update_timeframe` (שורות 313-317) ו-`update_future_only` (שורות 362-366) מיישמים נכון.
+
+---
+
+### 6. חסרות בדיקות authorization בשירותי נהג
+
+**קבצים:** `app/domain/services/driver_search_service.py`, `app/domain/services/driver_menu_service.py`
+**חומרה:** קריטית
+**הפרת כלל:** CLAUDE.md כלל #12
+
+- `resume_all_searches()` (שורות 256-342) — **ללא בדיקת בעלות**
+- `pause_all_searches()` (שורות 225-254) — **ללא בדיקת בעלות**
+- כל מתודות ה-update ב-`driver_menu_service` — מניחות שהקורא מורשה
+
+---
+
+## אבטחה ופרטיות
+
+### 7. Correlation ID קצר מדי — סיכון להתנגשויות
+
+**קובץ:** `app/core/logging.py` שורות 143-145
+**חומרה:** בינונית
+
+Correlation ID נוצר מ-8 תווים ראשונים של UUID — רק ~32 סיביות אנטרופיה. בנפח גבוה, סיכוי גבוה להתנגשויות.
+
+```python
+# מצב נוכחי
+return str(uuid.uuid4())[:8]  # 32 סיביות
+
+# מומלץ - 16 תווים לפחות
+return uuid.uuid4().hex[:16]  # 64 סיביות
+```
+
+---
+
+### 8. חשיפת נתונים פיננסיים בשגיאות
+
+**קובץ:** `app/core/exceptions.py` שורות 251-256
+**חומרה:** בינונית
+
+`InsufficientCreditError` מחזיר `current_balance` ו-`available_credit` ב-details — חושף מידע פיננסי ללקוח.
+
+```python
+# מצב נוכחי - חושף יתרה מדויקת
+details={"current_balance": current_balance, "available_credit": ...}
+
+# מומלץ - הודעה כללית בלבד
+details={"message": "אין מספיק יתרה לביצוע הפעולה"}
+```
+
+---
+
+### 9. חסרים דפוסי SQL Injection בולידציה
+
+**קובץ:** `app/core/validation.py` שורות 43-61
+**חומרה:** בינונית
+
+חסר דפוס זיהוי ל-`LIKE '%...'` — וקטור תקיפה נפוץ. מומלץ להוסיף:
+
+```python
+re.compile(r"\bLIKE\s+['\"%]", re.IGNORECASE)
+```
+
+---
+
+### 10. HSTS max-age אגרסיבי מדי
+
+**קובץ:** `app/core/middleware.py` שורה 193
+**חומרה:** בינונית
+
+HSTS מוגדר לשנה (31,536,000 שניות). אם תעודת SSL תפקע, לקוחות יסרבו ל-HTTP למשך שנה. מומלץ להתחיל ב-604,800 (שבוע).
+
+---
+
+## ביצועים ויציבות
+
+### 11. בעיות N+1 Queries
+
+**קבצים:**
+- `app/domain/services/delivery_service.py` שורות 114-130 — שליפת משלוחים ללא eager loading
+- `app/domain/services/driver_menu_service.py` שורות 90-157 — שליפות נפרדות ל-profile, settings, user
+
+```python
+# מומלץ
+query = select(Delivery).options(
+    joinedload(Delivery.sender),
+    selectinload(Delivery.status_logs)
+)
+```
+
+---
+
+### 12. אינדקסים כפולים על עמודות UNIQUE
+
+**קבצים:**
+- `app/db/models/user.py` שורה 36: `phone_number = Column(..., unique=True, index=True)` — כפול
+- `app/db/models/delivery.py` שורה 45: `token = Column(..., unique=True, ..., index=True)` — כפול
+
+**הפרת כלל:** CLAUDE.md כלל #15 — PostgreSQL יוצר אינדקס אוטומטית ל-UNIQUE.
+
+---
+
+### 13. דליפת זיכרון ב-Rate Limiter
+
+**קובץ:** `app/core/middleware.py` שורות 237-239
+**חומרה:** בינונית
+
+ניקוי rate limit מוחק IP רק כשרשימת הבקשות שלו ריקה. IP ששולח בקשה אחת בכל חלון זמן **לעולם לא יימחק** — גורם לגדילת זיכרון לא מוגבלת.
+
+```python
+# מומלץ - ניקוי גם לפי זמן אחרון
+if not self._requests[ip] or (now - self._requests[ip][-1]) > window * 10:
+    del self._requests[ip]
+```
+
+---
+
+### 14. שימוש ב-`datetime.utcnow()` (Deprecated)
+
+**קובץ:** `app/core/logging.py` שורות 24, 176, 185, 197, 221, 230, 242
+**חומרה:** נמוכה
+
+`datetime.utcnow()` deprecated מ-Python 3.12. מומלץ:
+
+```python
+datetime.now(timezone.utc).isoformat()
+```
+
+---
+
+### 15. חסר Connection Timeout ל-DB
+
+**קובץ:** `app/db/database.py` שורות 10-14
+**חומרה:** בינונית
+
+אין timeout מוגדר לחיבורי DB — חיבור איטי יתקע ללא הגבלה.
+
+```python
+engine = create_async_engine(
+    settings.DATABASE_URL,
+    pool_pre_ping=True,
+    pool_size=20,
+    max_overflow=20,
+    connect_args={"timeout": 10}
+)
+```
+
+---
+
+## מכונת מצבים
+
+### 16. Guard function חלקי ב-Dispatcher
+
+**קובץ:** `app/state_machine/dispatcher_handler.py` שורות 91-97
+**חומרה:** בינונית
+**הפרת כלל:** CLAUDE.md כלל #19
+
+`_is_multi_step_flow_state()` מכסה רק `ADD_SHIPMENT`, `MANUAL_CHARGE`, `POST_RIDE`. אם יתווסף flow חדש (כמו `ISSUE_REFUND`), ה-guard לא יכסה אותו.
+
+---
+
+### 17. חסר state `ADD_SHIPMENT_DROPOFF_APARTMENT` לסדרן
+
+**קובץ:** `app/state_machine/states.py` שורות 241-249
+**חומרה:** בינונית
+
+הסדרן לא יכול לציין דירה/יחידה בכתובת יעד, בניגוד לשולח. חסרה עקביות בין הזרימות.
+
+---
+
+### 18. StateManager — shallow copy של context
+
+**קובץ:** `app/state_machine/manager.py` שורות 95-99
+**חומרה:** נמוכה
+
+עדכון context יוצר עותק רדוד (`dict(...)`) — אובייקטים מקוננים לא מעתיקים, וייתכן ש-SQLAlchemy לא יזהה שינויים בהם.
+
+---
+
+## שירותים עסקיים
+
+### 19. חריגות שנבלעות ללא לוגים
+
+**קובץ:** `app/domain/services/admin_notification_service.py`
+**שורות:** 961-962, 1018-1020, 1042-1044
+**הפרת כלל:** CLAUDE.md כלל #11
+
+```python
+# מצב נוכחי - בולע שגיאות
+except Exception:
+    pass
+
+# מומלץ
+except Exception as e:
+    logger.error("כשלון בעיבוד", extra_data={"error": str(e)}, exc_info=True)
+```
+
+---
+
+### 20. Authorization אופציונלי ב-Station Service
+
+**קובץ:** `app/domain/services/station_service.py` שורות 61-74
+**חומרה:** בינונית
+
+`_verify_station_owner()` מחזיר `True` כש-`actor_user_id=None`. שירות פנימי שקורא בלי actor_user_id עוקף authorization — מסוכן אם נקרא בטעות ממקום לא מוגן.
+
+---
+
+### 21. ולידציית AmountValidator שברירית
+
+**קובץ:** `app/core/validation.py` שורות 520-521
+**חומרה:** בינונית
+
+שימוש ב-floating point לבדיקת 2 ספרות אחרי הנקודה — עלול לתת תוצאות שגויות. מומלץ `Decimal`.
+
+---
+
+## תשתית ליבה
+
+### 22. חסר ולידציה לערכי Rate Limit
+
+**קובץ:** `app/core/config.py` שורות 122-124
+**חומרה:** בינונית
+
+אין ולידציה ש-`WEBHOOK_RATE_LIMIT_MAX_REQUESTS > 0` ו-`WEBHOOK_RATE_LIMIT_WINDOW_SECONDS > 0`. ערכים לא תקינים משביתים rate limiting בשקט.
+
+---
+
+### 23. Circuit Breaker — race condition ב-get_instance()
+
+**קובץ:** `app/core/circuit_breaker.py` שורות 76-88
+**חומרה:** בינונית
+
+Double-checked locking — הבדיקה הראשונה (שורה 83) ללא lock עלולה להוביל ל-race condition. ה-GIL ב-Python מגן במקרים רבים, אבל הפתרון שביר.
+
+---
+
+### 24. Circuit Breaker Decorator יוצר event loop חדש
+
+**קובץ:** `app/core/circuit_breaker.py` שורות 273-280
+**חומרה:** בינונית
+
+`sync_wrapper()` יוצר `asyncio.new_event_loop()` — ייכשל אם כבר רץ event loop (למשל מתוך FastAPI handler).
+
+---
+
+### 25. Fallback חסר לתפקידים לא מוכרים ב-WhatsApp Cloud
+
+**קובץ:** `app/api/webhooks/whatsapp_cloud.py` שורות 545-750
+**חומרה:** בינונית
+**הפרת כלל:** CLAUDE.md כלל #8
+
+ניתוב לפי תפקיד חסר `else` עם לוג ברור לתפקידים לא מזוהים.
+
+---
+
+## בדיקות וכיסוי קוד
+
+### מצב נוכחי
+
 | מדד | ערך |
-|-----|-----|
-| שורות קוד Python | ~2,500+ |
-| שורות קוד JavaScript | ~500+ |
-| טבלאות בבסיס נתונים | 6 |
-| מצבי שיחה (States) | 30+ |
-| נקודות קצה (Endpoints) | 13+ |
-| משימות Celery | 4 |
+|------|------|
+| סך קבצי בדיקות | 77 |
+| סך פונקציות בדיקה | 1,578 |
+| בדיקות יחידה (מסומנות) | 613 |
+| בדיקות אינטגרציה (מסומנות) | 20 |
+| בדיקות תרחיש (E2E) | 7 |
 
----
+### פערים קריטיים בכיסוי
 
-## ארכיטקטורה
+#### שירותים עסקיים לא נבדקים (12 מתוך 21)
 
-### תרשים שכבות
-```
-┌─────────────────────────────────────────────────────────┐
-│                    שכבת הממשק (Gateway)                  │
-│         Telegram Webhooks  │  WhatsApp Gateway          │
-├─────────────────────────────────────────────────────────┤
-│                   שכבת האפליקציה                         │
-│              State Machine (מנגנון מצבים)                │
-├─────────────────────────────────────────────────────────┤
-│                   שכבת הלוגיקה העסקית                    │
-│    CaptureService │ DeliveryService │ WalletService     │
-├─────────────────────────────────────────────────────────┤
-│                   שכבת הנתונים                           │
-│           PostgreSQL + SQLAlchemy (Async)               │
-├─────────────────────────────────────────────────────────┤
-│                   תור משימות                             │
-│              Celery + Redis (Background Tasks)          │
-└─────────────────────────────────────────────────────────┘
-```
+| שירות | סיכון |
+|--------|--------|
+| `capture_service` | קריטי — לוגיקת תפיסת משלוח |
+| `delivery_service` | קריטי — CRUD משלוחים |
+| `courier_approval_service` | קריטי — אישור KYC |
+| `pricing_service` | גבוה — חישובי מחירים |
+| `station_service` | גבוה — ניהול תחנות |
+| `shipment_workflow_service` | גבוה — אורקסטרציית משלוחים |
+| `driver_search_service` | בינוני — חיפוש נסיעות |
+| `driver_menu_service` | בינוני — תפריט נהג |
+| `driver_registration_service` | בינוני — רישום נהג |
+| `driver_verification_service` | בינוני — אימות נהג |
+| `city_abbreviation_service` | נמוך — קיצורי ערים |
+| `ride_posting_service` | בינוני — פרסום נסיעות |
 
-### תבניות עיצוב (Design Patterns)
+#### API Routes לא נבדקים
 
-| תבנית | מיקום | תיאור |
-|-------|-------|-------|
-| **State Machine** | `state_machine/` | ניהול זרימת שיחות המשתמשים |
-| **Transactional Outbox** | `outbox_messages` | הבטחת מסירת הודעות אסינכרונית |
-| **Repository Pattern** | `domain/services/` | הפרדה בין לוגיקה לגישה לנתונים |
-| **Service Layer** | `domain/services/` | ריכוז הלוגיקה העסקית |
+| נתיב | סיכון |
+|------|--------|
+| `routes/stations.py` | גבוה — יצירה/ניהול תחנות |
+| `routes/wallets.py` | קריטי — פעולות פיננסיות |
+| `routes/migrations.py` | גבוה — שינויי סכמה |
+| `routes/panel/groups.py` | בינוני — ניהול קבוצות |
+| `routes/panel/owners.py` | בינוני — ניהול בעלים |
+| `routes/panel/settings.py` | בינוני — הגדרות מערכת |
 
----
+### בעיות תשתית בדיקות
 
-## טכנולוגיות
+1. **אין סף כיסוי קוד** — `pytest-cov` מותקן אבל אין `.coveragerc` ואין minimum coverage
+2. **SQLite במקום PostgreSQL** — בדיקות רצות על SQLite בזיכרון, לא תופסות פיצ'רים ספציפיים ל-PostgreSQL (JSON, partial indexes, check constraints)
+3. **אין בדיקות מיגרציות** — 11 קבצי SQL ללא בדיקה, כולל קונפליקט שמות (שני קבצים עם prefix `001_`)
+4. **CI/CD חלקי** — אין דיווח כיסוי, אין mypy, אין bandit, אין matrix testing
+5. **timeout של CI קצר** — 10 דקות ל-1,578 בדיקות עלול להיות בלתי מספיק
 
-### Backend (Python)
-```
-FastAPI 0.109.0      - פריימוורק אינטרנט
-SQLAlchemy 2.0.36    - ORM אסינכרוני
-asyncpg 0.31.0       - דרייבר PostgreSQL אסינכרוני
-Celery 5.3.6         - תור משימות
-Redis 5.0.1          - Message Broker + Cache
-Alembic 1.13.1       - מיגרציות בסיס נתונים
-Pydantic 2.1.0       - ניהול קונפיגורציה
-httpx 0.26.0         - HTTP Client אסינכרוני
-```
+### המלצות CI/CD
 
-### Frontend (Node.js)
-```
-WPPConnect 1.29.0    - אוטומציה ל-WhatsApp Web
-Express 4.18.2       - שרת HTTP
-```
+```yaml
+# הוספה ל-.github/workflows/tests.yml
+- name: Type checking
+  run: mypy app/ --ignore-missing-imports
 
-### Infrastructure
-```
-PostgreSQL 15        - בסיס נתונים ראשי
-Redis 7              - Broker + Cache
-Docker               - קונטיינריזציה
-Render               - פלטפורמת Deployment
+- name: Security scan
+  run: bandit -r app/ -ll
+
+- name: Coverage with threshold
+  run: pytest --cov=app --cov-fail-under=80
+
+timeout-minutes: 15  # העלאה מ-10
 ```
 
 ---
 
-## מבנה הקוד
+## הצעות לפיצ'רים חדשים
 
-```
-/Shipment-bot/
-├── app/
-│   ├── api/
-│   │   ├── routes/           # נקודות קצה REST
-│   │   │   ├── deliveries.py # CRUD למשלוחים
-│   │   │   ├── wallets.py    # ניהול ארנקים
-│   │   │   └── users.py      # ניהול משתמשים
-│   │   └── webhooks/         # Webhook handlers
-│   │       ├── telegram.py   # טיפול בהודעות Telegram
-│   │       └── whatsapp.py   # טיפול בהודעות WhatsApp
-│   ├── core/
-│   │   └── config.py         # קונפיגורציה מרכזית
-│   ├── db/
-│   │   ├── models/           # מודלים של SQLAlchemy
-│   │   │   ├── user.py       # משתמשים (שולחים/שליחים)
-│   │   │   ├── delivery.py   # משלוחים
-│   │   │   ├── wallet.py     # ארנקים ולדג'ר
-│   │   │   └── outbox.py     # הודעות יוצאות
-│   │   └── database.py       # אתחול DB וניהול sessions
-│   ├── domain/
-│   │   └── services/         # שירותים עסקיים
-│   │       ├── capture_service.py    # תפיסת משלוחים
-│   │       ├── delivery_service.py   # ניהול משלוחים
-│   │       ├── wallet_service.py     # ניהול ארנקים
-│   │       └── outbox_service.py     # תור הודעות
-│   ├── state_machine/        # מנגנון מצבים
-│   │   ├── states.py         # הגדרת מצבים ומעברים
-│   │   ├── manager.py        # ניהול מצב ומעברים
-│   │   └── handlers.py       # handlers לכל מצב
-│   ├── workers/              # משימות רקע
-│   │   ├── celery_app.py     # קונפיגורציית Celery
-│   │   └── tasks.py          # משימות אסינכרוניות
-│   └── main.py               # נקודת כניסה FastAPI
-├── whatsapp_gateway/         # Microservice ל-WhatsApp
-│   └── index.js              # WPPConnect wrapper
-├── migrations/               # מיגרציות Alembic
-└── tests/                    # בדיקות
-```
+### פיצ'ר 1: מערכת ניטור בריאות (Health Dashboard)
 
-### ישויות מרכזיות (Models)
+**תיאור:** דשבורד שמציג את מצב כל הרכיבים בזמן אמת — DB, Redis, Celery workers, circuit breakers, שיעורי הצלחה של API חיצוניים.
 
-| ישות | תפקיד | שדות מרכזיים |
-|------|-------|---------------|
-| **User** | משתמשים במערכת | `phone_number`, `role`, `platform`, `approval_status` |
-| **Delivery** | משלוחים | `token`, `status`, `pickup_*`, `dropoff_*`, `fee` |
-| **CourierWallet** | ארנק שליח | `balance`, `credit_limit` |
-| **WalletLedger** | יומן עסקאות | `entry_type`, `amount`, `balance_after` |
-| **ConversationSession** | מצב שיחה | `current_state`, `context_data` |
-| **OutboxMessage** | הודעות יוצאות | `status`, `retry_count`, `next_retry_at` |
+**ערך עסקי:** זיהוי מוקדם של תקלות, הפחתת MTTR (Mean Time To Recovery).
+
+**יישום מוצע:**
+- endpoint `/health/detailed` שמחזיר מצב כל רכיב
+- Celery task תקופתי שבודק ושולח התראה בחריגה
+- שילוב עם dashboard קיים
 
 ---
 
-## נקודות חזקות
+### פיצ'ר 2: ביטול אוטומטי של משלוחים לא נתפסים
 
-### 1. ארכיטקטורה נקייה
-- **הפרדת שכבות** - הפרדה ברורה בין Gateway, Application, Domain ו-Data
-- **Service Layer** - לוגיקה עסקית מרוכזת בשירותים ייעודיים
-- **Async First** - שימוש עקבי ב-async/await לאורך כל המערכת
+**תיאור:** משלוחים שלא נתפסו תוך X שעות — ביטול אוטומטי עם התראה לשולח.
 
-### 2. עיצוב בסיס נתונים איכותי
-```python
-# דוגמה: נעילת שורה למניעת Race Conditions
-delivery_result = await self.db.execute(
-    select(Delivery)
-    .where(Delivery.id == delivery_id)
-    .with_for_update()  # Row lock
-)
-```
-- **אינדקסים** על שדות נפוצים בשאילתות
-- **Foreign Keys** עם cascading rules מתאימים
-- **Unique Constraints** למניעת כפילויות (למשל חיוב כפול)
-- **Immutable Ledger** לשמירה על אינטגריטי פיננסי
+**ערך עסקי:** מניעת "משלוחים מתים" שתוקעים את המערכת ומבלבלים שליחים.
 
-### 3. אמינות והתאוששות
-```python
-# דוגמה: Exponential Backoff לניסיונות חוזרים
-message.next_retry_at = datetime.utcnow() + timedelta(
-    seconds=30 * (2 ** message.retry_count)
-)
-```
-- **Transactional Outbox** - מניעת אובדן הודעות
-- **Exponential Backoff** - עד 3 ניסיונות חוזרים
-- **Connection Pooling** עם health checks
-
-### 4. אבטחה
-```python
-# דוגמה: Token מאובטח למשלוחים
-def generate_secure_token():
-    return secrets.token_urlsafe(16)
-```
-- **Secure Tokens** למניעת ID enumeration
-- **Smart Links** עם tokens במקום IDs חשופים
-- אין מידע רגיש ב-logs
-
-### 5. לוקליזציה מלאה לעברית
-- כל ההודעות למשתמש בעברית
-- תמיכה ב-RTL
-- פקודות בעברית ("תפריט", "דלג", "חזרה")
-
-### 6. מנגנון מצבים (State Machine)
-```python
-# מעברי מצבים מוגדרים מראש
-SENDER_STATE_TRANSITIONS = {
-    SenderState.IDLE: [SenderState.SELECTING_ACTION],
-    SenderState.AWAITING_PICKUP_CITY: [
-        SenderState.AWAITING_PICKUP_STREET,
-        SenderState.SELECTING_ACTION
-    ],
-    # ...
-}
-```
-- הגדרה ברורה של מצבים ומעברים חוקיים
-- שמירת context data בין מצבים
-- תמיכה ב-force state למנהלים
+**יישום מוצע:**
+- שדה `expires_at` בטבלת `deliveries`
+- Celery beat task כל 15 דקות לבדיקת פקיעה
+- התראה לשולח 30 דקות לפני ביטול
 
 ---
 
-## נקודות לשיפור
+### פיצ'ר 3: מנגנון Retry חכם להודעות
 
-### 1. קובץ Handlers גדול מדי
-**בעיה:** קובץ `handlers.py` מכיל 921 שורות - מורכב לתחזוקה
-```
-app/state_machine/handlers.py - 921 lines
-```
-**המלצה:** פיצול לפי תחום:
-```
-handlers/
-├── pickup_handlers.py
-├── dropoff_handlers.py
-├── delivery_handlers.py
-├── wallet_handlers.py
-└── settings_handlers.py
-```
+**תיאור:** כיום הודעות שנכשלות עוברות retry פשוט. מומלץ retry מדורג עם exponential backoff ו-dead letter queue.
 
-### 2. חוסר בולידציה של קלט
-**בעיה:** בדיקות קלט בסיסיות בלבד
-```python
-# נוכחי - רק בדיקת אורך
-if len(city) < 2:
-    return "עיר חייבת להכיל לפחות 2 תווים"
-```
-**המלצה:** הוספת ולידציות:
-- פורמט מספר טלפון (regex ישראלי)
-- תקינות כתובת (אינטגרציה עם Google Maps API)
-- סניטיזציה של קלט למניעת injection
+**ערך עסקי:** הפחתת הודעות אבודות, שיפור אמינות המערכת.
 
-### 3. שימוש ב-print() במקום Logging
-**בעיה:** הדפסות ישירות במקום logging מובנה
-```python
-# נוכחי
-print(f"Processing message for user {user_id}")
-
-# מומלץ
-logger.info("Processing message", extra={"user_id": user_id})
-```
-**המלצה:**
-- שימוש ב-Python logging module
-- פורמט JSON לאינטגרציה עם מערכות monitoring
-- הוספת correlation IDs למעקב בין שירותים
-
-### 4. חוסר בבדיקות
-**בעיה:** תיקיית `tests/` קיימת אך ריקה
-**המלצה:**
-```python
-# דוגמה לבדיקה מומלצת
-@pytest.mark.asyncio
-async def test_capture_delivery_success():
-    async with get_test_session() as session:
-        service = CaptureService(session)
-        result = await service.capture_delivery(
-            delivery_id=1,
-            courier_id=2
-        )
-        assert result.status == "captured"
-```
-- הוספת pytest עם async fixtures
-- Mocks לשירותים חיצוניים (Telegram, WhatsApp)
-- Coverage report בתהליך CI
-
-### 5. חוסר בתיעוד API
-**בעיה:** אין OpenAPI/Swagger documentation
-**המלצה:**
-```python
-@router.post(
-    "/deliveries",
-    response_model=DeliveryResponse,
-    summary="יצירת משלוח חדש",
-    description="יוצר משלוח חדש ושולח התראה לכל השליחים"
-)
-async def create_delivery(request: DeliveryCreate):
-    ...
-```
-
-### 6. טיפול בשגיאות חיצוניות
-**בעיה:** אין Circuit Breaker לשירותים חיצוניים
-**המלצה:**
-```python
-from circuitbreaker import circuit
-
-@circuit(failure_threshold=5, recovery_timeout=60)
-async def send_telegram_message(chat_id: int, text: str):
-    ...
-```
-
-### 7. Type Hints לא עקביים
-**בעיה:** חלק מהפונקציות עם `Any` או ללא type hints
-```python
-# בעייתי
-def process_message(data):  # חסר type hint
-    ...
-
-# מומלץ
-def process_message(data: MessageData) -> ProcessResult:
-    ...
-```
-**המלצה:** הפעלת mypy strict mode ב-CI
-
-### 8. ניהול Event Loop ב-Celery
-**בעיה:** יצירת event loop חדש בכל task
-```python
-# בעייתי - יוצר loop בכל קריאה
-def run_async(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
-```
-**המלצה:** שימוש ב-`asgiref.sync_to_async` או celery-async
+**יישום מוצע:**
+- 3 ניסיונות עם backoff: 30 שניות, 2 דקות, 10 דקות
+- אחרי 3 כשלונות — העברה ל-dead letter queue
+- דשבורד לצפייה בהודעות שנכשלו + retry ידני
 
 ---
 
-## המלצות
+### פיצ'ר 4: Webhook Signature Verification מלא
 
-### עדיפות גבוהה
-1. **הוספת בדיקות** - כיסוי של לפחות 70% לקוד קריטי
-2. **רפקטור handlers.py** - פיצול לקבצים קטנים יותר
-3. **מעבר ל-logging מובנה** - עם correlation IDs
+**תיאור:** חיזוק אימות חתימות webhook מכל הספקים (Telegram, WhatsApp Cloud, WPPConnect).
 
-### עדיפות בינונית
-4. **הוספת ולידציות קלט** - Pydantic validators
-5. **תיעוד API** - OpenAPI specs
-6. **Type hints מלאים** - mypy strict
+**ערך עסקי:** מניעת הזרקת הודעות מזויפות.
 
-### עדיפות נמוכה
-7. **Circuit Breaker** - לשירותים חיצוניים
-8. **Metrics & Monitoring** - Prometheus/Grafana
-9. **Rate Limiting** - למניעת שימוש לרעה
+**יישום מוצע:**
+- middleware ייעודי לכל ספק
+- לוג לכל בקשה עם חתימה לא תקינה
+- חסימת IP אחרי X ניסיונות כושלים
 
 ---
 
-## סיכום
+### פיצ'ר 5: Cache Layer לשאילתות תכופות
 
-### ציון כללי: 7.5/10
+**תיאור:** שכבת cache ב-Redis לנתונים שנקראים הרבה ומשתנים מעט (פרופיל משתמש, הגדרות תחנה, רשימת ערים).
 
-| קטגוריה | ציון | הערות |
-|---------|------|-------|
-| ארכיטקטורה | 9/10 | מצוינת, הפרדת שכבות ברורה |
-| אבטחה | 8/10 | טובה, tokens מאובטחים |
-| קריאות קוד | 7/10 | טובה, אך handlers גדול |
-| בדיקות | 3/10 | כמעט ללא בדיקות |
-| תיעוד | 5/10 | בסיסי, חסר API docs |
-| ביצועים | 8/10 | async first, connection pooling |
-| תחזוקתיות | 7/10 | טובה עם מקום לשיפור |
+**ערך עסקי:** הפחתת עומס על DB, שיפור זמני תגובה.
 
-### סיכום מנהלים
-הפרויקט בנוי על ארכיטקטורה איכותית עם תבניות עיצוב מתקדמות (State Machine, Transactional Outbox). הקוד מציג רמה גבוהה של הבנה בפיתוח מערכות אסינכרוניות ובסיסי נתונים.
-
-**נקודות חוזק עיקריות:**
-- ארכיטקטורה נקייה ומודולרית
-- טיפול נכון ב-concurrency ו-race conditions
-- לוקליזציה מלאה לעברית
-
-**תחומים לשיפור עיקריים:**
-- הוספת בדיקות אוטומטיות
-- רפקטור של handlers.py
-- מעבר ל-structured logging
-
-הפרויקט מוכן לשימוש ב-production עם הסתייגויות - מומלץ מאוד להוסיף בדיקות לפני הרחבת הפיצ'רים.
+**יישום מוצע:**
+- decorator `@cached(ttl=300)` לפונקציות שירות
+- invalidation אוטומטי בעדכון נתון
+- מדדי hit/miss rate
 
 ---
 
-*מסמך זה נוצר בתאריך: 2026-02-02*
+### פיצ'ר 6: מערכת Audit Log מקיפה
+
+**תיאור:** הרחבת audit log קיים (מיגרציה 010) — תיעוד כל פעולה רגישה כולל שינויי הרשאות, פעולות ארנק, שינויי סטטוס.
+
+**ערך עסקי:** ציות רגולטורי, יכולת חקירה, שקיפות.
+
+**יישום מוצע:**
+- SQLAlchemy event listeners על מודלים רגישים
+- טבלת audit עם: actor, action, entity, old_value, new_value, timestamp
+- API לצפייה ב-panel
+
+---
+
+### פיצ'ר 7: תמיכה בהודעות מתוזמנות
+
+**תיאור:** אפשרות לשולח לתזמן משלוח לשעה עתידית, כולל תזכורות אוטומטיות לשליח.
+
+**ערך עסקי:** גמישות לשולחים, חוויית משתמש משופרת.
+
+**יישום מוצע:**
+- שדה `scheduled_at` בטבלת deliveries
+- Celery beat task לפרסום בזמן הנכון
+- התראות: שעה לפני, 15 דקות לפני
+
+---
+
+### פיצ'ר 8: מיגרציה ל-Alembic
+
+**תיאור:** החלפת מיגרציות SQL ידניות ב-Alembic — מעקב אוטומטי, rollback, version history.
+
+**ערך עסקי:** בטיחות deployment, מניעת drift בסכמה.
+
+**יישום מוצע:**
+```bash
+alembic init migrations
+alembic revision --autogenerate -m "initial"
+```
+- בדיקת התאמה בין מודלים לסכמה ב-CI
+- rollback אוטומטי בכשלון deployment
+
+---
+
+## תוכנית פעולה מתועדפת
+
+### שלב 1 — מיידי (שבוע 1-2)
+
+| # | משימה | חומרה | קובץ |
+|---|--------|--------|------|
+| 1 | תיקון `get_task_session()` — singleton engine per worker | קריטית | `database.py` |
+| 2 | הוספת בדיקת רישום קיים ל-`_handle_initial()` בשולח ושליח | קריטית | `handlers.py` |
+| 3 | הוספת `with_for_update()` לפעולות ארנק קריטיות | קריטית | `wallet_service.py` |
+| 4 | מימוש handler חסר ל-`REGISTER_COLLECT_PHONE` | קריטית | `handlers.py` |
+| 5 | הוספת `validate_against_existing()` ל-3 מתודות חסרות | קריטית | `driver_menu_service.py` |
+| 6 | הוספת authorization checks לשירותי נהג | קריטית | `driver_search_service.py`, `driver_menu_service.py` |
+
+### שלב 2 — טווח קצר (שבוע 3-4)
+
+| # | משימה | חומרה | קובץ |
+|---|--------|--------|------|
+| 7 | תיקון חריגות שנבלעות ב-admin_notification_service | בינונית | `admin_notification_service.py` |
+| 8 | הוספת eager loading למניעת N+1 | בינונית | `delivery_service.py`, `driver_menu_service.py` |
+| 9 | הסרת אינדקסים כפולים על UNIQUE | בינונית | `user.py`, `delivery.py` |
+| 10 | הרחבת Correlation ID ל-16 תווים | בינונית | `logging.py` |
+| 11 | הוספת connection timeout ו-pool size ל-DB | בינונית | `database.py` |
+| 12 | תיקון rate limiter — מניעת דליפת זיכרון | בינונית | `middleware.py` |
+| 13 | הסתרת נתונים פיננסיים בשגיאות | בינונית | `exceptions.py` |
+
+### שלב 3 — טווח בינוני (חודש 2)
+
+| # | משימה | חומרה |
+|---|--------|--------|
+| 14 | כתיבת 6 קבצי בדיקות לשירותים קריטיים | גבוהה |
+| 15 | כתיבת בדיקות ל-API routes חסרים | גבוהה |
+| 16 | הוספת סף כיסוי קוד (80%) ל-CI | גבוהה |
+| 17 | הוספת mypy ו-bandit ל-CI | בינונית |
+| 18 | מיגרציה ל-Alembic | בינונית |
+| 19 | הוספת state `ADD_SHIPMENT_DROPOFF_APARTMENT` לסדרן | בינונית |
+
+### שלב 4 — טווח ארוך (חודש 3+)
+
+| # | משימה |
+|---|--------|
+| 20 | מימוש Health Dashboard |
+| 21 | ביטול אוטומטי של משלוחים לא נתפסים |
+| 22 | Cache layer ב-Redis |
+| 23 | Audit log מקיף |
+| 24 | בדיקות property-based עם Hypothesis |
+| 25 | בדיקות אינטגרציה עם PostgreSQL אמיתי |
+
+---
+
+## נספח: ממצאים חיוביים
+
+המערכת כוללת מספר דפוסים מצוינים שכדאי לשמר:
+
+1. **מסיכת טלפונים** — שימוש עקבי ב-`PhoneNumberValidator.mask()` בכל ה-webhooks
+2. **ניתוב תפקידים** — כל `UserRole` מטופל במפורש ב-telegram.py ו-whatsapp.py עם fallback מתועד
+3. **Background tasks** — שימוש עקבי ב-`background_tasks.add_task()`, ללא `asyncio.create_task()`
+4. **OpenAPI** — כל ה-endpoints מתועדים עם summary ו-description
+5. **DriverStateHandler** — מימוש מצוין של בדיקת רישום קיים ב-INITIAL, guard functions מלאים, regex מעוגן לכפתורים
+6. **DispatcherStateHandler** — ניקוי context מלא ומאורגן עם sets ייעודיים לכל flow
+7. **StationOwnerHandler** — guard function מקיף שמכסה את כל ה-STATION.* states
+8. **Circuit Breaker** — מימוש מוצק עם singleton pattern ו-thread safety
+9. **בדיקות תרחיש** — 7 תרחישי E2E מכסים flows עסקיים שלמים כולל concurrent capture
+10. **Transactional Outbox** — דפוס נכון להבטחת שליחת הודעות
+
+---
+
+> מסמך זה נוצר על בסיס סריקה אוטומטית מעמיקה של כל שכבות הקוד. מומלץ לעדכן אותו בכל ספרינט.
