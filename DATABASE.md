@@ -9,12 +9,21 @@
 │    users     │────▶│  deliveries  │◀────│courier_wallet│
 └──────────────┘     └──────────────┘     └──────────────┘
        │                    │                    │
+       ├────────────────────┼────────────────────┤
        │                    │                    │
        ▼                    ▼                    ▼
 ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
 │conversation_ │     │   outbox_    │     │   wallet_    │
 │  sessions    │     │  messages    │     │   ledger     │
 └──────────────┘     └──────────────┘     └──────────────┘
+       │
+       ├──────────────────────────────────────────────┐
+       │                                              │
+       ▼                                              ▼
+┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+│   driver_    │  │   driver_    │  │   driver_    │  │   driver_    │
+│  profiles    │  │  searches    │  │search_settin │  │  sessions    │
+└──────────────┘  └──────────────┘  └──────────────┘  └──────────────┘
 ```
 
 ## טבלאות
@@ -29,7 +38,7 @@
 | phone_number | VARCHAR(20) | מספר טלפון |
 | telegram_chat_id | VARCHAR(50) | מזהה צ'אט טלגרם |
 | name | VARCHAR(100) | שם המשתמש |
-| role | ENUM | sender / courier / admin |
+| role | ENUM | sender / courier / admin / driver |
 | platform | VARCHAR(20) | whatsapp / telegram |
 | is_active | BOOLEAN | האם פעיל |
 | created_at | TIMESTAMP | תאריך יצירה |
@@ -213,6 +222,149 @@ CREATE TABLE outbox_messages (
 
 CREATE INDEX idx_outbox_status ON outbox_messages(status);
 CREATE INDEX idx_outbox_next_retry ON outbox_messages(next_retry_at);
+```
+
+### driver_profiles - פרופילי נהגים (iDriver)
+
+פרופיל נהג כולל נתוני רישום, אימות ומנוי.
+
+| עמודה | טיפוס | תיאור |
+|-------|-------|-------|
+| id | SERIAL | מזהה ייחודי |
+| user_id | INTEGER | FK למשתמש (unique) |
+| birth_date | DATE | תאריך לידה |
+| vehicle_description | TEXT | תיאור רכב חופשי |
+| vehicle_category | VARCHAR(30) | car / 4_seater / 7_seater / 8_plus / motorcycle / truck / van |
+| dress_code | VARCHAR(30) | hassidic / ultra_orthodox / modern_orthodox / religious_elegant / mixed / secular |
+| verification_status | VARCHAR(20) | unverified / pending / approved / rejected |
+| verification_selfie_file_id | TEXT | מזהה קובץ סלפי (nullable) |
+| verification_id_file_id | TEXT | מזהה קובץ תעודת זהות (nullable) |
+| rejection_reason | TEXT | סיבת דחייה (nullable) |
+| subscription_status | VARCHAR(20) | trial / active / expired / paused / cancelled |
+| trial_starts_at | TIMESTAMP | תחילת ניסיון |
+| trial_expires_at | TIMESTAMP | תפוגת ניסיון |
+| subscription_start_at | TIMESTAMP | תחילת מנוי |
+| subscription_expires_at | TIMESTAMP | תפוגת מנוי |
+| created_at | TIMESTAMP | תאריך יצירה |
+| updated_at | TIMESTAMP | עדכון אחרון |
+
+```sql
+CREATE TABLE driver_profiles (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+    birth_date DATE,
+    vehicle_description TEXT,
+    vehicle_category VARCHAR(30),
+    dress_code VARCHAR(30),
+    verification_status VARCHAR(20) DEFAULT 'unverified',
+    verification_selfie_file_id TEXT,
+    verification_id_file_id TEXT,
+    rejection_reason TEXT,
+    subscription_status VARCHAR(20) DEFAULT 'trial',
+    trial_starts_at TIMESTAMP,
+    trial_expires_at TIMESTAMP,
+    subscription_start_at TIMESTAMP,
+    subscription_expires_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+### driver_search_settings - הגדרות חיפוש נהג
+
+הגדרות סינון חיפוש לכל נהג.
+
+| עמודה | טיפוס | תיאור |
+|-------|-------|-------|
+| id | SERIAL | מזהה ייחודי |
+| user_id | INTEGER | FK למשתמש (unique) |
+| vehicle_type_filter | VARCHAR(30) | סוג רכב לסינון |
+| trip_type_filter | VARCHAR(30) | short_distance / medium_distance / long_distance / any_distance / rides |
+| show_deliveries | BOOLEAN | הצגת משלוחים |
+| upcoming_timeframe | VARCHAR(20) | 1_hour / 2_hours / 5_hours / all |
+| future_only_enabled | BOOLEAN | חיפוש עתידי בלבד |
+| future_only_start_time | TIME | שעת התחלה (כש-future_only=True) |
+| created_at | TIMESTAMP | תאריך יצירה |
+| updated_at | TIMESTAMP | עדכון אחרון |
+
+```sql
+CREATE TABLE driver_search_settings (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+    vehicle_type_filter VARCHAR(30) DEFAULT '7_seater',
+    trip_type_filter VARCHAR(30) DEFAULT 'any_distance',
+    show_deliveries BOOLEAN DEFAULT TRUE,
+    upcoming_timeframe VARCHAR(20) DEFAULT 'all',
+    future_only_enabled BOOLEAN DEFAULT FALSE,
+    future_only_start_time TIME,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+### driver_searches - חיפושי נהגים
+
+חיפושים פעילים של נהגים (מקסימום 9 לנהג).
+
+| עמודה | טיפוס | תיאור |
+|-------|-------|-------|
+| id | SERIAL | מזהה ייחודי |
+| user_id | INTEGER | FK למשתמש |
+| origin_city | VARCHAR(100) | עיר מוצא (nullable) |
+| destination_city | VARCHAR(100) | עיר יעד |
+| is_area_search | BOOLEAN | חיפוש אזורי |
+| latitude | NUMERIC(10,7) | קו רוחב (nullable) |
+| longitude | NUMERIC(10,7) | קו אורך (nullable) |
+| status | VARCHAR(20) | active / paused / deleted |
+| created_at | TIMESTAMP | תאריך יצירה |
+| updated_at | TIMESTAMP | עדכון אחרון |
+
+```sql
+CREATE TABLE driver_searches (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    origin_city VARCHAR(100),
+    destination_city VARCHAR(100) NOT NULL,
+    is_area_search BOOLEAN DEFAULT FALSE,
+    latitude NUMERIC(10, 7),
+    longitude NUMERIC(10, 7),
+    status VARCHAR(20) DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_driver_searches_user ON driver_searches(user_id);
+CREATE INDEX idx_driver_searches_status ON driver_searches(status);
+```
+
+### driver_sessions - סשנים של נהגים
+
+מעקב אחרי סשן 24 שעות של נהג.
+
+| עמודה | טיפוס | תיאור |
+|-------|-------|-------|
+| id | SERIAL | מזהה ייחודי |
+| user_id | INTEGER | FK למשתמש (unique) |
+| session_start_at | TIMESTAMP | תחילת סשן |
+| last_message_at | TIMESTAMP | הודעה אחרונה |
+| is_active | BOOLEAN | האם הסשן פעיל |
+| reminder_sent_at | TIMESTAMP | זמן שליחת תזכורת (nullable) |
+| created_at | TIMESTAMP | תאריך יצירה |
+| updated_at | TIMESTAMP | עדכון אחרון |
+
+```sql
+CREATE TABLE driver_sessions (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+    session_start_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_message_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    is_active BOOLEAN DEFAULT TRUE,
+    reminder_sent_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_driver_sessions_active ON driver_sessions(is_active);
 ```
 
 ## Row Locking לאטומיות

@@ -136,6 +136,18 @@ def _extract_media_from_message(msg: dict) -> tuple[str | None, str | None]:
     return None, None
 
 
+def _extract_location_from_message(msg: dict) -> tuple[float | None, float | None]:
+    """חילוץ מיקום GPS מהודעת Cloud API — מחזיר (latitude, longitude)."""
+    msg_type = msg.get("type", "")
+    if msg_type == "location":
+        loc = msg.get("location", {})
+        lat = loc.get("latitude")
+        lng = loc.get("longitude")
+        if lat is not None and lng is not None:
+            return float(lat), float(lng)
+    return None, None
+
+
 # ──────────────────────────────────────────────
 #  Webhook handler ראשי
 # ──────────────────────────────────────────────
@@ -221,6 +233,7 @@ async def _process_cloud_message(
     # חילוץ טקסט (כולל callback data מכפתורים)
     text = _extract_text_from_message(msg)
     media_id, media_type = _extract_media_from_message(msg)
+    location_lat, location_lng = _extract_location_from_message(msg)
 
     logger.debug(
         "Cloud API message received",
@@ -232,8 +245,8 @@ async def _process_cloud_message(
         },
     )
 
-    # דילוג על הודעות ריקות
-    if not text and not media_id:
+    # דילוג על הודעות ריקות (מיקום GPS נחשב כהודעה תקינה)
+    if not text and not media_id and location_lat is None:
         return None
 
     # idempotency — אותו מנגנון כמו WPPConnect webhook
@@ -346,7 +359,8 @@ async def _process_cloud_message(
 
         # ניתוב ל-state machine — אותה לוגיקה כמו WPPConnect webhook
         response, new_state = await _route_message_to_handler(
-            db, user, text, media_id, background_tasks, normalized_phone
+            db, user, text, media_id, background_tasks, normalized_phone,
+            location_lat=location_lat, location_lng=location_lng,
         )
         return {"from": phone_masked, "response": response, "new_state": new_state}
 
@@ -462,6 +476,9 @@ async def _route_message_to_handler(
     photo_file_id: str | None,
     background_tasks: BackgroundTasks,
     reply_to: str,
+    *,
+    location_lat: float | None = None,
+    location_lng: float | None = None,
 ) -> tuple[str, str | None]:
     """ניתוב הודעה ל-handler המתאים לפי תפקיד המשתמש ומצב נוכחי."""
     state_manager = StateManager(db)
@@ -482,7 +499,7 @@ async def _route_message_to_handler(
     _is_in_multi_step_flow = _is_courier_in_registration or (
         isinstance(current_state, str)
         and (
-            current_state.startswith(("DISPATCHER.", "STATION."))
+            current_state.startswith(("DISPATCHER.", "STATION.", "DRIVER."))
             or (current_state.startswith("SENDER.") and current_state != "SENDER.MENU")
         )
     )
@@ -722,10 +739,11 @@ async def _route_message_to_handler(
 
     # נהג (iDriver)
     if user.role == UserRole.DRIVER:
-        from app.domain.services.driver_session_service import DriverSessionService
+        from app.state_machine.driver_handler import DriverStateHandler as _DH
+        from app.domain.services.driver_session_service import DriverSessionService as _DSS
 
         # סשן 6: עדכון פעילות אחרונה בכל הודעה מנהג
-        _session_svc = DriverSessionService(db)
+        _session_svc = _DSS(db)
         await _session_svc.touch_session(user.id)
 
         is_driver_flow = isinstance(current_state, str) and current_state.startswith("DRIVER.")
@@ -733,16 +751,15 @@ async def _route_message_to_handler(
             await state_manager.force_state(
                 user.id, "whatsapp", DriverState.INITIAL.value, context={}
             )
-        from app.state_machine.handlers import MessageResponse as _MR
-        response = _MR(
-            text="ברוך הבא ל-iDriver! 🚗\nהמערכת בהקמה, נעדכן אותך בקרוב.",
-            keyboard=None,
+        _driver_handler = _DH(db, platform="whatsapp")
+        response, new_state = await _driver_handler.handle_message(
+            user, text, photo_file_id,
+            location_lat=location_lat, location_lng=location_lng,
         )
         background_tasks.add_task(
             send_whatsapp_message, reply_to, response.text, response.keyboard
         )
-        actual_state = current_state if is_driver_flow else DriverState.INITIAL.value
-        return response.text, actual_state
+        return response.text, new_state
 
     # שולח — רק אם באמצע זרימת שולח פעילה.
     # משתמש ב-INITIAL / SENDER.INITIAL / ללא state → welcome message (כמו ב-WPPConnect).

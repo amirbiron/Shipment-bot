@@ -337,6 +337,91 @@ stateDiagram-v2
     rejected --> pending : הגשה מחדש
 ```
 
+#### נהג (DriverState)
+
+```mermaid
+stateDiagram-v2
+    DRIVER_INITIAL : התחלה
+    DRIVER_NEW : נהג חדש
+    DRIVER_REGISTER_COLLECT_NAME : איסוף שם
+    DRIVER_REGISTER_COLLECT_BIRTH_DATE : תאריך לידה
+    DRIVER_REGISTER_COLLECT_VEHICLE : תיאור רכב
+    DRIVER_REGISTER_COLLECT_DRESS_CODE : קוד לבוש
+    DRIVER_VERIFY_COLLECT_SELFIE : צילום סלפי
+    DRIVER_VERIFY_COLLECT_ID_DOCUMENT : תעודת זהות
+    DRIVER_VERIFY_PENDING_APPROVAL : ממתין לאישור
+    DRIVER_MENU : תפריט ראשי
+    DRIVER_SETTINGS_VIEW : תפריט הגדרות
+    DRIVER_SETTINGS_VEHICLE_TYPE : סוג רכב
+    DRIVER_SETTINGS_TRIP_TYPE : סוג נסיעה
+    DRIVER_SETTINGS_SHOW_DELIVERIES : הצגת משלוחים
+    DRIVER_SETTINGS_UPCOMING_TIMEFRAME : מסגרת זמן
+    DRIVER_SETTINGS_FUTURE_ONLY_MODE : חיפוש עתידי
+    DRIVER_SETTINGS_START_TIME : שעת התחלה
+    DRIVER_SEARCH_CREATE_ORIGIN : מוצא חיפוש
+    DRIVER_SEARCH_CREATE_DESTINATION : יעד חיפוש
+    DRIVER_SEARCH_CREATE_TYPE : סוג חיפוש
+    DRIVER_SEARCH_VIEW_ACTIVE : חיפושים פעילים
+    DRIVER_SEARCH_MANAGE : ניהול חיפוש
+    DRIVER_SUBSCRIPTION_VIEW : צפייה במנוי
+    DRIVER_SUBSCRIPTION_PURCHASE : רכישת מנוי
+
+    [*] --> DRIVER_INITIAL
+    [*] --> DRIVER_NEW
+
+    DRIVER_INITIAL --> DRIVER_REGISTER_COLLECT_NAME
+    DRIVER_INITIAL --> DRIVER_MENU
+    DRIVER_NEW --> DRIVER_REGISTER_COLLECT_NAME
+    DRIVER_NEW --> DRIVER_MENU
+    DRIVER_REGISTER_COLLECT_NAME --> DRIVER_REGISTER_COLLECT_BIRTH_DATE
+    DRIVER_REGISTER_COLLECT_BIRTH_DATE --> DRIVER_REGISTER_COLLECT_VEHICLE
+    DRIVER_REGISTER_COLLECT_VEHICLE --> DRIVER_REGISTER_COLLECT_DRESS_CODE
+    DRIVER_REGISTER_COLLECT_DRESS_CODE --> DRIVER_VERIFY_COLLECT_SELFIE : זרם חרדי
+    DRIVER_REGISTER_COLLECT_DRESS_CODE --> DRIVER_MENU : זרם חילוני
+    DRIVER_VERIFY_COLLECT_SELFIE --> DRIVER_VERIFY_COLLECT_ID_DOCUMENT
+    DRIVER_VERIFY_COLLECT_ID_DOCUMENT --> DRIVER_VERIFY_PENDING_APPROVAL
+    DRIVER_VERIFY_PENDING_APPROVAL --> DRIVER_MENU
+    DRIVER_MENU --> DRIVER_SETTINGS_VIEW
+    DRIVER_MENU --> DRIVER_SEARCH_CREATE_ORIGIN
+    DRIVER_MENU --> DRIVER_SEARCH_VIEW_ACTIVE
+    DRIVER_MENU --> DRIVER_SEARCH_MANAGE
+    DRIVER_MENU --> DRIVER_SUBSCRIPTION_VIEW
+    DRIVER_SETTINGS_VIEW --> DRIVER_SETTINGS_VEHICLE_TYPE
+    DRIVER_SETTINGS_VIEW --> DRIVER_SETTINGS_TRIP_TYPE
+    DRIVER_SETTINGS_VIEW --> DRIVER_SETTINGS_SHOW_DELIVERIES
+    DRIVER_SETTINGS_VIEW --> DRIVER_SETTINGS_UPCOMING_TIMEFRAME
+    DRIVER_SETTINGS_VIEW --> DRIVER_SETTINGS_FUTURE_ONLY_MODE
+    DRIVER_SETTINGS_VIEW --> DRIVER_MENU
+    DRIVER_SETTINGS_VEHICLE_TYPE --> DRIVER_SETTINGS_VIEW
+    DRIVER_SETTINGS_VEHICLE_TYPE --> DRIVER_MENU
+    DRIVER_SETTINGS_TRIP_TYPE --> DRIVER_SETTINGS_VIEW
+    DRIVER_SETTINGS_TRIP_TYPE --> DRIVER_MENU
+    DRIVER_SETTINGS_SHOW_DELIVERIES --> DRIVER_SETTINGS_VIEW
+    DRIVER_SETTINGS_SHOW_DELIVERIES --> DRIVER_MENU
+    DRIVER_SETTINGS_UPCOMING_TIMEFRAME --> DRIVER_SETTINGS_VIEW
+    DRIVER_SETTINGS_UPCOMING_TIMEFRAME --> DRIVER_MENU
+    DRIVER_SETTINGS_FUTURE_ONLY_MODE --> DRIVER_SETTINGS_START_TIME
+    DRIVER_SETTINGS_FUTURE_ONLY_MODE --> DRIVER_SETTINGS_VIEW
+    DRIVER_SETTINGS_FUTURE_ONLY_MODE --> DRIVER_MENU
+    DRIVER_SETTINGS_START_TIME --> DRIVER_SETTINGS_VIEW
+    DRIVER_SETTINGS_START_TIME --> DRIVER_MENU
+    DRIVER_SEARCH_CREATE_ORIGIN --> DRIVER_SEARCH_CREATE_DESTINATION
+    DRIVER_SEARCH_CREATE_ORIGIN --> DRIVER_MENU
+    DRIVER_SEARCH_CREATE_DESTINATION --> DRIVER_SEARCH_CREATE_TYPE
+    DRIVER_SEARCH_CREATE_DESTINATION --> DRIVER_MENU
+    DRIVER_SEARCH_CREATE_TYPE --> DRIVER_SEARCH_VIEW_ACTIVE
+    DRIVER_SEARCH_CREATE_TYPE --> DRIVER_MENU
+    DRIVER_SEARCH_VIEW_ACTIVE --> DRIVER_SEARCH_MANAGE
+    DRIVER_SEARCH_VIEW_ACTIVE --> DRIVER_SEARCH_CREATE_ORIGIN
+    DRIVER_SEARCH_VIEW_ACTIVE --> DRIVER_MENU
+    DRIVER_SEARCH_MANAGE --> DRIVER_SEARCH_VIEW_ACTIVE
+    DRIVER_SEARCH_MANAGE --> DRIVER_MENU
+    DRIVER_SUBSCRIPTION_VIEW --> DRIVER_SUBSCRIPTION_PURCHASE
+    DRIVER_SUBSCRIPTION_VIEW --> DRIVER_MENU
+    DRIVER_SUBSCRIPTION_PURCHASE --> DRIVER_SUBSCRIPTION_VIEW
+    DRIVER_SUBSCRIPTION_PURCHASE --> DRIVER_MENU
+```
+
 <!-- STATE_DIAGRAMS_END -->
 
 ---
@@ -628,23 +713,50 @@ class TestPhoneValidation:
 ```
 app/
 ├── api/
-│   ├── routes/          # נקודות קצה API
-│   └── webhooks/        # Telegram/WhatsApp webhooks
+│   ├── routes/                    # נקודות קצה API
+│   └── webhooks/                  # Telegram/WhatsApp webhooks
+│       ├── telegram.py            # Telegram webhook handler
+│       ├── whatsapp.py            # WhatsApp WPPConnect webhook
+│       └── whatsapp_cloud.py      # WhatsApp Cloud API webhook
 ├── core/
-│   ├── config.py        # הגדרות
-│   ├── logging.py       # לוגים מובנים
-│   ├── validation.py    # ולידטורים
-│   ├── exceptions.py    # exceptions מותאמים
+│   ├── config.py                  # הגדרות
+│   ├── logging.py                 # לוגים מובנים
+│   ├── validation.py              # ולידטורים
+│   ├── exceptions.py              # exceptions מותאמים
 │   ├── circuit_breaker.py
-│   └── middleware.py    # middleware לבקשות
+│   └── middleware.py              # middleware לבקשות
 ├── db/
-│   ├── models/          # מודלים של SQLAlchemy
-│   └── database.py      # חיבור לDB
+│   ├── models/                    # מודלים של SQLAlchemy
+│   │   ├── user.py                # משתמשים + UserRole
+│   │   ├── delivery.py            # משלוחים
+│   │   ├── courier_wallet.py      # ארנקי שליחים
+│   │   ├── driver_profile.py      # פרופיל נהג (iDriver)
+│   │   ├── driver_search.py       # חיפושי נהג
+│   │   ├── driver_search_settings.py  # הגדרות חיפוש נהג
+│   │   └── driver_session.py      # סשן 24 שעות נהג
+│   └── database.py                # חיבור לDB
 ├── domain/
-│   └── services/        # לוגיקה עסקית
-├── state_machine/       # זרימת שיחה
+│   └── services/                  # לוגיקה עסקית
+│       ├── driver_registration_service.py  # רישום נהג
+│       ├── driver_verification_service.py  # אימות חרדי
+│       ├── driver_menu_service.py          # תפריט + הגדרות
+│       ├── driver_search_service.py        # חיפוש נסיעות
+│       ├── driver_session_service.py       # סשן 24 שעות
+│       ├── driver_subscription_service.py  # מנויים
+│       ├── city_abbreviation_service.py    # קיצורי ערים
+│       ├── ride_posting_service.py         # פרסום נסיעות
+│       └── pricing_service.py             # מחירון
+├── schemas/
+│   └── driver.py                  # סכמות Pydantic לנהג
+├── state_machine/                 # זרימת שיחה
+│   ├── states.py                  # Enums + TRANSITIONS
+│   ├── manager.py                 # StateManager
+│   ├── handlers.py                # Sender + Courier handlers
+│   ├── driver_handler.py          # Driver handler (iDriver)
+│   ├── dispatcher_handler.py      # Dispatcher handler
+│   └── station_owner_handler.py   # Station Owner handler
 └── workers/
-    └── tasks.py         # משימות Celery
+    └── tasks.py                   # משימות Celery
 ```
 
 ---
