@@ -736,6 +736,11 @@ async def _route_message_to_handler(
         if station:
             handler = StationOwnerStateHandler(db, station.id, platform="whatsapp")
             response, new_state = await handler.handle_message(user, text, photo_file_id)
+            # הוספת כפתור "חזרה לאדמין" אם נדרש
+            _station_ctx_cl = await state_manager.get_context(user.id, "whatsapp")
+            if _station_ctx_cl.get("original_role") == "admin":
+                from app.api.webhooks._admin_context import inject_admin_return_button as _inject_btn_station_cl
+                _inject_btn_station_cl(response)
         else:
             response, new_state = await _route_to_role_menu_wa(user, db, state_manager)
         background_tasks.add_task(

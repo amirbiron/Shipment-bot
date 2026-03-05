@@ -554,7 +554,7 @@ async def change_user_role(
         raise HTTPException(status_code=404, detail="משתמש לא נמצא")
 
     new_role = UserRole(body.role)
-    previous_role = await apply_role_change(user, new_role, db)
+    previous_role = await apply_role_change(user, new_role, db, source="admin_panel")
 
     return RoleChangeResponse(
         user_id=user.id,

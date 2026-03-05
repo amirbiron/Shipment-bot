@@ -317,6 +317,7 @@ async def apply_role_change(
     user: User,
     new_role: UserRole,
     db: AsyncSession,
+    source: str = "api",
 ) -> UserRole:
     """לוגיקה משותפת לשינוי תפקיד — משמשת גם את admin_debug.py.
 
@@ -338,6 +339,7 @@ async def apply_role_change(
             "user_id": user.id,
             "previous_role": previous_role.value,
             "new_role": new_role.value,
+            "source": source,
         },
     )
 
