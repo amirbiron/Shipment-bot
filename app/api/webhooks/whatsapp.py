@@ -1816,12 +1816,16 @@ async def whatsapp_webhook(
                     response, new_state = await handler.handle_message(
                         user, text, photo_file_id
                     )
+                    # הוספת כפתור "חזרה לאדמין" אם נדרש
+                    _station_ctx_wa = await state_manager.get_context(user.id, "whatsapp")
+                    if _station_ctx_wa.get("original_role") == "admin":
+                        _inject_admin_return_button_wa(response)
                 else:
                     # תחנה לא נמצאה - fallback
                     response, new_state = await _route_to_role_menu_wa(
                         user, db, state_manager
                     )
-    
+
                 background_tasks.add_task(
                     send_whatsapp_message, reply_to, response.text, response.keyboard
                 )
@@ -1916,6 +1920,10 @@ async def whatsapp_webhook(
                     background_tasks=background_tasks,
                 )
 
+                # הוספת כפתור "חזרה לאדמין" אם נדרש
+                _courier_ctx_wa = await state_manager.get_context(user.id, "whatsapp")
+                if _courier_ctx_wa.get("original_role") == "admin":
+                    _inject_admin_return_button_wa(response)
                 background_tasks.add_task(
                     send_whatsapp_message, reply_to, response.text, response.keyboard
                 )
@@ -1923,7 +1931,7 @@ async def whatsapp_webhook(
                     {"from": sender_id, "response": response.text, "new_state": new_state}
                 )
                 continue
-    
+
             if user.role == UserRole.DRIVER:
                 # iDriver — ניתוב נהג ל-handler (סשנים 2-6)
                 from app.state_machine.driver_handler import DriverStateHandler as _DH
@@ -1934,7 +1942,11 @@ async def whatsapp_webhook(
                 await _session_svc.touch_session(user.id)
 
                 is_driver_flow = isinstance(current_state, str) and current_state.startswith("DRIVER.")
+                _drv_admin_keys_wa = None
                 if not is_driver_flow:
+                    _drv_admin_keys_wa = await _save_admin_context_wa(
+                        user.id, state_manager, "whatsapp"
+                    )
                     await state_manager.force_state(
                         user.id, "whatsapp", DriverState.INITIAL.value, context={}
                     )
@@ -1943,6 +1955,19 @@ async def whatsapp_webhook(
                     user, text, None,
                     location_lat=location_lat, location_lng=location_lng,
                 )
+                # שחזור admin context אחרי ה-handler
+                if _drv_admin_keys_wa:
+                    await _restore_admin_context_wa(
+                        user.id, state_manager, new_state,
+                        _drv_admin_keys_wa, "whatsapp",
+                    )
+                # הוספת כפתור "חזרה לאדמין" אם נדרש
+                if _drv_admin_keys_wa and _drv_admin_keys_wa.get("original_role") == "admin":
+                    _inject_admin_return_button_wa(response)
+                else:
+                    _driver_ctx_wa = await state_manager.get_context(user.id, "whatsapp")
+                    if _driver_ctx_wa.get("original_role") == "admin":
+                        _inject_admin_return_button_wa(response)
                 background_tasks.add_task(
                     send_whatsapp_message, reply_to, response.text, response.keyboard
                 )
@@ -1957,7 +1982,10 @@ async def whatsapp_webhook(
                 response, new_state = await handler.handle_message(
                     user_id=user.id, platform="whatsapp", message=text
                 )
-    
+                # הוספת כפתור "חזרה לאדמין" אם נדרש
+                _sender_ctx_wa = await state_manager.get_context(user.id, "whatsapp")
+                if _sender_ctx_wa.get("original_role") == "admin":
+                    _inject_admin_return_button_wa(response)
                 background_tasks.add_task(
                     send_whatsapp_message, reply_to, response.text, response.keyboard
                 )
@@ -1965,7 +1993,7 @@ async def whatsapp_webhook(
                     {"from": sender_id, "response": response.text, "new_state": new_state}
                 )
                 continue
-    
+
             # If user is in the middle of a sender flow, continue it
             if (
                 current_state
@@ -1980,7 +2008,10 @@ async def whatsapp_webhook(
                 response, new_state = await handler.handle_message(
                     user_id=user.id, platform="whatsapp", message=text
                 )
-    
+                # הוספת כפתור "חזרה לאדמין" אם נדרש
+                _sender_ctx2_wa = await state_manager.get_context(user.id, "whatsapp")
+                if _sender_ctx2_wa.get("original_role") == "admin":
+                    _inject_admin_return_button_wa(response)
                 background_tasks.add_task(
                     send_whatsapp_message, reply_to, response.text, response.keyboard
                 )

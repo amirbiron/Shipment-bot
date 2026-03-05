@@ -545,35 +545,21 @@ async def change_user_role(
     _: None = Depends(require_admin_api_key),
     db: AsyncSession = Depends(get_db),
 ) -> RoleChangeResponse:
-    """שינוי תפקיד משתמש."""
+    """שינוי תפקיד משתמש — משתמש בלוגיקה משותפת מ-users.py."""
+    from app.api.routes.users import apply_role_change
+
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="משתמש לא נמצא")
 
-    old_role = user.role.value if hasattr(user.role, "value") else str(user.role)
     new_role = UserRole(body.role)
-    user.role = new_role
-
-    # שליח — הגדרת approval_status אם לא מוגדר
-    if new_role == UserRole.COURIER and user.approval_status is None:
-        user.approval_status = ApprovalStatus.APPROVED
-
-    await db.commit()
-
-    logger.info(
-        "שינוי תפקיד ע\"י אדמין (פאנל)",
-        extra_data={
-            "user_id": user_id,
-            "old_role": old_role,
-            "new_role": body.role,
-        },
-    )
+    previous_role = await apply_role_change(user, new_role, db)
 
     return RoleChangeResponse(
         user_id=user.id,
         name=user.full_name or user.name,
-        old_role=old_role,
+        old_role=previous_role.value if hasattr(previous_role, "value") else str(previous_role),
         new_role=body.role,
         approval_status=user.approval_status.value if user.approval_status else None,
     )
