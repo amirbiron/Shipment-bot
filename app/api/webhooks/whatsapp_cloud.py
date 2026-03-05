@@ -245,8 +245,10 @@ async def _process_cloud_message(
         },
     )
 
-    # דילוג על הודעות ריקות (מיקום GPS נחשב כהודעה תקינה)
-    if not text and not media_id and location_lat is None:
+    # דילוג על הודעות ריקות
+    # מיקום GPS עובר את ה-guard — בדיקת תפקיד נהג מתבצעת אחרי זיהוי המשתמש
+    _is_location_only = (not text and not media_id and location_lat is not None)
+    if not text and not media_id and not _is_location_only:
         return None
 
     # idempotency — אותו מנגנון כמו WPPConnect webhook
@@ -276,6 +278,10 @@ async def _process_cloud_message(
                 "role": user.role.value if user.role else None,
             },
         )
+
+        # הודעת מיקום בלבד — רלוונטית רק לנהגים; שאר התפקידים לא צורכים מיקום GPS
+        if _is_location_only and user.role != UserRole.DRIVER:
+            return None
 
         # פקודות אישור/דחייה מהודעות פרטיות של מנהלים —
         # חייב להיות לפני is_new_user כדי שמנהל חדש יוכל לאשר מיד
