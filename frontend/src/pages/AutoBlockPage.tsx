@@ -82,6 +82,10 @@ export default function AutoBlockPage() {
           <form
             onSubmit={(e) => {
               e.preventDefault();
+              if (enabled && (graceMonths === "" || minDebt === "")) {
+                toast({ title: "שגיאה", description: "יש למלא את כל השדות", variant: "destructive" });
+                return;
+              }
               mutation.mutate();
             }}
             className="space-y-6"
@@ -113,6 +117,7 @@ export default function AutoBlockPage() {
                     type="number"
                     min={1}
                     max={12}
+                    required
                     value={graceMonths}
                     onChange={(e) => { setGraceMonths(e.target.value); markDirty(); }}
                     dir="ltr"
@@ -129,6 +134,7 @@ export default function AutoBlockPage() {
                     type="number"
                     min={0}
                     step={0.01}
+                    required
                     value={minDebt}
                     onChange={(e) => { setMinDebt(e.target.value); markDirty(); }}
                     dir="ltr"
