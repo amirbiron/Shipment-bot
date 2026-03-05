@@ -55,7 +55,9 @@ export default function OwnersPage() {
         description: result.message,
         variant: result.success ? "default" : "destructive",
       });
-      queryClient.invalidateQueries({ queryKey: ["owners"] });
+      if (result.success) {
+        queryClient.invalidateQueries({ queryKey: ["owners"] });
+      }
     },
     onError: () => {
       toast({ title: "שגיאה", description: "אירעה שגיאה בהסרת הבעלים", variant: "destructive" });
