@@ -45,7 +45,7 @@ export function createAlertStream(
   onMessage: (alert: AlertItem) => void,
   onError?: (err: Event) => void
 ): EventSource {
-  const baseUrl = import.meta.env.VITE_API_BASE_URL || "/api/panel";
+  const baseUrl = apiClient.defaults.baseURL || "/api/panel";
   const url = `${baseUrl}/alerts/stream?token=${encodeURIComponent(token)}`;
   const es = new EventSource(url);
 

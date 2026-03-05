@@ -111,7 +111,7 @@ export default function MultiStationPage() {
         <div className="text-center py-12 text-muted-foreground">
           <Building2 className="h-10 w-10 mx-auto mb-2 opacity-40" />
           <p>דשבורד זה מציג השוואה בין מספר תחנות.</p>
-          <p>כרגע יש לך תחנה אחת בלבד.</p>
+          <p>{stations.length === 0 ? "לא נמצאו תחנות." : "כרגע יש לך תחנה אחת בלבד."}</p>
         </div>
       </div>
     );
