@@ -123,6 +123,7 @@ class SenderStateHandler:
             SenderState.INITIAL.value: self._handle_initial,
             SenderState.NEW.value: self._handle_new,
             SenderState.REGISTER_COLLECT_NAME.value: self._handle_collect_name,
+            SenderState.REGISTER_COLLECT_PHONE.value: self._handle_collect_phone,
             SenderState.MENU.value: self._handle_menu,
             # Pickup address wizard
             SenderState.PICKUP_CITY.value: self._handle_pickup_city,
@@ -148,7 +149,24 @@ class SenderStateHandler:
     # ==================== Initial & Registration ====================
 
     async def _handle_initial(self, message: str, context: dict, user_id: int):
-        """Handle initial state"""
+        """Handle initial state — בדיקת רישום קיים לפני התחלת רישום מחדש"""
+        result = await self.db.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+        if user and user.name:
+            # משתמש רשום — מנתב לתפריט במקום לרישום מחדש
+            logger.info(
+                "שולח רשום ניגש ל-INITIAL — מנתב לתפריט",
+                extra_data={"user_id": user_id},
+            )
+            response = MessageResponse(
+                f"שלום {escape(user.name)}!\n\n"
+                "מה תרצו לעשות?\n"
+                "1. יצירת משלוח חדש\n"
+                "2. צפייה במשלוחים שלי",
+                keyboard=[["📦 המשלוחים שלי"], ["➕ משלוח חדש"]],
+            )
+            return response, SenderState.MENU.value, {}
+
         response = MessageResponse(
             "שלום! ברוכים הבאים לבוט המשלוחים.\n" "אנא הזינו את שמכם להרשמה:",
         )
@@ -175,13 +193,60 @@ class SenderStateHandler:
             user.name = name
             await self.db.commit()
 
+        # אם למשתמש כבר יש מספר טלפון תקין — מדלג לתפריט
+        if user and user.phone_number and not user.phone_number.startswith("tg:"):
+            safe_name = escape(name)
+            response = MessageResponse(
+                f"שלום {safe_name}! ההרשמה הושלמה בהצלחה.\n\n"
+                "מה תרצו לעשות?\n"
+                "1. יצירת משלוח חדש\n"
+                "2. צפייה במשלוחים שלי",
+                keyboard=[["📦 המשלוחים שלי"], ["➕ משלוח חדש"]],
+            )
+            return response, SenderState.MENU.value, {"name": name}
+
         safe_name = escape(name)
+        response = MessageResponse(
+            f"תודה {safe_name}!\n\n"
+            "📱 אנא הזינו את מספר הטלפון שלכם:"
+        )
+        return response, SenderState.REGISTER_COLLECT_PHONE.value, {"name": name}
+
+    async def _handle_collect_phone(self, message: str, context: dict, user_id: int):
+        """איסוף מספר טלפון והשלמת רישום"""
+        from app.core.validation import PhoneNumberValidator
+
+        phone = message.strip()
+        if not PhoneNumberValidator.validate(phone):
+            response = MessageResponse(
+                "מספר הטלפון לא תקין. אנא הזינו מספר טלפון ישראלי תקין\n"
+                "(לדוגמה: 0501234567):"
+            )
+            return response, SenderState.REGISTER_COLLECT_PHONE.value, {}
+
+        normalized = PhoneNumberValidator.normalize(phone)
+
+        result = await self.db.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+        if user:
+            user.phone_number = normalized
+            await self.db.commit()
+
+        name = context.get("name", "")
+        safe_name = escape(name) if name else ""
         response = MessageResponse(
             f"שלום {safe_name}! ההרשמה הושלמה בהצלחה.\n\n"
             "מה תרצו לעשות?\n"
             "1. יצירת משלוח חדש\n"
             "2. צפייה במשלוחים שלי",
             keyboard=[["📦 המשלוחים שלי"], ["➕ משלוח חדש"]],
+        )
+        logger.info(
+            "רישום שולח הושלם",
+            extra_data={
+                "user_id": user_id,
+                "phone": PhoneNumberValidator.mask(normalized),
+            },
         )
         return response, SenderState.MENU.value, {"name": name}
 
@@ -854,7 +919,30 @@ class CourierStateHandler:
     async def _handle_initial(
         self, user: User, message: str, context: dict, photo_file_id: str
     ):
-        """Welcome message and start registration"""
+        """Welcome message and start registration — בדיקת רישום קיים"""
+        from app.db.models.user import ApprovalStatus
+
+        await self.db.refresh(user)
+
+        # שליח שסיים רישום ומאושר — מנתב לתפריט
+        if user.terms_accepted_at is not None and user.approval_status == ApprovalStatus.APPROVED:
+            logger.info(
+                "שליח רשום ניגש ל-INITIAL — מנתב לתפריט",
+                extra_data={"user_id": user.id},
+            )
+            return await self._handle_menu(user, message, context, photo_file_id)
+
+        # שליח שסיים רישום וממתין לאישור (לא נדחה/נחסם) — מנתב להמתנה
+        if user.terms_accepted_at is not None and user.approval_status == ApprovalStatus.PENDING:
+            logger.info(
+                "שליח רשום ניגש ל-INITIAL — מנתב להמתנת אישור",
+                extra_data={"user_id": user.id},
+            )
+            return await self._handle_pending_approval(
+                user, message, context, photo_file_id
+            )
+
+        # שליח שנדחה/חדש — מתחיל רישום (מאפשר הגשה חוזרת)
         response = MessageResponse(
             "ברוכים הבאים למערכת משלוח בצ'יק! 🚚\n\n"
             "כדי להתחיל לקחת משלוחים, עלינו להכיר אותך.\n\n"

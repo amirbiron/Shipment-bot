@@ -73,10 +73,12 @@ class WalletService:
         fee: float
     ) -> Tuple[bool, str]:
         """
-        Check if courier can capture a delivery based on credit.
-        Returns (can_capture, reason_message)
+        בדיקה אם שליח יכול לתפוס משלוח לפי מגבלת אשראי.
+
+        משתמש ב-for_update לנעילת שורה — מונע race condition שבו שני שליחים
+        עוברים את בדיקת היתרה במקביל ויוצרים יתרה שלילית מעבר למגבלה.
         """
-        wallet = await self.get_or_create_wallet(courier_id)
+        wallet = await self.get_or_create_wallet(courier_id, for_update=True)
         future_balance = wallet.balance - Decimal(str(fee))
 
         if future_balance < wallet.credit_limit:

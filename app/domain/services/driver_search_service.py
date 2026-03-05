@@ -231,7 +231,12 @@ class DriverSearchService:
 
         Returns:
             מספר חיפושים שהושהו
+
+        Raises:
+            ValidationException: משתמש לא נמצא או לא מורשה
         """
+        await self._verify_driver_ownership(user_id)
+
         result = await self.db.execute(
             update(DriverSearch)
             .where(
@@ -267,8 +272,9 @@ class DriverSearchService:
             מספר חיפושים שחודשו
 
         Raises:
-            ValidationException: אם כבר הגיע למקסימום חיפושים פעילים
+            ValidationException: אם כבר הגיע למקסימום חיפושים פעילים או משתמש לא מורשה
         """
+        await self._verify_driver_ownership(user_id)
         # בדיקה כמה חיפושים פעילים כבר קיימים
         active_count_result = await self.db.execute(
             select(func.count())
@@ -397,6 +403,19 @@ class DriverSearchService:
                 extra_data={"user_id": user_id, "count": count},
             )
         return count
+
+    async def _verify_driver_ownership(self, user_id: int) -> None:
+        """אימות שהמשתמש קיים ושייך לתפקיד נהג — בדיקת authorization"""
+        from app.db.models.user import User, UserRole
+
+        result = await self.db.execute(
+            select(User).where(User.id == user_id)
+        )
+        user = result.scalar_one_or_none()
+        if not user:
+            raise ValidationException("משתמש לא נמצא")
+        if user.role != UserRole.DRIVER:
+            raise ValidationException("אין הרשאה לבצע פעולה זו — נדרש תפקיד נהג")
 
     async def _find_duplicate(
         self,

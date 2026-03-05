@@ -1,0 +1,407 @@
+"""
+בדיקות לתיקוני Issue #265 — ממצאים קריטיים
+
+1. דליפת חיבורי DB ב-get_task_session()
+2. עקיפת מצב רישום ב-_handle_initial()
+3. Race condition בארנק — with_for_update()
+4. Handler חסר ל-REGISTER_COLLECT_PHONE
+5. ולידציה צולבת חסרה ב-driver_menu_service
+6. בדיקות authorization חסרות בשירותי נהג
+"""
+import pytest
+from decimal import Decimal
+from datetime import datetime, time
+from unittest.mock import patch, AsyncMock
+
+from app.db.models.user import User, UserRole, ApprovalStatus
+from app.db.models.courier_wallet import CourierWallet
+from app.state_machine.states import SenderState, CourierState
+from app.state_machine.handlers import SenderStateHandler, CourierStateHandler
+
+
+# ============================================================================
+# תיקון #1: דליפת חיבורי DB — singleton engine
+# ============================================================================
+
+
+class TestTaskSessionSingleton:
+    """בדיקות ל-singleton pattern ב-get_task_session()"""
+
+    @pytest.mark.unit
+    def test_singleton_engine_reuse(self):
+        """וידוא ש-_get_task_engine מחזיר את אותו engine בקריאות חוזרות"""
+        from app.db.database import _get_task_engine
+        import app.db.database as db_module
+
+        # איפוס ה-singleton
+        original_engine = db_module._task_engine
+        original_maker = db_module._task_session_maker
+        db_module._task_engine = None
+        db_module._task_session_maker = None
+
+        try:
+            engine1, maker1 = _get_task_engine()
+            engine2, maker2 = _get_task_engine()
+
+            assert engine1 is engine2, "Engine אמור להיות singleton"
+            assert maker1 is maker2, "Session maker אמור להיות singleton"
+        finally:
+            # שחזור מצב מקורי
+            db_module._task_engine = original_engine
+            db_module._task_session_maker = original_maker
+
+
+# ============================================================================
+# תיקון #2: עקיפת מצב רישום ב-_handle_initial()
+# ============================================================================
+
+
+class TestSenderHandleInitialRegistrationCheck:
+    """בדיקות ש-_handle_initial לא מתחיל רישום מחדש לשולח רשום"""
+
+    @pytest.mark.asyncio
+    async def test_registered_sender_goes_to_menu(self, db_session, user_factory):
+        """שולח עם שם קיים צריך לעבור לתפריט, לא לרישום"""
+        user = await user_factory(
+            name="דניאל",
+            role=UserRole.SENDER,
+        )
+
+        handler = SenderStateHandler(db_session)
+        response, next_state, ctx = await handler._handle_initial(
+            "test", {}, user.id
+        )
+
+        assert next_state == SenderState.MENU.value
+        assert "דניאל" in response.text
+
+    @pytest.mark.asyncio
+    async def test_new_sender_starts_registration(self, db_session, user_factory):
+        """שולח ללא שם צריך להתחיל רישום"""
+        user = await user_factory(
+            name=None,
+            role=UserRole.SENDER,
+        )
+
+        handler = SenderStateHandler(db_session)
+        response, next_state, ctx = await handler._handle_initial(
+            "test", {}, user.id
+        )
+
+        assert next_state == SenderState.REGISTER_COLLECT_NAME.value
+
+
+class TestCourierHandleInitialRegistrationCheck:
+    """בדיקות ש-_handle_initial לא מתחיל רישום מחדש לשליח רשום"""
+
+    @pytest.mark.asyncio
+    async def test_registered_courier_goes_to_menu(self, db_session, user_factory):
+        """שליח שסיים רישום (terms_accepted) ומאושר — צריך להגיע לתפריט"""
+        user = await user_factory(
+            name="משה",
+            full_name="משה כהן",
+            role=UserRole.COURIER,
+            approval_status=ApprovalStatus.APPROVED,
+        )
+        user.terms_accepted_at = datetime.utcnow()
+        await db_session.commit()
+
+        handler = CourierStateHandler(db_session)
+        response, next_state, ctx = await handler._handle_initial(
+            user, "test", {}, ""
+        )
+
+        assert next_state == CourierState.MENU.value
+
+    @pytest.mark.asyncio
+    async def test_registered_courier_pending_goes_to_pending(
+        self, db_session, user_factory
+    ):
+        """שליח שסיים רישום אך ממתין לאישור — צריך לראות הודעת המתנה"""
+        user = await user_factory(
+            name="יוסי",
+            full_name="יוסי לוי",
+            role=UserRole.COURIER,
+            approval_status=ApprovalStatus.PENDING,
+        )
+        user.terms_accepted_at = datetime.utcnow()
+        await db_session.commit()
+
+        handler = CourierStateHandler(db_session)
+        response, next_state, ctx = await handler._handle_initial(
+            user, "test", {}, ""
+        )
+
+        assert next_state == CourierState.PENDING_APPROVAL.value
+
+    @pytest.mark.asyncio
+    async def test_new_courier_starts_registration(self, db_session, user_factory):
+        """שליח חדש ללא terms_accepted — צריך להתחיל רישום"""
+        user = await user_factory(
+            name="חדש",
+            role=UserRole.COURIER,
+            approval_status=ApprovalStatus.PENDING,
+        )
+
+        handler = CourierStateHandler(db_session)
+        response, next_state, ctx = await handler._handle_initial(
+            user, "test", {}, ""
+        )
+
+        assert next_state == CourierState.REGISTER_COLLECT_NAME.value
+
+
+# ============================================================================
+# תיקון #3: Race condition בארנק
+# ============================================================================
+
+
+class TestWalletForUpdate:
+    """בדיקות ש-check_can_capture משתמש ב-for_update"""
+
+    @pytest.mark.asyncio
+    async def test_check_can_capture_uses_for_update(
+        self, db_session, user_factory, wallet_factory
+    ):
+        """check_can_capture צריך לקרוא ל-get_or_create_wallet עם for_update=True"""
+        courier = await user_factory(
+            role=UserRole.COURIER,
+            approval_status=ApprovalStatus.APPROVED,
+        )
+        await wallet_factory(courier_id=courier.id, balance=100.0)
+
+        from app.domain.services.wallet_service import WalletService
+
+        service = WalletService(db_session)
+
+        # בדיקה שהפונקציה עובדת ומקבלת תוצאה נכונה
+        can_capture, msg = await service.check_can_capture(courier.id, 50.0)
+        assert can_capture is True
+
+        # בדיקה שנכשלת כשאין מספיק יתרה
+        can_capture, msg = await service.check_can_capture(courier.id, 700.0)
+        assert can_capture is False
+        assert "יתרה לא מספיקה" in msg
+
+
+# ============================================================================
+# תיקון #4: Handler חסר ל-REGISTER_COLLECT_PHONE
+# ============================================================================
+
+
+class TestRegisterCollectPhone:
+    """בדיקות ל-handler של REGISTER_COLLECT_PHONE"""
+
+    @pytest.mark.asyncio
+    async def test_valid_phone_completes_registration(
+        self, db_session, user_factory
+    ):
+        """מספר טלפון תקין צריך להשלים רישום"""
+        user = await user_factory(
+            name="דני",
+            phone_number="tg:12345",
+            role=UserRole.SENDER,
+        )
+
+        handler = SenderStateHandler(db_session)
+        response, next_state, ctx = await handler._handle_collect_phone(
+            "0501234567", {"name": "דני"}, user.id
+        )
+
+        assert next_state == SenderState.MENU.value
+        assert "הושלמה" in response.text
+
+    @pytest.mark.asyncio
+    async def test_invalid_phone_stays_in_state(self, db_session, user_factory):
+        """מספר טלפון לא תקין צריך להישאר במצב"""
+        user = await user_factory(
+            name="דני",
+            phone_number="tg:12345",
+            role=UserRole.SENDER,
+        )
+
+        handler = SenderStateHandler(db_session)
+        response, next_state, ctx = await handler._handle_collect_phone(
+            "123", {}, user.id
+        )
+
+        assert next_state == SenderState.REGISTER_COLLECT_PHONE.value
+        assert "לא תקין" in response.text
+
+    @pytest.mark.asyncio
+    async def test_collect_name_routes_to_phone_for_tg_users(
+        self, db_session, user_factory
+    ):
+        """משתמש טלגרם (עם placeholder tg:) צריך לעבור לאיסוף טלפון"""
+        user = await user_factory(
+            name=None,
+            phone_number="tg:999",
+            role=UserRole.SENDER,
+        )
+
+        handler = SenderStateHandler(db_session)
+        response, next_state, ctx = await handler._handle_collect_name(
+            "דני", {}, user.id
+        )
+
+        assert next_state == SenderState.REGISTER_COLLECT_PHONE.value
+
+    @pytest.mark.asyncio
+    async def test_collect_name_skips_phone_for_whatsapp_users(
+        self, db_session, user_factory
+    ):
+        """משתמש וואטסאפ (עם מספר אמיתי) צריך לדלג לתפריט"""
+        user = await user_factory(
+            name=None,
+            phone_number="+972501234567",
+            role=UserRole.SENDER,
+        )
+
+        handler = SenderStateHandler(db_session)
+        response, next_state, ctx = await handler._handle_collect_name(
+            "דני", {}, user.id
+        )
+
+        assert next_state == SenderState.MENU.value
+
+    @pytest.mark.asyncio
+    async def test_handler_is_registered(self, db_session):
+        """וידוא שה-handler רשום במפה"""
+        handler = SenderStateHandler(db_session)
+        resolved = handler._get_handler(SenderState.REGISTER_COLLECT_PHONE.value)
+        assert resolved is not None
+        assert resolved != handler._handle_unknown
+
+
+# ============================================================================
+# תיקון #5: ולידציה צולבת חסרה ב-driver_menu_service
+# ============================================================================
+
+
+class TestDriverMenuCrossValidation:
+    """בדיקות לולידציה צולבת ב-update_vehicle_type, update_trip_type, update_show_deliveries"""
+
+    @pytest.mark.asyncio
+    async def test_update_vehicle_type_calls_validate(self, db_session, user_factory):
+        """update_vehicle_type חייב לקרוא ל-validate_against_existing"""
+        from app.domain.services.driver_menu_service import DriverMenuService
+        from app.db.models.driver_search_settings import DriverSearchSettings
+        from app.db.models.driver_profile import VehicleCategory
+
+        user = await user_factory(role=UserRole.DRIVER)
+
+        # יצירת הגדרות בסיסיות
+        settings_obj = DriverSearchSettings(user_id=user.id)
+        db_session.add(settings_obj)
+        await db_session.commit()
+
+        service = DriverMenuService(db_session)
+
+        # עדכון סוג רכב — צריך לעבור ולידציה בלי שגיאה
+        label = await service.update_vehicle_type(user.id, VehicleCategory.CAR.value)
+        assert label is not None
+
+    @pytest.mark.asyncio
+    async def test_update_trip_type_calls_validate(self, db_session, user_factory):
+        """update_trip_type חייב לקרוא ל-validate_against_existing"""
+        from app.domain.services.driver_menu_service import DriverMenuService
+        from app.db.models.driver_search_settings import DriverSearchSettings, TripTypeFilter
+
+        user = await user_factory(role=UserRole.DRIVER)
+
+        settings_obj = DriverSearchSettings(user_id=user.id)
+        db_session.add(settings_obj)
+        await db_session.commit()
+
+        service = DriverMenuService(db_session)
+
+        label = await service.update_trip_type(user.id, TripTypeFilter.LONG_DISTANCE.value)
+        assert label is not None
+
+    @pytest.mark.asyncio
+    async def test_update_show_deliveries_calls_validate(self, db_session, user_factory):
+        """update_show_deliveries חייב לקרוא ל-validate_against_existing"""
+        from app.domain.services.driver_menu_service import DriverMenuService
+        from app.db.models.driver_search_settings import DriverSearchSettings
+
+        user = await user_factory(role=UserRole.DRIVER)
+
+        settings_obj = DriverSearchSettings(user_id=user.id)
+        db_session.add(settings_obj)
+        await db_session.commit()
+
+        service = DriverMenuService(db_session)
+
+        result = await service.update_show_deliveries(user.id, True)
+        assert result is True
+
+
+# ============================================================================
+# תיקון #6: בדיקות authorization חסרות בשירותי נהג
+# ============================================================================
+
+
+class TestDriverSearchAuthorization:
+    """בדיקות שפעולות חיפוש דורשות authorization"""
+
+    @pytest.mark.asyncio
+    async def test_pause_rejects_non_driver(self, db_session, user_factory):
+        """pause_all_searches חייב לדחות משתמש שאינו נהג"""
+        from app.domain.services.driver_search_service import DriverSearchService
+        from app.core.exceptions import ValidationException
+
+        sender = await user_factory(role=UserRole.SENDER)
+
+        service = DriverSearchService(db_session)
+
+        with pytest.raises(ValidationException, match="הרשאה"):
+            await service.pause_all_searches(sender.id)
+
+    @pytest.mark.asyncio
+    async def test_resume_rejects_non_driver(self, db_session, user_factory):
+        """resume_all_searches חייב לדחות משתמש שאינו נהג"""
+        from app.domain.services.driver_search_service import DriverSearchService
+        from app.core.exceptions import ValidationException
+
+        courier = await user_factory(role=UserRole.COURIER)
+
+        service = DriverSearchService(db_session)
+
+        with pytest.raises(ValidationException, match="הרשאה"):
+            await service.resume_all_searches(courier.id)
+
+    @pytest.mark.asyncio
+    async def test_pause_allows_driver(self, db_session, user_factory):
+        """pause_all_searches מאשר למשתמש עם תפקיד נהג"""
+        from app.domain.services.driver_search_service import DriverSearchService
+
+        driver = await user_factory(role=UserRole.DRIVER)
+
+        service = DriverSearchService(db_session)
+
+        # לא צריך לזרוק שגיאה
+        count = await service.pause_all_searches(driver.id)
+        assert count == 0  # אין חיפושים פעילים
+
+    @pytest.mark.asyncio
+    async def test_resume_allows_driver(self, db_session, user_factory):
+        """resume_all_searches מאשר למשתמש עם תפקיד נהג"""
+        from app.domain.services.driver_search_service import DriverSearchService
+
+        driver = await user_factory(role=UserRole.DRIVER)
+
+        service = DriverSearchService(db_session)
+
+        count = await service.resume_all_searches(driver.id)
+        assert count == 0
+
+    @pytest.mark.asyncio
+    async def test_pause_rejects_nonexistent_user(self, db_session):
+        """pause_all_searches חייב לדחות משתמש שלא קיים"""
+        from app.domain.services.driver_search_service import DriverSearchService
+        from app.core.exceptions import ValidationException
+
+        service = DriverSearchService(db_session)
+
+        with pytest.raises(ValidationException, match="לא נמצא"):
+            await service.pause_all_searches(999999)

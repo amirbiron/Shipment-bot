@@ -31,32 +31,44 @@ async def get_db() -> AsyncSession:
             await session.close()
 
 
+# engine singleton לכל worker — מונע יצירת pool חדש בכל קריאה ל-get_task_session()
+_task_engine = None
+_task_session_maker = None
+
+
+def _get_task_engine():
+    """שליפת engine singleton עבור Celery worker.
+
+    יוצר engine חדש רק בפעם הראשונה (per-worker).
+    """
+    global _task_engine, _task_session_maker
+    if _task_engine is None:
+        _task_engine = create_async_engine(
+            settings.DATABASE_URL,
+            echo=settings.DEBUG,
+            pool_pre_ping=True,
+            pool_size=5,
+            max_overflow=10,
+        )
+        _task_session_maker = async_sessionmaker(
+            bind=_task_engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
+    return _task_engine, _task_session_maker
+
+
 @asynccontextmanager
 async def get_task_session():
     """
-    Create a fresh database session for Celery tasks.
+    יצירת סשן DB עבור Celery tasks.
 
-    This creates a new engine and session bound to the current event loop,
-    avoiding the "attached to a different loop" error that occurs when
-    reusing module-level engines across different event loops in Celery workers.
+    משתמש ב-engine singleton per-worker כדי למנוע דליפת connection pools.
     """
-    task_engine = create_async_engine(
-        settings.DATABASE_URL,
-        echo=settings.DEBUG,
-        pool_pre_ping=True,
-        pool_size=5,
-        max_overflow=10
-    )
-    task_session_maker = async_sessionmaker(
-        bind=task_engine,
-        class_=AsyncSession,
-        expire_on_commit=False
-    )
+    _, session_maker = _get_task_engine()
 
-    async with task_session_maker() as session:
+    async with session_maker() as session:
         try:
             yield session
         finally:
             await session.close()
-
-    await task_engine.dispose()

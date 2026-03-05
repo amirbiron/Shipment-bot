@@ -225,6 +225,14 @@ class DriverMenuService:
         """
         update = DriverSearchSettingsUpdate(vehicle_type_filter=vehicle_type)
         settings = await self._get_or_create_settings(user_id)
+
+        # ולידציה צולבת מול ערכים קיימים
+        update.validate_against_existing(
+            existing_future_only_enabled=settings.future_only_enabled,
+            existing_upcoming_timeframe=settings.upcoming_timeframe,
+            existing_future_only_start_time=settings.future_only_start_time,
+        )
+
         settings.vehicle_type_filter = update.vehicle_type_filter
         await self.db.commit()
 
@@ -251,6 +259,14 @@ class DriverMenuService:
         """
         update = DriverSearchSettingsUpdate(trip_type_filter=trip_type)
         settings = await self._get_or_create_settings(user_id)
+
+        # ולידציה צולבת מול ערכים קיימים
+        update.validate_against_existing(
+            existing_future_only_enabled=settings.future_only_enabled,
+            existing_upcoming_timeframe=settings.upcoming_timeframe,
+            existing_future_only_start_time=settings.future_only_start_time,
+        )
+
         settings.trip_type_filter = update.trip_type_filter
         await self.db.commit()
 
@@ -274,6 +290,14 @@ class DriverMenuService:
         """
         update = DriverSearchSettingsUpdate(show_deliveries=show)
         settings = await self._get_or_create_settings(user_id)
+
+        # ולידציה צולבת מול ערכים קיימים
+        update.validate_against_existing(
+            existing_future_only_enabled=settings.future_only_enabled,
+            existing_upcoming_timeframe=settings.upcoming_timeframe,
+            existing_future_only_start_time=settings.future_only_start_time,
+        )
+
         settings.show_deliveries = update.show_deliveries
         await self.db.commit()
 
