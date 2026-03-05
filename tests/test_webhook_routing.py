@@ -507,10 +507,10 @@ class TestNonCourierDispatcherVisibility:
         assert data.get("new_state") == DispatcherState.MENU.value
 
     @pytest.mark.asyncio
-    async def test_admin_dispatcher_reset_routes_to_dispatcher_menu(
+    async def test_admin_dispatcher_reset_routes_to_admin_menu(
         self, test_client, db_session, user_factory
     ):
-        """אדמין שהוא סדרן פעיל — /start מנתב לתפריט סדרן"""
+        """אדמין שהוא גם סדרן פעיל — /start מנתב לתפריט אדמין (לא סדרן)"""
         from app.db.models.station_dispatcher import StationDispatcher
 
         admin = await user_factory(
@@ -553,8 +553,8 @@ class TestNonCourierDispatcherVisibility:
         assert resp.status_code == 200
         data = resp.json()
         assert data["ok"] is True
-        from app.state_machine.states import DispatcherState
-        assert data.get("new_state") == DispatcherState.MENU.value
+        from app.state_machine.states import AdminState
+        assert data.get("new_state") == AdminState.SELECT_ROLE.value
 
     @pytest.mark.asyncio
     async def test_sender_dispatcher_continues_dispatcher_flow(

@@ -505,13 +505,103 @@ async def _route_message_to_handler(
     _is_in_multi_step_flow = _is_courier_in_registration or (
         isinstance(current_state, str)
         and (
-            current_state.startswith(("DISPATCHER.", "STATION.", "DRIVER."))
+            current_state.startswith(("DISPATCHER.", "STATION.", "DRIVER.", "ADMIN."))
             or (current_state.startswith("SENDER.") and current_state != "SENDER.MENU")
         )
     )
 
-    # כפתורי תפריט ראשי — רק לשולחים/אדמינים שאינם באמצע זרימה
-    if text and not _is_in_multi_step_flow and user.role in (UserRole.SENDER, UserRole.ADMIN):
+    # חזרה לאדמין — אדמין שהחליף תפקיד רוצה לחזור
+    if text and "חזרה לאדמין" in text:
+        _ctx = await state_manager.get_context(user.id, "whatsapp")
+        if _ctx.get("original_role") == "admin":
+            from app.state_machine.admin_handler import AdminStateHandler
+            from app.state_machine.states import AdminState
+
+            original_approval = _ctx.get("original_approval_status")
+            user.role = UserRole.ADMIN
+            if original_approval is not None:
+                user.approval_status = ApprovalStatus(original_approval) if original_approval else None
+            else:
+                user.approval_status = None
+            await db.commit()
+
+            await state_manager.force_state(
+                user.id, "whatsapp", AdminState.MENU.value,
+                context={
+                    "original_role": None,
+                    "original_approval_status": None,
+                    "admin_station_id": None,
+                    "admin_target_role": None,
+                },
+            )
+            _admin_h = AdminStateHandler(db, platform="whatsapp")
+            response, new_state = await _admin_h.handle_message(user, "תפריט", None)
+            background_tasks.add_task(
+                send_whatsapp_message, reply_to, response.text, response.keyboard
+            )
+            return response.text, new_state
+
+    # ניתוב אדמין — תפריט אדמין או המשך זרימת בחירת תפקיד
+    if user.role == UserRole.ADMIN:
+        from app.state_machine.admin_handler import AdminStateHandler
+        from app.state_machine.states import AdminState
+
+        if settings.ADMIN_ROLE_SWITCH_ENABLED:
+            is_admin_flow = isinstance(current_state, str) and current_state.startswith("ADMIN.")
+            if not is_admin_flow:
+                await state_manager.force_state(
+                    user.id, "whatsapp", AdminState.MENU.value, context={}
+                )
+            _admin_h = AdminStateHandler(db, platform="whatsapp")
+            response, new_state = await _admin_h.handle_message(user, text, photo_file_id)
+
+            # מצב מיוחד: admin_handler מחזיר _ADMIN_SWITCH_* כשצריך לנתב לתפקיד חדש
+            if isinstance(new_state, str) and new_state.startswith("_ADMIN_SWITCH_"):
+                # שמירת מפתחות אדמין לפני שהניתוב מוחק את ה-context
+                admin_ctx = await state_manager.get_context(user.id, "whatsapp")
+                background_tasks.add_task(
+                    send_whatsapp_message, reply_to, response.text, response.keyboard
+                )
+                response2, new_state2 = await _route_to_role_menu_wa(user, db, state_manager)
+                # שחזור מפתחות אדמין כדי שחזרה לאדמין תעבוד
+                _admin_keys = {
+                    k: admin_ctx[k]
+                    for k in ("original_role", "original_approval_status",
+                              "admin_station_id", "admin_target_role")
+                    if k in admin_ctx
+                }
+                if _admin_keys:
+                    ctx = await state_manager.get_context(user.id, "whatsapp")
+                    ctx.update(_admin_keys)
+                    await state_manager.force_state(
+                        user.id, "whatsapp", new_state2, context=ctx
+                    )
+                background_tasks.add_task(
+                    send_whatsapp_message, reply_to, response2.text, response2.keyboard
+                )
+                return response2.text, new_state2
+
+            background_tasks.add_task(
+                send_whatsapp_message, reply_to, response.text, response.keyboard
+            )
+            return response.text, new_state
+
+        # פיצ'ר כבוי — ניתוב לשולח
+        if isinstance(current_state, str) and current_state.startswith("SENDER."):
+            # אדמין כבר במצב שולח — המשך טיפול רגיל
+            handler = SenderStateHandler(db)
+            response, new_state = await handler.handle_message(
+                user_id=user.id, platform="whatsapp", message=text
+            )
+        else:
+            response, new_state = await _sender_fallback_wa(user, db, state_manager)
+        background_tasks.add_task(
+            send_whatsapp_message, reply_to, response.text, response.keyboard
+        )
+        return response.text, new_state
+
+    # כפתורי תפריט ראשי — רק לשולחים שאינם באמצע זרימה
+    if text and not _is_in_multi_step_flow and user.role == UserRole.SENDER:
         # הצטרפות כשליח
         if "הצטרפות למנוי" in text or "שליח" in text:
             user.role = UserRole.COURIER
@@ -792,6 +882,7 @@ async def _route_message_to_handler(
         and not current_state.startswith("DISPATCHER.")
         and not current_state.startswith("STATION.")
         and not current_state.startswith("DRIVER.")
+        and not current_state.startswith("ADMIN.")
     ):
         handler = SenderStateHandler(db)
         response, new_state = await handler.handle_message(

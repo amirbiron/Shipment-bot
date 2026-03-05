@@ -12,11 +12,13 @@ from app.state_machine.states import (
     DispatcherState,
     StationOwnerState,
     DriverState,
+    AdminState,
     SENDER_TRANSITIONS,
     COURIER_TRANSITIONS,
     DISPATCHER_TRANSITIONS,
     STATION_OWNER_TRANSITIONS,
     DRIVER_TRANSITIONS,
+    ADMIN_TRANSITIONS,
 )
 from app.core.logging import get_logger
 
@@ -147,6 +149,7 @@ class StateManager:
             (DispatcherState, DISPATCHER_TRANSITIONS),
             (StationOwnerState, STATION_OWNER_TRANSITIONS),
             (DriverState, DRIVER_TRANSITIONS),
+            (AdminState, ADMIN_TRANSITIONS),
         ]
 
         for state_enum, transitions in state_maps:
