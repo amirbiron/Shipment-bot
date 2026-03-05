@@ -628,3 +628,37 @@ class TestOTPDelivery:
         )
         msg = result.scalar_one_or_none()
         assert msg is None, "הודעת outbox נשמרה למרות כשל Redis — OTP לא ניתן לאימות"
+
+    @pytest.mark.asyncio
+    async def test_redis_cooldown_failure_returns_error_not_500(
+        self, test_client, user_factory, db_session,
+    ):
+        """כשל Redis בבדיקת cooldown מחזיר שגיאה ידידותית — לא 500 גנרי"""
+        user = await user_factory(
+            phone_number="+972501234567",
+            name="בעל תחנה cooldown כשל",
+            role=UserRole.STATION_OWNER,
+            platform="telegram",
+            telegram_chat_id="444555666",
+        )
+        station = Station(name="תחנה", owner_id=user.id)
+        db_session.add(station)
+        await db_session.flush()
+        wallet = StationWallet(station_id=station.id)
+        db_session.add(wallet)
+        await db_session.commit()
+
+        with patch(
+            "app.api.routes.panel.auth.try_set_otp_cooldown_by_phone",
+            new_callable=AsyncMock,
+            side_effect=ConnectionError("Redis connection refused"),
+        ):
+            response = await test_client.post("/api/panel/auth/request-otp", json={
+                "phone_number": "0501234567",
+            })
+
+            # לא 500 — שגיאה ידידותית
+            assert response.status_code == 200
+            data = response.json()
+            assert data["success"] is False
+            assert "שגיאה" in data["message"]

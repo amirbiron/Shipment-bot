@@ -150,7 +150,23 @@ async def request_otp(
 ) -> ActionResponse:
     """בקשת קוד כניסה — תשובה גנרית למניעת user-enumeration"""
     # Rate limiting אטומי לפי טלפון — SET NX EX, לפני כל בדיקת קיום (מונע enumeration)
-    if not await try_set_otp_cooldown_by_phone(data.phone_number):
+    try:
+        cooldown_ok = await try_set_otp_cooldown_by_phone(data.phone_number)
+    except Exception as e:
+        logger.error(
+            "כשלון בבדיקת cooldown ב-Redis — לא ניתן לשלוח OTP",
+            extra_data={
+                "phone": PhoneNumberValidator.mask(data.phone_number),
+                "error": str(e),
+            },
+            exc_info=True,
+        )
+        return ActionResponse(
+            success=False,
+            message="אירעה שגיאה בשליחת קוד הכניסה, נסה שוב מאוחר יותר",
+        )
+
+    if not cooldown_ok:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="נא להמתין לפחות דקה בין בקשות קוד כניסה",
