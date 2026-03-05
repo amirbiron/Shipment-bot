@@ -172,6 +172,71 @@ class TestCourierHandleInitialRegistrationCheck:
 
 
 # ============================================================================
+# תיקון: מעברי INITIAL→MENU חייבים להיות מוגדרים ב-TRANSITIONS
+# ============================================================================
+
+
+class TestInitialToMenuTransitions:
+    """בדיקות שמעברי INITIAL→MENU מוגדרים ב-TRANSITIONS"""
+
+    def test_sender_initial_allows_menu(self):
+        """SENDER_TRANSITIONS צריך לכלול MENU ב-INITIAL"""
+        from app.state_machine.states import SENDER_TRANSITIONS
+
+        allowed = SENDER_TRANSITIONS[SenderState.INITIAL]
+        assert SenderState.MENU in allowed
+
+    def test_courier_initial_allows_menu(self):
+        """COURIER_TRANSITIONS צריך לכלול MENU ב-INITIAL"""
+        from app.state_machine.states import COURIER_TRANSITIONS
+
+        allowed = COURIER_TRANSITIONS[CourierState.INITIAL]
+        assert CourierState.MENU in allowed
+
+    def test_courier_initial_allows_pending_approval(self):
+        """COURIER_TRANSITIONS צריך לכלול PENDING_APPROVAL ב-INITIAL"""
+        from app.state_machine.states import COURIER_TRANSITIONS
+
+        allowed = COURIER_TRANSITIONS[CourierState.INITIAL]
+        assert CourierState.PENDING_APPROVAL in allowed
+
+
+# ============================================================================
+# תיקון: IntegrityError על מספר טלפון כפול ברישום שולח
+# ============================================================================
+
+
+class TestSenderDuplicatePhoneRegistration:
+    """בדיקות שרישום עם מספר טלפון כפול מחזיר הודעת שגיאה ולא קורס"""
+
+    @pytest.mark.asyncio
+    async def test_duplicate_phone_returns_error(self, db_session, user_factory):
+        """רישום עם טלפון שכבר קיים — צריך להחזיר הודעת שגיאה"""
+        # יצירת משתמש קיים עם מספר טלפון
+        existing_user = await user_factory(
+            name="קיים",
+            role=UserRole.SENDER,
+            phone_number="+972501234567",
+        )
+
+        # יצירת משתמש חדש עם מספר שונה — ינסה לשנות לכפול
+        new_user = await user_factory(
+            name="חדש",
+            role=UserRole.SENDER,
+            phone_number="+972509999999",
+        )
+
+        handler = SenderStateHandler(db_session)
+        response, next_state, ctx = await handler._handle_collect_phone(
+            "0501234567", {}, new_user.id
+        )
+
+        # צריך להישאר ב-REGISTER_COLLECT_PHONE עם הודעת שגיאה
+        assert next_state == SenderState.REGISTER_COLLECT_PHONE.value
+        assert "כבר רשום" in response.text
+
+
+# ============================================================================
 # תיקון #3: Race condition בארנק
 # ============================================================================
 

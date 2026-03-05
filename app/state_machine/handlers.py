@@ -5,6 +5,7 @@ State Handlers - Process messages based on current state
 from typing import Tuple, Optional
 from html import escape
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 
 from app.state_machine.states import SenderState, CourierState
@@ -230,7 +231,22 @@ class SenderStateHandler:
         user = result.scalar_one_or_none()
         if user:
             user.phone_number = normalized
-            await self.db.commit()
+            try:
+                await self.db.commit()
+            except IntegrityError:
+                await self.db.rollback()
+                logger.warning(
+                    "ניסיון רישום עם מספר טלפון קיים",
+                    extra_data={
+                        "user_id": user_id,
+                        "phone": PhoneNumberValidator.mask(normalized),
+                    },
+                )
+                response = MessageResponse(
+                    "מספר הטלפון הזה כבר רשום במערכת.\n"
+                    "אנא הזינו מספר טלפון אחר:"
+                )
+                return response, SenderState.REGISTER_COLLECT_PHONE.value, {}
 
         name = context.get("name", "")
         safe_name = escape(name) if name else ""
