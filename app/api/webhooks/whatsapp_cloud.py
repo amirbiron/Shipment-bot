@@ -565,10 +565,10 @@ async def _route_message_to_handler(
                 response2, new_state2 = await _route_to_role_menu_wa(user, db, state_manager)
                 # שחזור מפתחות אדמין כדי שחזרה לאדמין תעבוד
                 _admin_keys = {
-                    k: admin_ctx.get(k)
+                    k: admin_ctx[k]
                     for k in ("original_role", "original_approval_status",
                               "admin_station_id", "admin_target_role")
-                    if admin_ctx.get(k) is not None
+                    if k in admin_ctx
                 }
                 if _admin_keys:
                     ctx = await state_manager.get_context(user.id, "whatsapp")

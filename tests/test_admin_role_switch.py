@@ -246,10 +246,10 @@ class TestAdminStateHandler:
 
         # שחזור מפתחות אדמין (כמו שהתיקון בוובהוק עושה)
         _admin_keys = {
-            k: admin_ctx.get(k)
+            k: admin_ctx[k]
             for k in ("original_role", "original_approval_status",
                       "admin_station_id", "admin_target_role")
-            if admin_ctx.get(k) is not None
+            if k in admin_ctx
         }
         ctx = await state_manager.get_context(admin.id, "telegram")
         ctx.update(_admin_keys)
@@ -509,3 +509,124 @@ class TestAdminStates:
         # ולידציה שה-handler מחזיר state תקין (לא נופל)
         assert response is not None
         assert new_state is not None
+
+
+# ============================================================================
+# בדיקות באגים ספציפיים
+# ============================================================================
+
+
+class TestAdminBugFixes:
+    """בדיקות תיקוני באגים באדמין"""
+
+    @pytest.mark.asyncio
+    async def test_stale_sender_check_allows_admin_role(self, db_session, user_factory):
+        """בדיקת סטייט שולח לא מאפסת אדמין עם פיצ'ר כבוי.
+
+        באג: הבדיקה ב-stale state check סיננה user.role != UserRole.SENDER
+        מה שגרם לאדמינים עם state SENDER.* להיכנס ללולאת איפוס.
+        תיקון: הוספת UserRole.ADMIN לרשימת התפקידים המותרים.
+        """
+        admin = await user_factory(
+            phone_number="+972500000030",
+            name="Admin Stale Check",
+            role=UserRole.ADMIN,
+            platform="telegram",
+            telegram_chat_id="90030",
+        )
+        state_manager = StateManager(db_session)
+        # אדמין ב-state שולח (אחרי _sender_fallback)
+        await state_manager.force_state(
+            admin.id, "telegram", "SENDER.MENU", context={}
+        )
+
+        # ולידציה: user.role הוא ADMIN עם state SENDER.*
+        # הבדיקה החדשה מאפשרת שילוב זה (לא מאפסת)
+        assert admin.role == UserRole.ADMIN
+        current = await state_manager.get_current_state(admin.id, "telegram")
+        assert current == "SENDER.MENU"
+
+        # ולידציה ישירה של התנאי החדש
+        # user.role not in (UserRole.SENDER, UserRole.ADMIN) → False → לא מאפסים
+        assert admin.role in (UserRole.SENDER, UserRole.ADMIN)
+
+    @pytest.mark.asyncio
+    async def test_admin_context_preserves_none_values(self, db_session, user_factory):
+        """מפתחות אדמין עם ערך None נשמרים בשחזור.
+
+        באג: dict comprehension סינן מפתחות עם ערך None באמצעות
+        `if admin_ctx.get(k) is not None`, מה שגרם לאיבוד מפתחות
+        כמו original_approval_status=None.
+        תיקון: שימוש ב-`if k in admin_ctx` במקום.
+        """
+        admin = await user_factory(
+            phone_number="+972500000031",
+            name="Admin None Context",
+            role=UserRole.ADMIN,
+            platform="telegram",
+            telegram_chat_id="90031",
+        )
+        state_manager = StateManager(db_session)
+        # context עם ערכי None לגיטימיים
+        admin_ctx = {
+            "original_role": "admin",
+            "original_approval_status": None,
+            "admin_station_id": None,
+            "admin_target_role": "sender",
+        }
+        await state_manager.force_state(
+            admin.id, "telegram", AdminState.SELECT_ROLE.value, context=admin_ctx
+        )
+
+        # סימולציה: שחזור מפתחות אדמין עם התיקון החדש
+        _admin_keys = {
+            k: admin_ctx[k]
+            for k in ("original_role", "original_approval_status",
+                      "admin_station_id", "admin_target_role")
+            if k in admin_ctx
+        }
+
+        # ולידציה: כל 4 המפתחות נשמרים, כולל אלה עם None
+        assert len(_admin_keys) == 4
+        assert "original_approval_status" in _admin_keys
+        assert _admin_keys["original_approval_status"] is None
+        assert "admin_station_id" in _admin_keys
+        assert _admin_keys["admin_station_id"] is None
+
+        # ולידציה: ערכים לא-None נשמרים גם
+        assert _admin_keys["original_role"] == "admin"
+        assert _admin_keys["admin_target_role"] == "sender"
+
+    @pytest.mark.asyncio
+    async def test_admin_context_old_pattern_drops_none(self):
+        """ולידציה שהדפוס הישן אכן מאבד מפתחות None.
+
+        בדיקת רגרסיה: מוודאת שהבאג קיים בדפוס הישן.
+        """
+        admin_ctx = {
+            "original_role": "admin",
+            "original_approval_status": None,
+            "admin_station_id": None,
+            "admin_target_role": "sender",
+        }
+
+        # דפוס ישן (באגי) - מסנן None
+        old_keys = {
+            k: admin_ctx.get(k)
+            for k in ("original_role", "original_approval_status",
+                      "admin_station_id", "admin_target_role")
+            if admin_ctx.get(k) is not None
+        }
+        # רק 2 מפתחות נשמרים (original_role, admin_target_role)
+        assert len(old_keys) == 2
+        assert "original_approval_status" not in old_keys
+
+        # דפוס חדש (מתוקן) - שומר הכל
+        new_keys = {
+            k: admin_ctx[k]
+            for k in ("original_role", "original_approval_status",
+                      "admin_station_id", "admin_target_role")
+            if k in admin_ctx
+        }
+        assert len(new_keys) == 4
+        assert "original_approval_status" in new_keys

@@ -2003,7 +2003,9 @@ async def telegram_webhook(
             _queue_response_send(background_tasks, send_chat_id, response)
             return {"ok": True, "new_state": new_state, "reset": True}
 
-        if current_state.startswith("SENDER.") and user.role != UserRole.SENDER:
+        if current_state.startswith("SENDER.") and user.role not in (
+            UserRole.SENDER, UserRole.ADMIN,
+        ):
             logger.warning(
                 "Stale sender state for role-mismatched user; resetting to role menu",
                 extra_data={
@@ -2284,10 +2286,10 @@ async def telegram_webhook(
                 response2, new_state2 = await _route_to_role_menu(user, db, state_manager)
                 # שחזור מפתחות אדמין כדי שחזרה לאדמין תעבוד
                 _admin_keys = {
-                    k: admin_ctx.get(k)
+                    k: admin_ctx[k]
                     for k in ("original_role", "original_approval_status",
                               "admin_station_id", "admin_target_role")
-                    if admin_ctx.get(k) is not None
+                    if k in admin_ctx
                 }
                 if _admin_keys:
                     ctx = await state_manager.get_context(user.id, "telegram")
