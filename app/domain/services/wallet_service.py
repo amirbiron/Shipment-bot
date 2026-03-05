@@ -73,12 +73,12 @@ class WalletService:
         fee: float
     ) -> Tuple[bool, str]:
         """
-        בדיקה אם שליח יכול לתפוס משלוח לפי מגבלת אשראי.
+        בדיקת יתרה ראשונית (pre-check) — האם השליח יכול לתפוס משלוח.
 
-        משתמש ב-for_update לנעילת שורה — מונע race condition שבו שני שליחים
-        עוברים את בדיקת היתרה במקביל ויוצרים יתרה שלילית מעבר למגבלה.
+        זוהי בדיקה ללא נעילה — ההגנה האמיתית מפני race condition נמצאת
+        ב-debit_for_capture() שמשתמש ב-with_for_update() ובודק מחדש.
         """
-        wallet = await self.get_or_create_wallet(courier_id, for_update=True)
+        wallet = await self.get_or_create_wallet(courier_id)
         future_balance = wallet.balance - Decimal(str(fee))
 
         if future_balance < wallet.credit_limit:

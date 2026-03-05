@@ -24,31 +24,30 @@ from app.state_machine.handlers import SenderStateHandler, CourierStateHandler
 # ============================================================================
 
 
-class TestTaskSessionSingleton:
-    """בדיקות ל-singleton pattern ב-get_task_session()"""
+class TestTaskSessionDispose:
+    """בדיקות ש-get_task_session() משחרר engine בסיום — מונע דליפת חיבורים"""
 
-    @pytest.mark.unit
-    def test_singleton_engine_reuse(self):
-        """וידוא ש-_get_task_engine מחזיר את אותו engine בקריאות חוזרות"""
-        from app.db.database import _get_task_engine
-        import app.db.database as db_module
+    @pytest.mark.asyncio
+    async def test_engine_disposed_after_session(self):
+        """וידוא ש-engine.dispose() נקרא גם כשהסשן מסתיים בהצלחה"""
+        from unittest.mock import patch, AsyncMock, MagicMock
+        from app.db.database import get_task_session
 
-        # איפוס ה-singleton
-        original_engine = db_module._task_engine
-        original_maker = db_module._task_session_maker
-        db_module._task_engine = None
-        db_module._task_session_maker = None
+        mock_engine = MagicMock()
+        mock_engine.dispose = AsyncMock()
+        mock_session = AsyncMock()
+        mock_session.close = AsyncMock()
 
-        try:
-            engine1, maker1 = _get_task_engine()
-            engine2, maker2 = _get_task_engine()
+        mock_session_maker = MagicMock()
+        mock_session_maker.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session_maker.return_value.__aexit__ = AsyncMock(return_value=False)
 
-            assert engine1 is engine2, "Engine אמור להיות singleton"
-            assert maker1 is maker2, "Session maker אמור להיות singleton"
-        finally:
-            # שחזור מצב מקורי
-            db_module._task_engine = original_engine
-            db_module._task_session_maker = original_maker
+        with patch("app.db.database.create_async_engine", return_value=mock_engine), \
+             patch("app.db.database.async_sessionmaker", return_value=mock_session_maker):
+            async with get_task_session() as session:
+                pass  # סשן רגיל
+
+        mock_engine.dispose.assert_awaited_once()
 
 
 # ============================================================================
@@ -156,14 +155,14 @@ class TestCourierHandleInitialRegistrationCheck:
 # ============================================================================
 
 
-class TestWalletForUpdate:
-    """בדיקות ש-check_can_capture משתמש ב-for_update"""
+class TestWalletRaceProtection:
+    """בדיקות ש-debit_for_capture משתמש ב-for_update למניעת race condition"""
 
     @pytest.mark.asyncio
-    async def test_check_can_capture_uses_for_update(
+    async def test_check_can_capture_is_precheck(
         self, db_session, user_factory, wallet_factory
     ):
-        """check_can_capture צריך לקרוא ל-get_or_create_wallet עם for_update=True"""
+        """check_can_capture הוא pre-check ללא נעילה — ההגנה ב-debit_for_capture"""
         courier = await user_factory(
             role=UserRole.COURIER,
             approval_status=ApprovalStatus.APPROVED,
@@ -182,6 +181,29 @@ class TestWalletForUpdate:
         can_capture, msg = await service.check_can_capture(courier.id, 700.0)
         assert can_capture is False
         assert "יתרה לא מספיקה" in msg
+
+    @pytest.mark.asyncio
+    async def test_debit_for_capture_uses_for_update(
+        self, db_session, user_factory, wallet_factory
+    ):
+        """debit_for_capture משתמש ב-for_update — ההגנה האמיתית מפני race"""
+        courier = await user_factory(
+            role=UserRole.COURIER,
+            approval_status=ApprovalStatus.APPROVED,
+        )
+        await wallet_factory(courier_id=courier.id, balance=100.0)
+
+        from app.domain.services.wallet_service import WalletService
+
+        service = WalletService(db_session)
+
+        # debit מצליח
+        ledger = await service.debit_for_capture(courier.id, 1, 50.0)
+        assert ledger is not None
+
+        # debit נכשל — חריגה ממגבלת אשראי
+        ledger = await service.debit_for_capture(courier.id, 2, 700.0)
+        assert ledger is None
 
 
 # ============================================================================
