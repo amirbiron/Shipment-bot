@@ -1995,7 +1995,7 @@ async def telegram_webhook(
 
     # כפתורי תפריט ראשי/שיווק - guard אחד
     if not is_in_multi_step_flow:
-        if user.role == UserRole.SENDER:
+        if user.role in (UserRole.SENDER, UserRole.ADMIN):
             for keyword, handler_fn in _SENDER_BUTTON_ROUTES:
                 if keyword in text:
                     response, new_state = await handler_fn(
