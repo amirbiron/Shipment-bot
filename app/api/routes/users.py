@@ -102,7 +102,7 @@ class UserResponse(BaseModel):
 
     @field_serializer("role")
     def serialize_role(self, v: UserRole) -> str:
-        return v.name
+        return v.value
 
 
 @router.post(

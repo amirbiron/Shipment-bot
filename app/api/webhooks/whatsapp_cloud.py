@@ -799,11 +799,23 @@ async def _route_message_to_handler(
         station = await station_service.get_dispatcher_station(user.id)
 
         if station:
+            from app.api.webhooks._admin_context import (
+                save_admin_context as _save_ac_cl,
+                restore_admin_context as _restore_ac_cl,
+            )
+            _dm_ak_cl = await _save_ac_cl(user.id, state_manager, "whatsapp")
             await state_manager.force_state(
                 user.id, "whatsapp", DispatcherState.MENU.value, context={}
             )
             handler = DispatcherStateHandler(db, station.id, platform="whatsapp")
             response, new_state = await handler.handle_message(user, "תפריט", None)
+            # שחזור admin context אחרי ה-handler
+            if _dm_ak_cl:
+                await _restore_ac_cl(
+                    user.id, state_manager, new_state, _dm_ak_cl, "whatsapp"
+                )
+            if _dm_ak_cl and _dm_ak_cl.get("original_role") == "admin":
+                inject_admin_return_button(response)
         else:
             logger.warning(
                 "Dispatcher clicked station menu but station not found",

@@ -1691,11 +1691,22 @@ async def whatsapp_webhook(
                 station = await station_service.get_dispatcher_station(user.id)
     
                 if station:
+                    _dm_admin_keys_wa = await _save_admin_context_wa(
+                        user.id, state_manager, "whatsapp"
+                    )
                     await state_manager.force_state(
                         user.id, "whatsapp", DispatcherState.MENU.value, context={}
                     )
                     handler = DispatcherStateHandler(db, station.id, platform="whatsapp")
                     response, new_state = await handler.handle_message(user, "תפריט", None)
+                    # שחזור admin context אחרי ה-handler
+                    if _dm_admin_keys_wa:
+                        await _restore_admin_context_wa(
+                            user.id, state_manager, new_state,
+                            _dm_admin_keys_wa, "whatsapp",
+                        )
+                    if _dm_admin_keys_wa and _dm_admin_keys_wa.get("original_role") == "admin":
+                        _inject_admin_return_button_wa(response)
                 else:
                     # סדרן הוסר או תחנה בוטלה
                     logger.warning(

@@ -2183,13 +2183,14 @@ async def telegram_webhook(
                 await state_manager.force_state(
                     user.id, "telegram", DispatcherState.MENU.value, context={}
                 )
-                if _dm_admin_keys:
-                    await _restore_admin_context(
-                        user.id, state_manager, DispatcherState.MENU.value,
-                        _dm_admin_keys, "telegram",
-                    )
                 handler = DispatcherStateHandler(db, station.id)
                 response, new_state = await handler.handle_message(user, "תפריט", None)
+                # שחזור admin context אחרי ה-handler — כדי שלא יימחק ע"י force_state פנימי
+                if _dm_admin_keys:
+                    await _restore_admin_context(
+                        user.id, state_manager, new_state,
+                        _dm_admin_keys, "telegram",
+                    )
                 if _dm_admin_keys and _dm_admin_keys.get("original_role") == "admin":
                     _inject_admin_return_button(response)
                 _queue_response_send(background_tasks, send_chat_id, response)
@@ -2293,6 +2294,7 @@ async def telegram_webhook(
         await session_service.touch_session(user.id)
 
         is_driver_flow = isinstance(current_state, str) and current_state.startswith("DRIVER.")
+        _drv_admin_keys = None
         if not is_driver_flow:
             _drv_admin_keys = await _save_admin_context(
                 user.id, state_manager, "telegram"
@@ -2300,20 +2302,24 @@ async def telegram_webhook(
             await state_manager.force_state(
                 user.id, "telegram", DriverState.INITIAL.value, context={}
             )
-            if _drv_admin_keys:
-                await _restore_admin_context(
-                    user.id, state_manager, DriverState.INITIAL.value,
-                    _drv_admin_keys, "telegram",
-                )
         handler = DriverStateHandler(db, platform="telegram")
         response, new_state = await handler.handle_message(
             user, text, photo_file_id,
             location_lat=location_lat, location_lng=location_lng,
         )
+        # שחזור admin context אחרי ה-handler — כדי שלא יימחק ע"י force_state פנימי
+        if _drv_admin_keys:
+            await _restore_admin_context(
+                user.id, state_manager, new_state,
+                _drv_admin_keys, "telegram",
+            )
         # הוספת כפתור "חזרה לאדמין" אם נדרש
-        _driver_ctx = await state_manager.get_context(user.id, "telegram")
-        if _driver_ctx.get("original_role") == "admin":
+        if _drv_admin_keys and _drv_admin_keys.get("original_role") == "admin":
             _inject_admin_return_button(response)
+        else:
+            _driver_ctx = await state_manager.get_context(user.id, "telegram")
+            if _driver_ctx.get("original_role") == "admin":
+                _inject_admin_return_button(response)
         _queue_response_send(background_tasks, send_chat_id, response)
         return {"ok": True, "new_state": new_state}
 
