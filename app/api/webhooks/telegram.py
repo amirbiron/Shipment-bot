@@ -633,6 +633,27 @@ async def _handle_sender_join_as_courier(
     return response, new_state
 
 
+async def _handle_sender_join_as_driver(
+    user: User,
+    db: AsyncSession,
+    state_manager: StateManager,
+    text: str,
+    photo_file_id: str | None,
+) -> tuple[MessageResponse, str]:
+    """ניתוב לתהליך רישום כנהג (iDriver) מתוך תפריט שולח."""
+    from app.state_machine.driver_handler import DriverStateHandler
+
+    user.role = UserRole.DRIVER
+    await db.commit()
+
+    await state_manager.force_state(
+        user.id, "telegram", DriverState.INITIAL.value, context={}
+    )
+    handler = DriverStateHandler(db, platform="telegram")
+    response, new_state = await handler.handle_message(user, text, photo_file_id)
+    return response, new_state
+
+
 async def _handle_sender_fast_shipment() -> MessageResponse:
     """קישור חיצוני לקבוצת WhatsApp - העלאת משלוח מהיר."""
     if settings.WHATSAPP_GROUP_LINK:
@@ -706,6 +727,9 @@ _SENDER_BUTTON_ROUTES: list[tuple[str, _SenderButtonHandler]] = [
     # הצטרפות כשליח (שני keywords כדי לשמור על ההתנהגות הקיימת)
     ("הצטרפות למנוי", _handle_sender_join_as_courier),
     ("שליח", _handle_sender_join_as_courier),
+    # הצטרפות כנהג (iDriver)
+    ("הצטרפות כנהג", _handle_sender_join_as_driver),
+    ("נהג", _handle_sender_join_as_driver),
     ("העלאת משלוח מהיר", _sender_button_fast_shipment),
     ("משלוח מהיר", _sender_button_fast_shipment),
     ("הצטרפות כתחנה", _sender_button_station_signup),
@@ -1113,6 +1137,7 @@ async def send_welcome_message(chat_id: str):
     )
     keyboard = [
         ["🚚 הצטרפות למנוי וקבלת משלוחים"],
+        ["🚗 הצטרפות כנהג"],
         ["📦 העלאת משלוח מהיר"],
         ["🏪 הצטרפות כתחנה"],
         ["📞 פנייה לניהול"],
@@ -1944,6 +1969,19 @@ async def telegram_webhook(
         ):
             logger.warning(
                 "Stale sender state for role-mismatched user; resetting to role menu",
+                extra_data={
+                    "user_id": user.id,
+                    "role": str(user.role),
+                    "state": current_state,
+                },
+            )
+            response, new_state = await _route_to_role_menu(user, db, state_manager)
+            _queue_response_send(background_tasks, send_chat_id, response)
+            return {"ok": True, "new_state": new_state, "reset": True}
+
+        if current_state.startswith("DRIVER.") and user.role != UserRole.DRIVER:
+            logger.warning(
+                "Stale driver state for role-mismatched user; resetting to role menu",
                 extra_data={
                     "user_id": user.id,
                     "role": str(user.role),
