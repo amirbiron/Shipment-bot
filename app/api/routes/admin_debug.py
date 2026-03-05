@@ -651,10 +651,10 @@ async def roles_management_page(
   </div>
 </div>
 <script>
-const ROLES = ['sender','courier','driver','dispatcher','station_owner','admin'];
+const ROLES = ['sender','courier','driver','station_owner','admin'];
 const ROLE_LABELS = {
   sender: 'שולח', courier: 'שליח', driver: 'נהג',
-  dispatcher: 'סדרן', station_owner: 'בעל תחנה', admin: 'אדמין'
+  station_owner: 'בעל תחנה', admin: 'אדמין'
 };
 
 function getApiKey() {

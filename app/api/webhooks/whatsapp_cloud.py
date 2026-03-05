@@ -802,6 +802,7 @@ async def _route_message_to_handler(
             from app.api.webhooks._admin_context import (
                 save_admin_context as _save_ac_cl,
                 restore_admin_context as _restore_ac_cl,
+                inject_admin_return_button as _inject_btn_cl,
             )
             _dm_ak_cl = await _save_ac_cl(user.id, state_manager, "whatsapp")
             await state_manager.force_state(
@@ -815,7 +816,7 @@ async def _route_message_to_handler(
                     user.id, state_manager, new_state, _dm_ak_cl, "whatsapp"
                 )
             if _dm_ak_cl and _dm_ak_cl.get("original_role") == "admin":
-                inject_admin_return_button(response)
+                _inject_btn_cl(response)
         else:
             logger.warning(
                 "Dispatcher clicked station menu but station not found",
