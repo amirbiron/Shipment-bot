@@ -249,9 +249,22 @@ class InsufficientCreditError(WalletException):
             error_code=ErrorCode.INSUFFICIENT_CREDIT,
             courier_id=courier_id,
             details={
-                "message": "אין מספיק יתרה לביצוע הפעולה"
+                "current_balance": current_balance,
+                "required_amount": required_amount,
+                "credit_limit": credit_limit,
+                "available_credit": current_balance - credit_limit
             }
         )
+
+    def to_dict(self) -> dict[str, Any]:
+        """מחזיר הודעה כללית בלבד — מסתיר נתונים פיננסיים מתגובת API"""
+        return {
+            "error": {
+                "code": self.error_code.value,
+                "message": self.message,
+                "details": {"message": "אין מספיק יתרה לביצוע הפעולה"}
+            }
+        }
 
 
 class WalletNotFoundError(WalletException):

@@ -58,8 +58,8 @@ class ValidationPatterns:
         re.compile(r"0x[0-9a-fA-F]{4,}"),
         # SQL batching with semicolons and keywords
         re.compile(r";\s*DROP\b", re.IGNORECASE),
-        # LIKE-based injection patterns
-        re.compile(r"\bLIKE\s+['\"%]", re.IGNORECASE),
+        # LIKE-based injection patterns — דורש הקשר SQL (אחרי WHERE/AND/OR)
+        re.compile(r"\b(WHERE|AND|OR)\s+\w+\s+LIKE\s+['\"%]", re.IGNORECASE),
     ]
 
     # Script injection patterns
