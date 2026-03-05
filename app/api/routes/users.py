@@ -313,6 +313,39 @@ class RoleUpdateResponse(BaseModel):
         return v.value
 
 
+async def apply_role_change(
+    user: User,
+    new_role: UserRole,
+    db: AsyncSession,
+    source: str = "api",
+) -> UserRole:
+    """לוגיקה משותפת לשינוי תפקיד — משמשת גם את admin_debug.py.
+
+    מחזירה את התפקיד הקודם.
+    """
+    previous_role = user.role
+    user.role = new_role
+
+    # שליח — הגדרת approval_status אם לא מוגדר
+    if new_role == UserRole.COURIER and user.approval_status is None:
+        user.approval_status = ApprovalStatus.APPROVED
+
+    await db.commit()
+    await db.refresh(user)
+
+    logger.info(
+        "תפקיד משתמש שונה",
+        extra_data={
+            "user_id": user.id,
+            "previous_role": previous_role.value,
+            "new_role": new_role.value,
+            "source": source,
+        },
+    )
+
+    return previous_role
+
+
 @router.patch(
     "/{user_id}/role",
     response_model=RoleUpdateResponse,
@@ -343,24 +376,7 @@ async def update_user_role(
     if not user:
         raise HTTPException(status_code=404, detail="המשתמש לא נמצא")
 
-    previous_role = user.role
-    user.role = role_update.role
-
-    # שליח — הגדרת approval_status אם לא מוגדר
-    if role_update.role == UserRole.COURIER and user.approval_status is None:
-        user.approval_status = ApprovalStatus.APPROVED
-
-    await db.commit()
-    await db.refresh(user)
-
-    logger.info(
-        "תפקיד משתמש שונה",
-        extra_data={
-            "user_id": user_id,
-            "previous_role": previous_role.value,
-            "new_role": role_update.role.value,
-        },
-    )
+    previous_role = await apply_role_change(user, role_update.role, db)
 
     return RoleUpdateResponse(
         id=user.id,

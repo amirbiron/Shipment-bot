@@ -736,6 +736,11 @@ async def _route_message_to_handler(
         if station:
             handler = StationOwnerStateHandler(db, station.id, platform="whatsapp")
             response, new_state = await handler.handle_message(user, text, photo_file_id)
+            # הוספת כפתור "חזרה לאדמין" אם נדרש
+            _station_ctx_cl = await state_manager.get_context(user.id, "whatsapp")
+            if _station_ctx_cl.get("original_role") == "admin":
+                from app.api.webhooks._admin_context import inject_admin_return_button as _inject_btn_station_cl
+                _inject_btn_station_cl(response)
         else:
             response, new_state = await _route_to_role_menu_wa(user, db, state_manager)
         background_tasks.add_task(
@@ -857,6 +862,11 @@ async def _route_message_to_handler(
             background_tasks=background_tasks,
         )
 
+        # הוספת כפתור "חזרה לאדמין" אם נדרש
+        _courier_ctx_cl = await state_manager.get_context(user.id, "whatsapp")
+        if _courier_ctx_cl.get("original_role") == "admin":
+            from app.api.webhooks._admin_context import inject_admin_return_button as _inject_btn_courier_cl
+            _inject_btn_courier_cl(response)
         background_tasks.add_task(
             send_whatsapp_message, reply_to, response.text, response.keyboard
         )
@@ -872,7 +882,16 @@ async def _route_message_to_handler(
         await _session_svc.touch_session(user.id)
 
         is_driver_flow = isinstance(current_state, str) and current_state.startswith("DRIVER.")
+        from app.api.webhooks._admin_context import (
+            save_admin_context as _save_ac_drv_cl,
+            restore_admin_context as _restore_ac_drv_cl,
+            inject_admin_return_button as _inject_btn_drv_cl,
+        )
+        _drv_admin_keys_cl = None
         if not is_driver_flow:
+            _drv_admin_keys_cl = await _save_ac_drv_cl(
+                user.id, state_manager, "whatsapp"
+            )
             await state_manager.force_state(
                 user.id, "whatsapp", DriverState.INITIAL.value, context={}
             )
@@ -881,6 +900,19 @@ async def _route_message_to_handler(
             user, text, photo_file_id,
             location_lat=location_lat, location_lng=location_lng,
         )
+        # שחזור admin context אחרי ה-handler
+        if _drv_admin_keys_cl:
+            await _restore_ac_drv_cl(
+                user.id, state_manager, new_state,
+                _drv_admin_keys_cl, "whatsapp",
+            )
+        # הוספת כפתור "חזרה לאדמין" אם נדרש
+        if _drv_admin_keys_cl and _drv_admin_keys_cl.get("original_role") == "admin":
+            _inject_btn_drv_cl(response)
+        else:
+            _driver_ctx_cl = await state_manager.get_context(user.id, "whatsapp")
+            if _driver_ctx_cl.get("original_role") == "admin":
+                _inject_btn_drv_cl(response)
         background_tasks.add_task(
             send_whatsapp_message, reply_to, response.text, response.keyboard
         )
@@ -901,6 +933,11 @@ async def _route_message_to_handler(
         response, new_state = await handler.handle_message(
             user_id=user.id, platform="whatsapp", message=text
         )
+        # הוספת כפתור "חזרה לאדמין" אם נדרש
+        _sender_ctx_cl = await state_manager.get_context(user.id, "whatsapp")
+        if _sender_ctx_cl.get("original_role") == "admin":
+            from app.api.webhooks._admin_context import inject_admin_return_button as _inject_btn_sender_cl
+            _inject_btn_sender_cl(response)
         background_tasks.add_task(
             send_whatsapp_message, reply_to, response.text, response.keyboard
         )
