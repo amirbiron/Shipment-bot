@@ -34,7 +34,17 @@ async def verify_telegram_webhook_token(
     """
     expected = settings.TELEGRAM_WEBHOOK_SECRET_TOKEN
     if not expected:
-        # טוקן לא מוגדר — אין אימות (אזהרה כבר נרשמת ב-startup)
+        if not settings.DEBUG:
+            # פרודקשן ללא secret token — חוסם webhook כדי למנוע בקשות מזויפות.
+            # ה-worker לא מושפע כי הוא לא מקבל webhook requests.
+            logger.error(
+                "TELEGRAM_WEBHOOK_SECRET_TOKEN לא מוגדר — webhook חסום בפרודקשן"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="webhook לא מאומת — חסר TELEGRAM_WEBHOOK_SECRET_TOKEN",
+            )
+        # DEBUG — מדלג על אימות (לפיתוח מקומי)
         return
 
     if not x_telegram_bot_api_secret_token:
