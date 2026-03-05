@@ -157,7 +157,7 @@ export default function MultiStationPage() {
 
   // הוספת badge לתחנה הנוכחית
   const stationsWithCurrent = columns.map((col) => {
-    if (col.accessorKey === "station_name") {
+    if ("accessorKey" in col && col.accessorKey === "station_name") {
       return {
         ...col,
         cell: ({ row }: { row: { original: StationSummary } }) => (
