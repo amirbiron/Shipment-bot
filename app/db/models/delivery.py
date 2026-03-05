@@ -42,7 +42,7 @@ class Delivery(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     # Secure token for smart links (prevents ID guessing attacks)
-    token = Column(String(32), unique=True, nullable=False, default=generate_secure_token, index=True)
+    token = Column(String(32), unique=True, nullable=False, default=generate_secure_token)
 
     # Sender info
     sender_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)

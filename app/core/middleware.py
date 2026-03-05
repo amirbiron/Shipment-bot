@@ -234,8 +234,8 @@ class WebhookRateLimitMiddleware(BaseHTTPMiddleware):
             idx = len(timestamps)
         if idx > 0:
             self._requests[ip] = timestamps[idx:]
-        # מחיקת מפתח ריק — מונע דליפת זיכרון מ-IP חד-פעמיים
-        if not self._requests[ip]:
+        # מחיקת מפתח ריק או ישן — מונע דליפת זיכרון מ-IP חד-פעמיים
+        if not self._requests[ip] or (now - self._requests[ip][-1]) > self._window_seconds * 10:
             del self._requests[ip]
 
     async def dispatch(

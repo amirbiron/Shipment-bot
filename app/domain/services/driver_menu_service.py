@@ -100,18 +100,20 @@ class DriverMenuService:
         Raises:
             NotFoundException: פרופיל נהג לא נמצא
         """
-        profile = await self._get_profile(user_id)
-        if not profile:
+        # שליפה מאוחדת: profile + user בשאילתה אחת (מונע N+1)
+        from app.db.models.user import User
+        result = await self.db.execute(
+            select(DriverProfile, User)
+            .join(User, User.id == DriverProfile.user_id)
+            .where(DriverProfile.user_id == user_id)
+        )
+        row = result.one_or_none()
+        if not row:
             raise NotFoundException("DriverProfile", user_id)
+        profile, user = row
 
         settings = await self._get_or_create_settings(user_id)
 
-        # שליפת שם דרך טבלת משתמשים
-        from app.db.models.user import User
-        user_result = await self.db.execute(
-            select(User).where(User.id == user_id)
-        )
-        user = user_result.scalar_one_or_none()
         name = (user.full_name or user.name or "לא צוין") if user else "לא צוין"
 
         greeting = _get_greeting()
