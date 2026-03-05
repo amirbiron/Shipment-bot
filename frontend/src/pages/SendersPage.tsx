@@ -156,12 +156,12 @@ export default function SendersPage() {
           <StatCard
             icon={Package}
             label="סה״כ משלוחים"
-            value={data.items.reduce((s, i) => s + i.deliveries_count, 0)}
+            value={data.total_deliveries}
           />
           <StatCard
             icon={TrendingUp}
-            label="פעילים כעת"
-            value={data.items.filter((i) => i.active_deliveries_count > 0).length}
+            label="שולחים פעילים"
+            value={data.active_senders_count}
           />
           <StatCard
             icon={Trophy}

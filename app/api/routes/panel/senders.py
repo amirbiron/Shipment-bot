@@ -42,6 +42,8 @@ class PaginatedSendersResponse(BaseModel):
     page: int
     page_size: int
     total_pages: int
+    total_deliveries: int = 0
+    active_senders_count: int = 0
 
 
 class SenderDetailResponse(BaseModel):
@@ -157,6 +159,11 @@ async def list_senders(
         sort_order=sort_order,
     )
 
+    # חישוב סטטיסטיקות מצטברות על כל השולחים (לא רק העמוד הנוכחי)
+    total_deliveries, active_senders_count = await station_service.get_senders_aggregate_stats(
+        station_id=auth.station_id,
+    )
+
     return PaginatedSendersResponse(
         items=[
             SenderResponse(
@@ -178,6 +185,8 @@ async def list_senders(
         page=page,
         page_size=page_size,
         total_pages=max(1, (total + page_size - 1) // page_size),
+        total_deliveries=total_deliveries,
+        active_senders_count=active_senders_count,
     )
 
 

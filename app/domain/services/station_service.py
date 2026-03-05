@@ -1827,6 +1827,42 @@ class StationService:
 
         return senders, total
 
+    async def get_senders_aggregate_stats(
+        self,
+        station_id: int,
+    ) -> tuple[int, int]:
+        """סטטיסטיקות מצטברות על כל שולחי התחנה.
+
+        Returns:
+            (סה"כ משלוחים בתחנה, מספר שולחים עם משלוחים פעילים)
+        """
+        from sqlalchemy import func, case
+
+        # סה"כ משלוחים בתחנה
+        total_deliveries_result = await self.db.execute(
+            select(func.count(Delivery.id)).where(
+                Delivery.station_id == station_id
+            )
+        )
+        total_deliveries = total_deliveries_result.scalar() or 0
+
+        # מספר שולחים עם לפחות משלוח פעיל אחד
+        active_senders_subq = (
+            select(Delivery.sender_id)
+            .where(
+                Delivery.station_id == station_id,
+                Delivery.status.in_(ACTIVE_DELIVERY_STATUSES),
+            )
+            .group_by(Delivery.sender_id)
+            .subquery()
+        )
+        active_senders_result = await self.db.execute(
+            select(func.count()).select_from(active_senders_subq)
+        )
+        active_senders_count = active_senders_result.scalar() or 0
+
+        return total_deliveries, active_senders_count
+
     async def get_sender_details(
         self,
         station_id: int,

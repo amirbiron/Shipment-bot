@@ -20,6 +20,8 @@ export interface PaginatedSenders {
   page: number;
   page_size: number;
   total_pages: number;
+  total_deliveries: number;
+  active_senders_count: number;
 }
 
 export interface SenderDetail {
