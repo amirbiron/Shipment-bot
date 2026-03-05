@@ -224,17 +224,8 @@ async def request_otp(
         )
         return ActionResponse(success=True, message=_OTP_GENERIC_RESPONSE)
 
-    outbox = OutboxService(db)
-    msg = await outbox.queue_message(
-        platform=platform,
-        recipient_id=recipient_id,
-        message_type="panel_otp",
-        message_content={"message_text": otp_message},
-    )
-    await db.commit()
-
-    # שמירת OTP ב-Redis לפני השליחה — מבטיח שהקוד ניתן לאימות לפני שהמשתמש מקבל אותו
-    # אם Redis נופל, לא שולחים הודעה כלל (מונע שליחת קוד שאי אפשר לאמת)
+    # שמירת OTP ב-Redis לפני commit של ההודעה — מבטיח שהקוד ניתן לאימות
+    # לפני שההודעה קיימת ב-outbox. אם Redis כושל, לא עושים commit ולא שולחים כלום.
     try:
         await store_otp(user.id, otp)
     except Exception as e:
@@ -250,6 +241,15 @@ async def request_otp(
             success=False,
             message="אירעה שגיאה בשליחת קוד הכניסה, נסה שוב בעוד דקה",
         )
+
+    outbox = OutboxService(db)
+    msg = await outbox.queue_message(
+        platform=platform,
+        recipient_id=recipient_id,
+        message_type="panel_otp",
+        message_content={"message_text": otp_message},
+    )
+    await db.commit()
 
     # שליחה מיידית — לא מחכים ל-beat scheduler (10 שניות + backlog)
     # אם Celery broker לא זמין, ההודעה תישלח דרך ה-beat הרגיל
