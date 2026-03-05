@@ -233,24 +233,13 @@ async def request_otp(
     )
     await db.commit()
 
-    # שליחה מיידית — לא מחכים ל-beat scheduler (10 שניות + backlog)
-    # אם Celery broker לא זמין, ההודעה תישלח דרך ה-beat הרגיל
-    try:
-        from app.workers.tasks import send_message
-        send_message.delay(msg.id)
-    except Exception as e:
-        logger.warning(
-            "לא ניתן לשלוח OTP מיידית דרך Celery — ייאסף ב-beat הבא",
-            extra_data={"message_id": msg.id, "error": str(e)},
-        )
-
-    # שמירת OTP ב-Redis רק אחרי commit מוצלח — מבטיח שההודעה באמת תישלח
-    # אם Redis נופל, המשתמש יקבל הודעה אבל ההתחברות תיכשל — לוג ברור + תגובה ידידותית
+    # שמירת OTP ב-Redis לפני השליחה — מבטיח שהקוד ניתן לאימות לפני שהמשתמש מקבל אותו
+    # אם Redis נופל, לא שולחים הודעה כלל (מונע שליחת קוד שאי אפשר לאמת)
     try:
         await store_otp(user.id, otp)
     except Exception as e:
         logger.error(
-            "כשלון בשמירת OTP ב-Redis — המשתמש יקבל הודעה אך לא יוכל להתחבר",
+            "כשלון בשמירת OTP ב-Redis — לא שולחים הודעה",
             extra_data={
                 "user_id": user.id,
                 "error": str(e),
@@ -260,6 +249,17 @@ async def request_otp(
         return ActionResponse(
             success=False,
             message="אירעה שגיאה בשליחת קוד הכניסה, נסה שוב בעוד דקה",
+        )
+
+    # שליחה מיידית — לא מחכים ל-beat scheduler (10 שניות + backlog)
+    # אם Celery broker לא זמין, ההודעה תישלח דרך ה-beat הרגיל
+    try:
+        from app.workers.tasks import send_message
+        send_message.delay(msg.id)
+    except Exception as e:
+        logger.warning(
+            "לא ניתן לשלוח OTP מיידית דרך Celery — ייאסף ב-beat הבא",
+            extra_data={"message_id": msg.id, "error": str(e)},
         )
 
     logger.info(
