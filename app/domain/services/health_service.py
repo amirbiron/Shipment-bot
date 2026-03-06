@@ -216,7 +216,6 @@ async def _timed_check(check_fn: Callable[[], Coroutine[Any, Any, str]]) -> dict
 def _get_circuit_breakers_status() -> list[dict[str, Any]]:
     """שליפת מצב כל ה-circuit breakers הרשומים."""
     from app.core.circuit_breaker import (
-        CircuitBreaker,
         get_telegram_circuit_breaker,
         get_whatsapp_circuit_breaker,
         get_whatsapp_admin_circuit_breaker,
@@ -311,12 +310,15 @@ async def check_detailed(*, celery_mode: bool = False) -> dict[str, Any]:
         logger.warning("כשלון בשליפת מצב circuit breakers", extra_data={"error": str(e)})
         circuit_breakers = []
 
-    # מידע DB pool
-    try:
-        db_pool = _get_db_pool_info()
-    except Exception as e:
-        logger.warning("כשלון בשליפת מידע DB pool", extra_data={"error": str(e)})
-        db_pool = {"error": "unavailable"}
+    # מידע DB pool — רלוונטי רק ל-web process; ב-Celery ה-engine המודולרי לא בשימוש
+    if celery_mode:
+        db_pool = {"note": "not_applicable_in_celery_mode"}
+    else:
+        try:
+            db_pool = _get_db_pool_info()
+        except Exception as e:
+            logger.warning("כשלון בשליפת מידע DB pool", extra_data={"error": str(e)})
+            db_pool = {"error": "unavailable"}
 
     # uptime
     uptime_seconds = round(time.monotonic() - _process_start_time, 1)

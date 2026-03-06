@@ -1291,13 +1291,10 @@ def periodic_health_check() -> dict:
         alert_message = "\n".join(alert_parts)
         alert_sent = False
 
-        # throttling — בדיקה לפי רכיבים כושלים ספציפיים
-        # שמות הרכיבים ממוינים לקונסיסטנטיות (db+redis != redis+db)
-        failed_names = sorted(
-            name for name, info in result.get("components", {}).items()
-            if (info.get("status", "unknown") if isinstance(info, dict) else info) != "ok"
-        )
-        throttle_key = f"{_THROTTLE_PREFIX}{'_'.join(failed_names) or overall_status}"
+        # throttling — מפתח גלובלי אחד למניעת הצפה בכשלונות מדורגים.
+        # כשכשלון מתרחב (למשל DB בלבד → DB+Redis), מפתח per-combination
+        # ישתנה ויעקוף את ה-throttle. לכן משתמשים במפתח גלובלי יחיד.
+        throttle_key = f"{_THROTTLE_PREFIX}global"
         try:
             redis_client = await get_redis()
             was_set = await redis_client.set(
