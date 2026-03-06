@@ -1296,10 +1296,10 @@ def periodic_health_check() -> dict:
         throttle_key = f"{_THROTTLE_PREFIX}{'_'.join(failed_names) or overall_status}"
         try:
             redis_client = await get_redis()
-            already_alerted = await redis_client.set(
+            was_set = await redis_client.set(
                 throttle_key, "1", nx=True, ex=_THROTTLE_SECONDS
             )
-            if already_alerted is None:
+            if not was_set:
                 # כבר נשלחה התראה — לא שולחים שוב
                 logger.info(
                     "בדיקת בריאות — התראה כבר נשלחה (throttled)",

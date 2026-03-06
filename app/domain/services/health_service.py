@@ -305,7 +305,11 @@ async def check_detailed(*, celery_mode: bool = False) -> dict[str, Any]:
         overall_status = _STATUS_HEALTHY
 
     # מצב circuit breakers
-    circuit_breakers = _get_circuit_breakers_status()
+    try:
+        circuit_breakers = _get_circuit_breakers_status()
+    except Exception as e:
+        logger.warning("כשלון בשליפת מצב circuit breakers", extra_data={"error": str(e)})
+        circuit_breakers = []
 
     # מידע DB pool
     try:
