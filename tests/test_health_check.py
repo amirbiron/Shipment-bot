@@ -893,3 +893,43 @@ class TestPeriodicHealthCheckTask:
         mock_send.assert_not_called()
         # ניקוי
         tasks_module._health_alert_local_throttle.clear()
+
+    @pytest.mark.unit
+    def test_redis_send_updates_inmemory_fallback(self) -> None:
+        """שליחה מוצלחת דרך Redis מעדכנת גם את ה-fallback בזיכרון."""
+        import app.workers.tasks as tasks_module
+        import time
+
+        tasks_module._health_alert_local_throttle.clear()
+        mock_redis = self._build_mock_redis(set_return=True)
+        mock_send = AsyncMock(return_value=True)
+
+        with patch(
+            "app.domain.services.health_service.check_detailed",
+            new_callable=AsyncMock,
+            return_value=self._UNHEALTHY_RESULT,
+        ), patch(
+            "app.workers.tasks.run_async",
+            side_effect=_run_async_in_new_loop,
+        ), patch(
+            "redis.asyncio.from_url",
+            return_value=mock_redis,
+        ), patch(
+            "app.domain.services.admin_notification_service.AdminNotificationService._send_telegram_message",
+            mock_send,
+        ), patch(
+            "app.core.config.settings"
+        ) as mock_settings:
+            mock_settings.REDIS_URL = "redis://localhost"
+            mock_settings.TELEGRAM_ADMIN_CHAT_IDS = "123"
+            mock_settings.TELEGRAM_ADMIN_CHAT_ID = "123"
+            from app.workers.tasks import periodic_health_check
+            result = periodic_health_check()
+
+        assert result["alert_sent"] is True
+        # ווידוא שה-fallback בזיכרון עודכן למרות שהשתמשנו ב-Redis throttle
+        throttle_key = "alert_throttle:health_global"
+        assert throttle_key in tasks_module._health_alert_local_throttle
+        assert time.monotonic() - tasks_module._health_alert_local_throttle[throttle_key] < 5
+        # ניקוי
+        tasks_module._health_alert_local_throttle.clear()

@@ -1394,8 +1394,7 @@ def periodic_health_check() -> dict:
                 )
         else:
             # שליחה מוצלחת — עדכון fallback בזיכרון למקרה ש-Redis ייפול בהמשך
-            if not use_redis_throttle:
-                _health_alert_local_throttle[throttle_key] = time.monotonic()
+            _health_alert_local_throttle[throttle_key] = time.monotonic()
 
         return {"status": overall_status, "alert_sent": alert_sent}
 
