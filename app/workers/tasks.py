@@ -1294,21 +1294,20 @@ def periodic_health_check() -> dict:
         # כשכשלון מתרחב (למשל DB בלבד → DB+Redis), מפתח per-combination
         # ישתנה ויעקוף את ה-throttle. לכן משתמשים במפתח גלובלי יחיד.
         throttle_key = f"{_THROTTLE_PREFIX}global"
+        use_redis_throttle = True
         try:
             # חיבור Redis חדש per-call — Celery יוצר event loop חדש לכל task,
             # ולכן ה-singleton של get_redis() לא תקין כאן (event loop mismatch)
             import redis.asyncio as aioredis
 
-            redis_client = aioredis.from_url(
+            throttle_redis = aioredis.from_url(
                 settings.REDIS_URL, decode_responses=True
             )
             try:
-                was_set = await redis_client.set(
-                    throttle_key, "1", nx=True, ex=_THROTTLE_SECONDS
-                )
+                existing = await throttle_redis.get(throttle_key)
             finally:
-                await redis_client.aclose()
-            if not was_set:
+                await throttle_redis.aclose()
+            if existing:
                 # כבר נשלחה התראה — לא שולחים שוב
                 logger.info(
                     "בדיקת בריאות — התראה כבר נשלחה (throttled)",
@@ -1320,6 +1319,7 @@ def periodic_health_check() -> dict:
                 "כשלון בבדיקת throttle ב-Redis — שימוש ב-fallback בזיכרון",
                 extra_data={"error": str(e)},
             )
+            use_redis_throttle = False
             # fallback בזיכרון — כש-Redis לא זמין, throttle לפי timestamp מקומי
             now = time.monotonic()
             # ברירת מחדל שלילית מספיק כדי שההתראה הראשונה תמיד תעבור,
@@ -1331,7 +1331,6 @@ def periodic_health_check() -> dict:
                     extra_data={"status": overall_status},
                 )
                 return {"status": overall_status, "alert_sent": False}
-            _health_alert_local_throttle[throttle_key] = now
 
         # שליחת התראה למנהלים דרך Telegram
         from app.domain.services.admin_notification_service import (
@@ -1361,7 +1360,29 @@ def periodic_health_check() -> dict:
                     exc_info=True,
                 )
 
-        if not alert_sent and tg_targets:
+        # throttle נקבע רק אחרי שליחה מוצלחת — כשלון לא חוסם ניסיון חוזר
+        if alert_sent:
+            if use_redis_throttle:
+                try:
+                    import redis.asyncio as aioredis
+
+                    throttle_redis = aioredis.from_url(
+                        settings.REDIS_URL, decode_responses=True
+                    )
+                    try:
+                        await throttle_redis.set(
+                            throttle_key, "1", nx=True, ex=_THROTTLE_SECONDS
+                        )
+                    finally:
+                        await throttle_redis.aclose()
+                except Exception as e:
+                    logger.warning(
+                        "כשלון בהגדרת throttle ב-Redis אחרי שליחת התראה",
+                        extra_data={"error": str(e)},
+                    )
+            else:
+                _health_alert_local_throttle[throttle_key] = time.monotonic()
+        elif tg_targets:
             logger.error(
                 "כשלון בשליחת התראת בריאות לכל המנהלים",
                 extra_data={
