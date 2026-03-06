@@ -37,12 +37,14 @@ jobs:
           }
 
       - name: Type checking
+        continue-on-error: true
         run: |
-          mypy app/ --ignore-missing-imports --no-error-summary || true
+          mypy app/ --ignore-missing-imports
 
       - name: Security scan
+        continue-on-error: true
         run: |
-          bandit -r app/ -ll -q || true
+          bandit -r app/ -ll -q
 
       - name: Run tests with coverage
         run: |
