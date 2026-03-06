@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import joinedload
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.db.models.delivery import Delivery, DeliveryStatus
@@ -115,19 +116,27 @@ class DeliveryService:
         """Get all deliveries for a sender"""
         result = await self.db.execute(
             select(Delivery)
+            .options(
+                joinedload(Delivery.sender),
+                joinedload(Delivery.courier),
+            )
             .where(Delivery.sender_id == sender_id)
             .order_by(Delivery.created_at.desc())
         )
-        return list(result.scalars().all())
+        return list(result.unique().scalars().all())
 
     async def get_courier_deliveries(self, courier_id: int) -> List[Delivery]:
         """Get all deliveries assigned to a courier"""
         result = await self.db.execute(
             select(Delivery)
+            .options(
+                joinedload(Delivery.sender),
+                joinedload(Delivery.courier),
+            )
             .where(Delivery.courier_id == courier_id)
             .order_by(Delivery.created_at.desc())
         )
-        return list(result.scalars().all())
+        return list(result.unique().scalars().all())
 
     async def mark_delivered(self, delivery_id: int) -> Optional[Delivery]:
         """סימון משלוח כנמסר וזיכוי עמלת תחנה (10%) אם שייך לתחנה.

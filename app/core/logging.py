@@ -7,7 +7,7 @@ import logging
 import json
 import sys
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from contextvars import ContextVar
 from functools import wraps
@@ -21,7 +21,7 @@ class JSONFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         log_entry = {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
@@ -173,7 +173,7 @@ def log_async_operation(operation_name: str):
         @wraps(func)
         async def wrapper(*args, **kwargs):
             logger = get_logger(func.__module__)
-            start_time = datetime.utcnow()
+            start_time = datetime.now(timezone.utc)
 
             logger.debug(
                 f"Starting {operation_name}",
@@ -182,7 +182,7 @@ def log_async_operation(operation_name: str):
 
             try:
                 result = await func(*args, **kwargs)
-                duration = (datetime.utcnow() - start_time).total_seconds()
+                duration = (datetime.now(timezone.utc) - start_time).total_seconds()
 
                 logger.info(
                     f"Completed {operation_name}",
@@ -194,7 +194,7 @@ def log_async_operation(operation_name: str):
                 )
                 return result
             except Exception as e:
-                duration = (datetime.utcnow() - start_time).total_seconds()
+                duration = (datetime.now(timezone.utc) - start_time).total_seconds()
 
                 logger.error(
                     f"Failed {operation_name}: {str(e)}",
@@ -218,7 +218,7 @@ def log_sync_operation(operation_name: str):
         @wraps(func)
         def wrapper(*args, **kwargs):
             logger = get_logger(func.__module__)
-            start_time = datetime.utcnow()
+            start_time = datetime.now(timezone.utc)
 
             logger.debug(
                 f"Starting {operation_name}",
@@ -227,7 +227,7 @@ def log_sync_operation(operation_name: str):
 
             try:
                 result = func(*args, **kwargs)
-                duration = (datetime.utcnow() - start_time).total_seconds()
+                duration = (datetime.now(timezone.utc) - start_time).total_seconds()
 
                 logger.info(
                     f"Completed {operation_name}",
@@ -239,7 +239,7 @@ def log_sync_operation(operation_name: str):
                 )
                 return result
             except Exception as e:
-                duration = (datetime.utcnow() - start_time).total_seconds()
+                duration = (datetime.now(timezone.utc) - start_time).total_seconds()
 
                 logger.error(
                     f"Failed {operation_name}: {str(e)}",
