@@ -1265,6 +1265,15 @@ def periodic_health_check() -> dict:
             logger.debug("בדיקת בריאות תקופתית — הכל תקין")
             return {"status": overall_status, "alert_sent": False}
 
+        if overall_status == "degraded":
+            # מצב degraded = תלות לא קריטית (כגון WhatsApp) לא זמינה.
+            # לא שולחים התראה כדי למנוע alert fatigue.
+            logger.info(
+                "בדיקת בריאות — מצב degraded, לא שולחים התראה",
+                extra_data={"status": overall_status},
+            )
+            return {"status": overall_status, "alert_sent": False}
+
         # זיהוי רכיבים כושלים
         failed_components = []
         for name, info in result.get("components", {}).items():

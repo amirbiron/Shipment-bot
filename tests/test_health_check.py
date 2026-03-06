@@ -691,6 +691,18 @@ class TestPeriodicHealthCheckTask:
         "db_pool": {},
     }
 
+    _DEGRADED_RESULT: dict = {
+        "status": "degraded",
+        "components": {
+            "db": {"status": "ok", "response_time_ms": 1.0},
+            "redis": {"status": "ok", "response_time_ms": 1.0},
+            "whatsapp_gateway": {"status": "error: whatsapp_unavailable", "response_time_ms": 100.0},
+            "celery": {"status": "ok", "response_time_ms": 1.0},
+        },
+        "circuit_breakers": [],
+        "db_pool": {},
+    }
+
     def _build_mock_redis(self, get_return: str | None = None, set_return: bool = True) -> MagicMock:
         """בונה mock ל-Redis client עם תמיכה ב-GET/SET/DELETE/aclose."""
         mock_client = AsyncMock()
@@ -716,6 +728,29 @@ class TestPeriodicHealthCheckTask:
 
         assert result["status"] == "healthy"
         assert result["alert_sent"] is False
+
+    @pytest.mark.unit
+    def test_degraded_status_no_alert(self) -> None:
+        """כש-WhatsApp לא זמין (degraded) — לא שולחים התראה כי זו תלות לא קריטית."""
+        mock_send = AsyncMock(return_value=True)
+
+        with patch(
+            "app.domain.services.health_service.check_detailed",
+            new_callable=AsyncMock,
+            return_value=self._DEGRADED_RESULT,
+        ), patch(
+            "app.workers.tasks.run_async",
+            side_effect=_run_async_in_new_loop,
+        ), patch(
+            "app.domain.services.admin_notification_service.AdminNotificationService._send_telegram_message",
+            mock_send,
+        ):
+            from app.workers.tasks import periodic_health_check
+            result = periodic_health_check()
+
+        assert result["status"] == "degraded"
+        assert result["alert_sent"] is False
+        mock_send.assert_not_called()
 
     @pytest.mark.unit
     def test_unhealthy_sends_alert_and_sets_throttle(self) -> None:
