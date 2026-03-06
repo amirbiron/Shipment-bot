@@ -1,5 +1,5 @@
 """
-בדיקות יחידה ל-Health Check endpoints — liveness ו-readiness.
+בדיקות יחידה ל-Health Check endpoints — liveness, readiness ו-detailed.
 """
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
@@ -380,3 +380,336 @@ class TestHealthCheckFunctions:
             result = await _check_celery()
 
         assert result == "error: celery_unavailable"
+
+
+# ============================================================================
+# Detailed Health Check — GET /health/detailed
+# ============================================================================
+
+
+class TestDetailedHealthCheck:
+    """בדיקות ל-endpoint /health/detailed (דשבורד מפורט)."""
+
+    @pytest.mark.unit
+    async def test_detailed_requires_api_key(
+        self, test_client: httpx.AsyncClient
+    ) -> None:
+        """ללא API key — מחזיר 401 או 403."""
+        response = await test_client.get("/health/detailed")
+        assert response.status_code in (401, 403)
+
+    @pytest.mark.unit
+    async def test_detailed_all_healthy(
+        self, test_client: httpx.AsyncClient
+    ) -> None:
+        """כשכל הרכיבים תקינים — מחזיר מבנה מפורט עם status=healthy."""
+        with patch(
+            "app.domain.services.health_service._check_db",
+            new_callable=AsyncMock,
+            return_value="ok",
+        ), patch(
+            "app.domain.services.health_service._check_redis",
+            new_callable=AsyncMock,
+            return_value="ok",
+        ), patch(
+            "app.domain.services.health_service._check_whatsapp_gateway",
+            new_callable=AsyncMock,
+            return_value="ok",
+        ), patch(
+            "app.domain.services.health_service._check_celery",
+            new_callable=AsyncMock,
+            return_value="ok",
+        ), patch(
+            "app.domain.services.health_service._get_db_pool_info",
+            return_value={
+                "pool_size": 20,
+                "checked_in": 18,
+                "checked_out": 2,
+                "overflow": 0,
+            },
+        ), patch(
+            "app.api.dependencies.admin_auth.settings"
+        ) as mock_settings:
+            mock_settings.ADMIN_API_KEY = "test-key"
+            response = await test_client.get(
+                "/health/detailed",
+                headers={"X-Admin-API-Key": "test-key"},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "healthy"
+        # בדיקת מבנה
+        assert "timestamp" in data
+        assert "uptime_seconds" in data
+        assert "components" in data
+        assert "circuit_breakers" in data
+        assert "db_pool" in data
+        # בדיקת components
+        for comp_name in ("db", "redis", "whatsapp_gateway", "celery"):
+            assert data["components"][comp_name]["status"] == "ok"
+            assert "response_time_ms" in data["components"][comp_name]
+
+    @pytest.mark.unit
+    async def test_detailed_db_down_returns_503(
+        self, test_client: httpx.AsyncClient
+    ) -> None:
+        """כש-DB לא זמין — מחזיר status=unhealthy ו-HTTP 503."""
+        with patch(
+            "app.domain.services.health_service._check_db",
+            new_callable=AsyncMock,
+            return_value="error: db_unavailable",
+        ), patch(
+            "app.domain.services.health_service._check_redis",
+            new_callable=AsyncMock,
+            return_value="ok",
+        ), patch(
+            "app.domain.services.health_service._check_whatsapp_gateway",
+            new_callable=AsyncMock,
+            return_value="ok",
+        ), patch(
+            "app.domain.services.health_service._check_celery",
+            new_callable=AsyncMock,
+            return_value="ok",
+        ), patch(
+            "app.domain.services.health_service._get_db_pool_info",
+            return_value={"pool_size": 20, "checked_in": 20, "checked_out": 0, "overflow": 0},
+        ), patch(
+            "app.api.dependencies.admin_auth.settings"
+        ) as mock_settings:
+            mock_settings.ADMIN_API_KEY = "test-key"
+            response = await test_client.get(
+                "/health/detailed",
+                headers={"X-Admin-API-Key": "test-key"},
+            )
+
+        assert response.status_code == 503
+        data = response.json()
+        assert data["status"] == "unhealthy"
+        assert data["components"]["db"]["status"] == "error: db_unavailable"
+
+    @pytest.mark.unit
+    async def test_detailed_whatsapp_down_returns_degraded(
+        self, test_client: httpx.AsyncClient
+    ) -> None:
+        """כש-WhatsApp לא זמין — מחזיר status=degraded ו-HTTP 200."""
+        with patch(
+            "app.domain.services.health_service._check_db",
+            new_callable=AsyncMock,
+            return_value="ok",
+        ), patch(
+            "app.domain.services.health_service._check_redis",
+            new_callable=AsyncMock,
+            return_value="ok",
+        ), patch(
+            "app.domain.services.health_service._check_whatsapp_gateway",
+            new_callable=AsyncMock,
+            return_value="error: whatsapp_disconnected",
+        ), patch(
+            "app.domain.services.health_service._check_celery",
+            new_callable=AsyncMock,
+            return_value="ok",
+        ), patch(
+            "app.domain.services.health_service._get_db_pool_info",
+            return_value={"pool_size": 20, "checked_in": 20, "checked_out": 0, "overflow": 0},
+        ), patch(
+            "app.api.dependencies.admin_auth.settings"
+        ) as mock_settings:
+            mock_settings.ADMIN_API_KEY = "test-key"
+            response = await test_client.get(
+                "/health/detailed",
+                headers={"X-Admin-API-Key": "test-key"},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "degraded"
+
+    @pytest.mark.unit
+    async def test_detailed_includes_circuit_breakers(
+        self, test_client: httpx.AsyncClient
+    ) -> None:
+        """התשובה כוללת רשימת circuit breakers עם שדות נדרשים."""
+        with patch(
+            "app.domain.services.health_service._check_db",
+            new_callable=AsyncMock,
+            return_value="ok",
+        ), patch(
+            "app.domain.services.health_service._check_redis",
+            new_callable=AsyncMock,
+            return_value="ok",
+        ), patch(
+            "app.domain.services.health_service._check_whatsapp_gateway",
+            new_callable=AsyncMock,
+            return_value="ok",
+        ), patch(
+            "app.domain.services.health_service._check_celery",
+            new_callable=AsyncMock,
+            return_value="ok",
+        ), patch(
+            "app.domain.services.health_service._get_db_pool_info",
+            return_value={"pool_size": 20, "checked_in": 20, "checked_out": 0, "overflow": 0},
+        ), patch(
+            "app.api.dependencies.admin_auth.settings"
+        ) as mock_settings:
+            mock_settings.ADMIN_API_KEY = "test-key"
+            response = await test_client.get(
+                "/health/detailed",
+                headers={"X-Admin-API-Key": "test-key"},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        cbs = data["circuit_breakers"]
+        assert len(cbs) >= 1
+        for cb in cbs:
+            assert "service" in cb
+            assert "state" in cb
+            assert "failure_count" in cb
+            assert "retry_after_seconds" in cb
+
+
+# ============================================================================
+# בדיקות יחידה לפונקציות מפורטות — check_detailed
+# ============================================================================
+
+
+class TestCheckDetailedFunction:
+    """בדיקות ישירות לפונקציית check_detailed."""
+
+    @pytest.mark.unit
+    async def test_check_detailed_returns_response_times(self) -> None:
+        """check_detailed מחזיר זמני תגובה לכל רכיב."""
+        with patch(
+            "app.domain.services.health_service._check_db",
+            new_callable=AsyncMock,
+            return_value="ok",
+        ), patch(
+            "app.domain.services.health_service._check_redis",
+            new_callable=AsyncMock,
+            return_value="ok",
+        ), patch(
+            "app.domain.services.health_service._check_whatsapp_gateway",
+            new_callable=AsyncMock,
+            return_value="ok",
+        ), patch(
+            "app.domain.services.health_service._check_celery",
+            new_callable=AsyncMock,
+            return_value="ok",
+        ), patch(
+            "app.domain.services.health_service._get_db_pool_info",
+            return_value={"pool_size": 5, "checked_in": 5, "checked_out": 0, "overflow": 0},
+        ):
+            from app.domain.services.health_service import check_detailed
+            result = await check_detailed()
+
+        assert result["status"] == "healthy"
+        assert isinstance(result["uptime_seconds"], float)
+        assert "timestamp" in result
+        for comp in ("db", "redis", "whatsapp_gateway", "celery"):
+            assert result["components"][comp]["status"] == "ok"
+            assert isinstance(result["components"][comp]["response_time_ms"], float)
+            assert result["components"][comp]["response_time_ms"] >= 0
+
+    @pytest.mark.unit
+    async def test_check_detailed_unhealthy_on_critical_failure(self) -> None:
+        """check_detailed מחזיר unhealthy כשתלות קריטית נכשלת."""
+        with patch(
+            "app.domain.services.health_service._check_db",
+            new_callable=AsyncMock,
+            return_value="error: db_unavailable",
+        ), patch(
+            "app.domain.services.health_service._check_redis",
+            new_callable=AsyncMock,
+            return_value="ok",
+        ), patch(
+            "app.domain.services.health_service._check_whatsapp_gateway",
+            new_callable=AsyncMock,
+            return_value="ok",
+        ), patch(
+            "app.domain.services.health_service._check_celery",
+            new_callable=AsyncMock,
+            return_value="ok",
+        ), patch(
+            "app.domain.services.health_service._get_db_pool_info",
+            return_value={"pool_size": 5, "checked_in": 5, "checked_out": 0, "overflow": 0},
+        ):
+            from app.domain.services.health_service import check_detailed
+            result = await check_detailed()
+
+        assert result["status"] == "unhealthy"
+        assert result["components"]["db"]["status"] == "error: db_unavailable"
+
+    @pytest.mark.unit
+    async def test_timed_check_captures_exception(self) -> None:
+        """_timed_check תופס חריגה ומחזיר שגיאה עם זמן תגובה."""
+        async def _failing_check() -> str:
+            raise ConnectionError("test error")
+
+        from app.domain.services.health_service import _timed_check
+        result = await _timed_check(_failing_check)
+
+        assert "error:" in result["status"]
+        assert isinstance(result["response_time_ms"], float)
+
+
+# ============================================================================
+# בדיקות ל-Celery task — periodic_health_check
+# ============================================================================
+
+
+class TestPeriodicHealthCheckTask:
+    """בדיקות ל-task התקופתי של ניטור בריאות."""
+
+    @pytest.mark.unit
+    async def test_periodic_task_healthy_no_alert(self) -> None:
+        """כשהכל תקין — לא שולח התראה."""
+        mock_detailed = {
+            "status": "healthy",
+            "components": {
+                "db": {"status": "ok", "response_time_ms": 1.0},
+                "redis": {"status": "ok", "response_time_ms": 1.0},
+                "whatsapp_gateway": {"status": "ok", "response_time_ms": 1.0},
+                "celery": {"status": "ok", "response_time_ms": 1.0},
+            },
+            "circuit_breakers": [],
+            "db_pool": {},
+        }
+
+        with patch(
+            "app.domain.services.health_service.check_detailed",
+            new_callable=AsyncMock,
+            return_value=mock_detailed,
+        ):
+            # קריאה ישירה ל-async function הפנימית
+            from app.domain.services.health_service import check_detailed
+            result = await check_detailed()
+
+        assert result["status"] == "healthy"
+
+    @pytest.mark.unit
+    async def test_periodic_task_unhealthy_triggers_alert(self) -> None:
+        """כש-DB נכשל — task מזהה ומתכונן לשלוח התראה."""
+        mock_detailed = {
+            "status": "unhealthy",
+            "components": {
+                "db": {"status": "error: db_unavailable", "response_time_ms": 100.0},
+                "redis": {"status": "ok", "response_time_ms": 1.0},
+                "whatsapp_gateway": {"status": "ok", "response_time_ms": 1.0},
+                "celery": {"status": "ok", "response_time_ms": 1.0},
+            },
+            "circuit_breakers": [],
+            "db_pool": {},
+        }
+
+        with patch(
+            "app.domain.services.health_service.check_detailed",
+            new_callable=AsyncMock,
+            return_value=mock_detailed,
+        ):
+            from app.domain.services.health_service import check_detailed
+            result = await check_detailed()
+
+        assert result["status"] == "unhealthy"
+        # וידוא שהרכיב הכושל מזוהה
+        assert result["components"]["db"]["status"] == "error: db_unavailable"

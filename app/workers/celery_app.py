@@ -72,4 +72,9 @@ celery_app.conf.beat_schedule = {
         "task": "app.workers.tasks.check_driver_subscriptions",
         "schedule": crontab(hour="6", minute="0"),
     },
+    # ניטור בריאות תקופתי — בדיקת כל הרכיבים כל 2 דקות
+    "periodic-health-check-every-2-minutes": {
+        "task": "app.workers.tasks.periodic_health_check",
+        "schedule": 120.0,  # 2 דקות
+    },
 }

@@ -1,10 +1,13 @@
 """
 שירות בדיקת בריאות — בדיקות תלויות (DB, Redis, WhatsApp Gateway, Celery).
 
-מספק שתי רמות בדיקה:
+מספק שלוש רמות בדיקה:
 - liveness: האם התהליך חי (ללא בדיקת תלויות)
 - readiness: בדיקה מקיפה של כל התלויות החיצוניות
+- detailed: בדיקה מעמיקה עם זמני תגובה, מצב circuit breakers, מידע DB pool ו-uptime
 """
+import time
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -15,6 +18,9 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.redis_client import get_redis
 from app.db.database import AsyncSessionLocal
+
+# זמן הפעלת התהליך — לחישוב uptime
+_process_start_time = time.monotonic()
 
 logger = get_logger(__name__)
 
@@ -147,3 +153,133 @@ async def check_readiness() -> dict[str, Any]:
         )
 
     return {"status": overall_status, **checks}
+
+
+# ============================================================================
+# Detailed Health Check — מידע מורחב לדשבורד ניטור
+# ============================================================================
+
+
+async def _timed_check(check_fn: Any) -> dict[str, Any]:
+    """הרצת פונקציית בדיקה עם מדידת זמן תגובה (ms)."""
+    start = time.monotonic()
+    try:
+        result = await check_fn()
+        elapsed_ms = round((time.monotonic() - start) * 1000, 1)
+        return {"status": result, "response_time_ms": elapsed_ms}
+    except Exception as e:
+        elapsed_ms = round((time.monotonic() - start) * 1000, 1)
+        logger.warning("בדיקה מפורטת נכשלה", extra_data={"error": str(e)})
+        return {"status": f"error: {type(e).__name__}", "response_time_ms": elapsed_ms}
+
+
+def _get_circuit_breakers_status() -> list[dict[str, Any]]:
+    """שליפת מצב כל ה-circuit breakers הרשומים."""
+    from app.core.circuit_breaker import (
+        CircuitBreaker,
+        get_telegram_circuit_breaker,
+        get_whatsapp_circuit_breaker,
+        get_whatsapp_admin_circuit_breaker,
+        get_whatsapp_cloud_circuit_breaker,
+    )
+
+    # אתחול כל ה-circuit breakers הידועים כדי שיהיו ב-_instances
+    known_breakers = [
+        get_telegram_circuit_breaker(),
+        get_whatsapp_circuit_breaker(),
+        get_whatsapp_admin_circuit_breaker(),
+        get_whatsapp_cloud_circuit_breaker(),
+    ]
+
+    result = []
+    for cb in known_breakers:
+        result.append({
+            "service": cb.service_name,
+            "state": cb.state.value,
+            "failure_count": cb._state.failure_count,
+            "retry_after_seconds": round(cb.get_retry_after(), 1),
+        })
+    return result
+
+
+def _get_db_pool_info() -> dict[str, Any]:
+    """שליפת מידע על connection pool של מסד הנתונים."""
+    from app.db.database import engine
+
+    pool = engine.pool
+    return {
+        "pool_size": pool.size(),
+        "checked_in": pool.checkedin(),
+        "checked_out": pool.checkedout(),
+        "overflow": pool.overflow(),
+    }
+
+
+async def check_detailed() -> dict[str, Any]:
+    """
+    בדיקת בריאות מפורטת — מחזיר מידע מורחב על כל הרכיבים.
+
+    כולל:
+    - סטטוס כל תלות + זמן תגובה (ms)
+    - מצב כל circuit breakers
+    - מידע על DB connection pool
+    - uptime של התהליך
+    - חותמת זמן של הבדיקה
+    """
+    # הרצת בדיקות במקביל עם מדידת זמנים
+    db_result = await _timed_check(_check_db)
+    redis_result = await _timed_check(_check_redis)
+    whatsapp_result = await _timed_check(_check_whatsapp_gateway)
+    celery_result = await _timed_check(_check_celery)
+
+    components = {
+        "db": db_result,
+        "redis": redis_result,
+        "whatsapp_gateway": whatsapp_result,
+        "celery": celery_result,
+    }
+
+    # חישוב סטטוס כללי
+    critical_ok = all(
+        components[k]["status"] == _CHECK_OK
+        for k in ("db", "redis", "celery")
+    )
+    all_ok = all(c["status"] == _CHECK_OK for c in components.values())
+
+    if not critical_ok:
+        overall_status = _STATUS_UNHEALTHY
+    elif not all_ok:
+        overall_status = _STATUS_DEGRADED
+    else:
+        overall_status = _STATUS_HEALTHY
+
+    # מצב circuit breakers
+    circuit_breakers = _get_circuit_breakers_status()
+
+    # מידע DB pool
+    try:
+        db_pool = _get_db_pool_info()
+    except Exception as e:
+        logger.warning("כשלון בשליפת מידע DB pool", extra_data={"error": str(e)})
+        db_pool = {"error": "unavailable"}
+
+    # uptime
+    uptime_seconds = round(time.monotonic() - _process_start_time, 1)
+
+    result = {
+        "status": overall_status,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "uptime_seconds": uptime_seconds,
+        "components": components,
+        "circuit_breakers": circuit_breakers,
+        "db_pool": db_pool,
+    }
+
+    if not all_ok:
+        logger.warning(
+            "בדיקה מפורטת — המערכת במצב %s",
+            overall_status,
+            extra_data={"status": overall_status},
+        )
+
+    return result

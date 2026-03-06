@@ -3,14 +3,16 @@ Shipment Bot - Main FastAPI Application
 """
 import os
 from pathlib import Path
+from typing import Any
 
 import httpx
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_redoc_html
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.api.dependencies.admin_auth import require_admin_api_key
 from app.core.config import settings
 from app.core.logging import setup_logging, get_logger
 from app.core.middleware import setup_middleware, setup_exception_handlers
@@ -286,6 +288,68 @@ async def readiness_check() -> dict[str, str]:
     result = await check_readiness()
     # רק כשל בתלות קריטית (DB/Redis/Celery) מחזיר 503.
     # WhatsApp מושבת = degraded אבל עדיין HTTP 200 — כדי לא לחסום תעבורת טלגרם.
+    status_code = 503 if result["status"] == "unhealthy" else 200
+    return JSONResponse(content=result, status_code=status_code)
+
+
+@app.get(
+    "/health/detailed",
+    summary="דשבורד בריאות מפורט (Health Dashboard)",
+    description=(
+        "בדיקה מעמיקה של כל רכיבי המערכת עם זמני תגובה, "
+        "מצב circuit breakers, מידע על DB connection pool ו-uptime. "
+        "מוגן ב-API key — מיועד לניטור פנימי ודשבורד ops."
+    ),
+    responses={
+        200: {
+            "description": "כל הרכיבים תקינים או במצב degraded",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "status": "healthy",
+                        "timestamp": "2026-03-06T12:00:00+00:00",
+                        "uptime_seconds": 3600.0,
+                        "components": {
+                            "db": {"status": "ok", "response_time_ms": 2.3},
+                            "redis": {"status": "ok", "response_time_ms": 1.1},
+                            "whatsapp_gateway": {"status": "ok", "response_time_ms": 45.2},
+                            "celery": {"status": "ok", "response_time_ms": 1.5},
+                        },
+                        "circuit_breakers": [
+                            {
+                                "service": "telegram",
+                                "state": "closed",
+                                "failure_count": 0,
+                                "retry_after_seconds": 0.0,
+                            }
+                        ],
+                        "db_pool": {
+                            "pool_size": 20,
+                            "checked_in": 18,
+                            "checked_out": 2,
+                            "overflow": 0,
+                        },
+                    }
+                }
+            },
+        },
+        401: {"description": "חסר מפתח API"},
+        403: {"description": "מפתח API שגוי"},
+        503: {
+            "description": "תלות קריטית לא זמינה",
+        },
+    },
+    tags=["Health"],
+)
+async def detailed_health_check(
+    _: None = Depends(require_admin_api_key),
+) -> dict[str, Any]:
+    """דשבורד בריאות מפורט — מצב כל הרכיבים עם זמני תגובה ו-circuit breakers."""
+    from starlette.responses import JSONResponse
+
+    from app.domain.services.health_service import check_detailed
+
+    result = await check_detailed()
     status_code = 503 if result["status"] == "unhealthy" else 200
     return JSONResponse(content=result, status_code=status_code)
 

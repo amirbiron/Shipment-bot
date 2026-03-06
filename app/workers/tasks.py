@@ -1228,3 +1228,122 @@ def check_whatsapp_connection() -> dict:
         return {"status": status, "alert_sent": alert_sent}
 
     return run_async(_check())
+
+
+# ============================================================================
+# ניטור בריאות תקופתי — בדיקת כל הרכיבים ושליחת התראה בחריגה
+# ============================================================================
+
+
+@celery_app.task(name="app.workers.tasks.periodic_health_check", ignore_result=True)
+def periodic_health_check() -> dict:
+    """
+    בדיקת בריאות תקופתית של כל רכיבי המערכת.
+
+    רצה כל 2 דקות. בודק DB, Redis, Celery broker, WhatsApp Gateway
+    ו-circuit breakers. אם תלות קריטית לא זמינה — שולח התראה
+    למנהלים דרך Telegram. משתמש ב-Redis throttling למניעת הצפת התראות
+    (פעם ב-10 דקות לכל סוג כשלון).
+    """
+    from app.core.config import settings
+    from app.core.redis_client import get_redis
+
+    # throttle — התראה אחת ל-10 דקות לכל סוג כשלון
+    _THROTTLE_PREFIX = "alert_throttle:health_"
+    _THROTTLE_SECONDS = 600
+
+    async def _run_health_check() -> dict:
+        from app.domain.services.health_service import check_detailed
+
+        result = await check_detailed()
+        overall_status = result["status"]
+
+        if overall_status == "healthy":
+            logger.debug("בדיקת בריאות תקופתית — הכל תקין")
+            return {"status": overall_status, "alert_sent": False}
+
+        # זיהוי רכיבים כושלים
+        failed_components = []
+        for name, info in result.get("components", {}).items():
+            component_status = info.get("status", "unknown") if isinstance(info, dict) else info
+            if component_status != "ok":
+                failed_components.append(f"{name}: {component_status}")
+
+        # בדיקת circuit breakers פתוחים
+        open_breakers = []
+        for cb in result.get("circuit_breakers", []):
+            if cb.get("state") != "closed":
+                open_breakers.append(f"{cb['service']}: {cb['state']}")
+
+        # בניית הודעת התראה
+        alert_parts = [f"התראת בריאות מערכת — מצב: {overall_status}"]
+        if failed_components:
+            alert_parts.append("רכיבים כושלים:")
+            alert_parts.extend(f"  - {c}" for c in failed_components)
+        if open_breakers:
+            alert_parts.append("Circuit breakers פתוחים:")
+            alert_parts.extend(f"  - {b}" for b in open_breakers)
+
+        alert_message = "\n".join(alert_parts)
+        alert_sent = False
+
+        # throttling — בדיקה לפי סוג כשלון
+        throttle_key = f"{_THROTTLE_PREFIX}{overall_status}"
+        try:
+            redis_client = await get_redis()
+            already_alerted = await redis_client.set(
+                throttle_key, "1", nx=True, ex=_THROTTLE_SECONDS
+            )
+            if already_alerted is None:
+                # כבר נשלחה התראה — לא שולחים שוב
+                logger.info(
+                    "בדיקת בריאות — התראה כבר נשלחה (throttled)",
+                    extra_data={"status": overall_status},
+                )
+                return {"status": overall_status, "alert_sent": False}
+        except Exception as e:
+            logger.warning(
+                "כשלון בבדיקת throttle",
+                extra_data={"error": str(e)},
+            )
+
+        # שליחת התראה למנהלים דרך Telegram
+        from app.domain.services.admin_notification_service import AdminNotificationService
+
+        tg_admin_ids = settings.TELEGRAM_ADMIN_CHAT_IDS
+        tg_targets: list[str] = []
+        if tg_admin_ids:
+            tg_targets = [t.strip() for t in tg_admin_ids.split(",") if t.strip()]
+        if settings.TELEGRAM_ADMIN_CHAT_ID and settings.TELEGRAM_ADMIN_CHAT_ID not in tg_targets:
+            tg_targets.append(settings.TELEGRAM_ADMIN_CHAT_ID)
+
+        for target in tg_targets:
+            try:
+                sent = await AdminNotificationService._send_telegram_message(
+                    target, alert_message
+                )
+                if sent:
+                    alert_sent = True
+                    logger.info(
+                        "התראת בריאות נשלחה למנהל",
+                        extra_data={"target": target, "status": overall_status},
+                    )
+            except Exception as e:
+                logger.error(
+                    "כשלון בשליחת התראת בריאות",
+                    extra_data={"target": target, "error": str(e)},
+                    exc_info=True,
+                )
+
+        if not alert_sent and tg_targets:
+            logger.error(
+                "כשלון בשליחת התראת בריאות לכל המנהלים",
+                extra_data={
+                    "status": overall_status,
+                    "targets_count": len(tg_targets),
+                },
+            )
+
+        return {"status": overall_status, "alert_sent": alert_sent}
+
+    return run_async(_run_health_check())
