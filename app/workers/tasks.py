@@ -1250,7 +1250,6 @@ def periodic_health_check() -> dict:
     (פעם ב-10 דקות לכל סוג כשלון).
     """
     from app.core.config import settings
-    from app.core.redis_client import get_redis
 
     # throttle — התראה אחת ל-10 דקות לכל סוג כשלון
     _THROTTLE_PREFIX = "alert_throttle:health_"
@@ -1296,10 +1295,19 @@ def periodic_health_check() -> dict:
         # ישתנה ויעקוף את ה-throttle. לכן משתמשים במפתח גלובלי יחיד.
         throttle_key = f"{_THROTTLE_PREFIX}global"
         try:
-            redis_client = await get_redis()
-            was_set = await redis_client.set(
-                throttle_key, "1", nx=True, ex=_THROTTLE_SECONDS
+            # חיבור Redis חדש per-call — Celery יוצר event loop חדש לכל task,
+            # ולכן ה-singleton של get_redis() לא תקין כאן (event loop mismatch)
+            import redis.asyncio as aioredis
+
+            redis_client = aioredis.from_url(
+                settings.REDIS_URL, decode_responses=True
             )
+            try:
+                was_set = await redis_client.set(
+                    throttle_key, "1", nx=True, ex=_THROTTLE_SECONDS
+                )
+            finally:
+                await redis_client.aclose()
             if not was_set:
                 # כבר נשלחה התראה — לא שולחים שוב
                 logger.info(
