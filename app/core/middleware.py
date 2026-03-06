@@ -222,9 +222,13 @@ class WebhookRateLimitMiddleware(BaseHTTPMiddleware):
         self._requests: dict[str, list[float]] = defaultdict(list)
 
     def _cleanup_window(self, ip: str, now: float) -> None:
-        """ניקוי בקשות ישנות מחוץ לחלון הזמן + מחיקת IP ריקים"""
-        cutoff = now - self._window_seconds
+        """ניקוי בקשות ישנות מחוץ לחלון הזמן + מחיקת IP ריקים/ישנים"""
         timestamps = self._requests[ip]
+        # בדיקת IP ישן לפני הגיזום — אם הבקשה האחרונה ישנה מ-window*10, מוחקים
+        if timestamps and (now - timestamps[-1]) > self._window_seconds * 10:
+            del self._requests[ip]
+            return
+        cutoff = now - self._window_seconds
         # מחפשים את האינדקס הראשון בתוך החלון
         idx = 0
         for idx, ts in enumerate(timestamps):
@@ -234,8 +238,8 @@ class WebhookRateLimitMiddleware(BaseHTTPMiddleware):
             idx = len(timestamps)
         if idx > 0:
             self._requests[ip] = timestamps[idx:]
-        # מחיקת מפתח ריק או ישן — מונע דליפת זיכרון מ-IP חד-פעמיים
-        if not self._requests[ip] or (now - self._requests[ip][-1]) > self._window_seconds * 10:
+        # מחיקת מפתח ריק — מונע דליפת זיכרון מ-IP חד-פעמיים
+        if not self._requests[ip]:
             del self._requests[ip]
 
     async def dispatch(

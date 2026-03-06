@@ -156,8 +156,8 @@ class TestRateLimiterMemoryLeak:
         assert "1.2.3.4" not in mw._requests
 
     @pytest.mark.unit
-    def test_cleanup_keeps_recent_ip(self) -> None:
-        """IP עם בקשה אחת חדשה (בתוך window*10) לא נמחק"""
+    def test_cleanup_keeps_recent_ip_with_active_window_request(self) -> None:
+        """IP עם בקשה בתוך החלון לא נמחק"""
         from starlette.applications import Starlette
         from app.core.middleware import WebhookRateLimitMiddleware
 
@@ -165,14 +165,30 @@ class TestRateLimiterMemoryLeak:
         mw = WebhookRateLimitMiddleware(app, max_requests=100, window_seconds=60)
 
         now = time.time()
-        # בקשה אחת שבוצעה לפני 2 דקות (< 600 שניות)
+        # בקשה אחת בתוך ה-window (30 שניות)
+        mw._requests["1.2.3.4"] = [now - 30]
+
+        mw._cleanup_window("1.2.3.4", now)
+
+        assert "1.2.3.4" in mw._requests
+        assert len(mw._requests["1.2.3.4"]) == 1
+
+    @pytest.mark.unit
+    def test_cleanup_removes_ip_outside_window_but_within_staleness(self) -> None:
+        """IP עם בקשה מחוץ לחלון אבל לא ישנה מספיק — רשימה ריקה אחרי גיזום → נמחק"""
+        from starlette.applications import Starlette
+        from app.core.middleware import WebhookRateLimitMiddleware
+
+        app = Starlette()
+        mw = WebhookRateLimitMiddleware(app, max_requests=100, window_seconds=60)
+
+        now = time.time()
+        # בקשה מחוץ ל-window (120 שניות) אבל בתוך window*10 (600 שניות)
         mw._requests["1.2.3.4"] = [now - 120]
 
         mw._cleanup_window("1.2.3.4", now)
 
-        # הבקשה מחוץ לחלון אז היא תנוקה, אבל ה-IP לא ישן מספיק למחיקה
-        # בפועל הבקשה מחוץ ל-60 שניות אז תנוקה, ואז הרשימה ריקה → IP נמחק
-        # (זה התנהגות נכונה — IP ללא בקשות אקטיביות צריך להימחק)
+        # אחרי גיזום הרשימה ריקה → IP נמחק
         assert "1.2.3.4" not in mw._requests
 
     @pytest.mark.unit
@@ -217,10 +233,11 @@ class TestDatetimeUtc:
         output = formatter.format(record)
         data = json.loads(output)
 
-        # timestamp צריך להיגמר ב-+00:00Z או להכיל timezone info
         assert "timestamp" in data
-        # נבדוק שה-timestamp הוא תקין ומסתיים ב-Z
-        assert data["timestamp"].endswith("Z")
+        ts = data["timestamp"]
+        # timestamp צריך להסתיים ב-Z בלבד (לא +00:00Z שהוא פורמט לא תקין)
+        assert ts.endswith("Z")
+        assert "+00:00" not in ts
 
     @pytest.mark.unit
     def test_logging_source_no_utcnow(self) -> None:
