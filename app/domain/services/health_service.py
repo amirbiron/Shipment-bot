@@ -171,6 +171,7 @@ async def _check_db_celery() -> str:
             pool_pre_ping=True,
             pool_size=1,
             max_overflow=0,
+            connect_args={"timeout": 10},
         )
         try:
             task_session_maker = async_sessionmaker(
