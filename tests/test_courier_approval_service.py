@@ -211,14 +211,11 @@ class TestNotifyAfterDecision:
         send_tg = AsyncMock()
         send_wa = AsyncMock()
 
-        with patch.object(
-            AdminNotificationService := __import__(
-                "app.domain.services.admin_notification_service",
-                fromlist=["AdminNotificationService"],
-            ).AdminNotificationService,
-            "notify_group_courier_decision",
-            new_callable=AsyncMock,
-        ):
+        with patch(
+            "app.domain.services.courier_approval_service.AdminNotificationService"
+        ) as mock_admin:
+            mock_admin.notify_group_courier_decision = AsyncMock()
+
             await CourierApprovalService.notify_after_decision(
                 user=courier,
                 action="approve",

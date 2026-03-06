@@ -7,13 +7,15 @@ omit =
     app/core/config.py
 
 [report]
-fail_under = 60
+fail_under = 70
 show_missing = true
 skip_empty = true
 exclude_lines =
     pragma: no cover
     if __name__ == .__main__
     ^\s*pass\s*$
+    raise NotImplementedError
+    \.\.\.
 
 [html]
 directory = htmlcov

@@ -48,4 +48,4 @@ jobs:
 
       - name: Run tests with coverage
         run: |
-          pytest -x -n auto --cov=app --cov-report=term-missing --cov-fail-under=60
+          pytest -x -n auto --cov=app --cov-report=term-missing --cov-fail-under=70
