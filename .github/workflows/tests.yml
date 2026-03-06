@@ -9,7 +9,7 @@ on:
 jobs:
   pytest:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     env:
       JWT_SECRET_KEY: ci-dummy-key-not-for-production
 
@@ -36,7 +36,16 @@ jobs:
             exit 1
           }
 
-      - name: Run tests
+      - name: Type checking
+        continue-on-error: true
         run: |
-          pytest
+          mypy app/ --ignore-missing-imports
 
+      - name: Security scan
+        continue-on-error: true
+        run: |
+          bandit -r app/ -ll -q
+
+      - name: Run tests with coverage
+        run: |
+          pytest -x -n auto --cov=app --cov-report=term-missing --cov-fail-under=70

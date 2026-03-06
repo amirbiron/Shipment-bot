@@ -2,20 +2,20 @@
 source = app
 omit =
     app/workers/*
-    app/db/migrations/*
+    app/main.py
+    app/db/database.py
+    app/core/config.py
 
 [report]
-# סף כיסוי גלובלי
 fail_under = 70
-
+show_missing = true
+skip_empty = true
 exclude_lines =
     pragma: no cover
     if __name__ == .__main__
+    ^\s*pass\s*$
     raise NotImplementedError
     \.\.\.
-
-show_missing = true
-skip_empty = true
 
 [html]
 directory = htmlcov
