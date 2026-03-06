@@ -958,8 +958,11 @@ class AdminNotificationService:
                     # דיווח הצלחה ל-CB כדי שלא יישאר תקוע ב-HALF_OPEN
                     await circuit_breaker.record_success()
                     return True
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(
+                "sendPhoto נכשל, ממשיך ל-sendDocument fallback",
+                extra_data={"chat_id": chat_id, "error": str(e)},
+            )
 
         # fallback: sendDocument — ידנית (בלי cb.execute) כדי לא לצרוך slot נוסף
         logger.info(
@@ -1015,8 +1018,12 @@ class AdminNotificationService:
                 header, b64_data = file_id.split(",", 1)
                 mime_type = header.split(":")[1].split(";")[0] if ":" in header else "image/jpeg"
                 image_bytes = base64.b64decode(b64_data)
-            except Exception:
-                logger.warning("כשלון בפענוח data URI של צילום הפקדה")
+            except Exception as e:
+                logger.warning(
+                    "כשלון בפענוח data URI של צילום הפקדה",
+                    extra_data={"error": str(e)},
+                    exc_info=True,
+                )
                 return False
         elif file_id.startswith(("http://", "https://")):
             try:
@@ -1039,8 +1046,12 @@ class AdminNotificationService:
                     header, b64_data = data_uri.split(",", 1)
                     mime_type = header.split(":")[1].split(";")[0] if ":" in header else "image/jpeg"
                     image_bytes = base64.b64decode(b64_data)
-                except Exception:
-                    logger.warning("כשלון בפענוח data URI לאחר הורדה מ-Cloud API")
+                except Exception as e:
+                    logger.warning(
+                        "כשלון בפענוח data URI לאחר הורדה מ-Cloud API",
+                        extra_data={"error": str(e)},
+                        exc_info=True,
+                    )
                     return False
 
         if not image_bytes:

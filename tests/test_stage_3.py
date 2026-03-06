@@ -163,6 +163,7 @@ class TestStage3StateDefinitions:
             DispatcherState.ADD_SHIPMENT_DROPOFF_CITY,
             DispatcherState.ADD_SHIPMENT_DROPOFF_STREET,
             DispatcherState.ADD_SHIPMENT_DROPOFF_NUMBER,
+            DispatcherState.ADD_SHIPMENT_DROPOFF_APARTMENT,
             DispatcherState.ADD_SHIPMENT_DESCRIPTION,
             DispatcherState.ADD_SHIPMENT_FEE,
             DispatcherState.ADD_SHIPMENT_CONFIRM,
@@ -400,6 +401,12 @@ class TestStage32DispatcherHandlers:
         # 7. מספר בית יעד
         response, new_state = await handler.handle_message(
             dispatcher, "5", None
+        )
+        assert new_state == DispatcherState.ADD_SHIPMENT_DROPOFF_APARTMENT.value
+
+        # 7.5 דירה/יחידה ביעד (דלג)
+        response, new_state = await handler.handle_message(
+            dispatcher, "דלג", None
         )
         assert new_state == DispatcherState.ADD_SHIPMENT_DESCRIPTION.value
 

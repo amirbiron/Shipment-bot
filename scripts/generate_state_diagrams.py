@@ -82,6 +82,7 @@ DISPATCHER_LABELS: dict[str, str] = {
     DispatcherState.ADD_SHIPMENT_DROPOFF_CITY.value: "עיר יעד",
     DispatcherState.ADD_SHIPMENT_DROPOFF_STREET.value: "רחוב יעד",
     DispatcherState.ADD_SHIPMENT_DROPOFF_NUMBER.value: "מספר בית יעד",
+    DispatcherState.ADD_SHIPMENT_DROPOFF_APARTMENT.value: "דירה יעד",
     DispatcherState.ADD_SHIPMENT_DESCRIPTION.value: "תיאור משלוח",
     DispatcherState.ADD_SHIPMENT_FEE.value: "עמלה",
     DispatcherState.ADD_SHIPMENT_CONFIRM.value: "אישור משלוח",

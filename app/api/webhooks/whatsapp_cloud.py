@@ -944,6 +944,15 @@ async def _route_message_to_handler(
         return response.text, new_state
 
     # ברירת מחדל: welcome message עם בחירת תפקיד
+    # לוג אם התפקיד אינו אחד מהמוכרים — עוזר לזהות תפקידים חדשים שלא טופלו
+    if user.role not in (
+        UserRole.ADMIN, UserRole.STATION_OWNER, UserRole.COURIER,
+        UserRole.DRIVER, UserRole.SENDER,
+    ):
+        logger.warning(
+            "תפקיד לא מזוהה בניתוב WhatsApp Cloud — חוזר ל-welcome",
+            extra_data={"user_id": user.id, "role": str(user.role)},
+        )
     background_tasks.add_task(send_welcome_message, reply_to)
     return "welcome", None
 

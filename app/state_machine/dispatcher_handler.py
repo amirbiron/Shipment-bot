@@ -56,6 +56,7 @@ class DispatcherStateHandler:
         "dropoff_city",
         "dropoff_street",
         "dropoff_number",
+        "dropoff_apartment",
         "dropoff_address",
         "description",
         "fee",
@@ -76,25 +77,19 @@ class DispatcherStateHandler:
         "ride_price",
     }
 
-    def _is_add_shipment_flow_state(self, state: str) -> bool:
-        """בודק אם המצב שייך לזרימת הוספת משלוח"""
-        return state.startswith("DISPATCHER.ADD_SHIPMENT.")
-
-    def _is_manual_charge_flow_state(self, state: str) -> bool:
-        """בודק אם המצב שייך לזרימת חיוב ידני"""
-        return state.startswith("DISPATCHER.MANUAL_CHARGE.")
-
-    def _is_post_ride_flow_state(self, state: str) -> bool:
-        """בודק אם המצב שייך לזרימת פרסום נסיעה (סשן 9)"""
-        return state.startswith("DISPATCHER.POST_RIDE.")
-
     def _is_multi_step_flow_state(self, state: str) -> bool:
-        """בודק אם המצב שייך לזרימה רב-שלבית"""
-        return (
-            self._is_add_shipment_flow_state(state)
-            or self._is_manual_charge_flow_state(state)
-            or self._is_post_ride_flow_state(state)
-        )
+        """בודק אם המצב שייך לזרימה רב-שלבית.
+
+        בודק באופן דינמי — כל state של סדרן שאינו MENU או VIEW נחשב לזרימה רב-שלבית.
+        כך flows חדשים (כמו ISSUE_REFUND) ייכללו אוטומטית ללא עדכון ידני.
+        """
+        if not state.startswith("DISPATCHER."):
+            return False
+        # MENU ו-VIEW הם states "סופיים" — לא חלק מזרימה רב-שלבית
+        suffix = state[len("DISPATCHER."):]
+        if suffix == "MENU" or suffix.startswith("VIEW_"):
+            return False
+        return True
 
     async def handle_message(
         self, user: User, message: str, photo_file_id: str = None
@@ -165,6 +160,7 @@ class DispatcherStateHandler:
             DispatcherState.ADD_SHIPMENT_DROPOFF_CITY.value: self._handle_add_shipment_dropoff_city,
             DispatcherState.ADD_SHIPMENT_DROPOFF_STREET.value: self._handle_add_shipment_dropoff_street,
             DispatcherState.ADD_SHIPMENT_DROPOFF_NUMBER.value: self._handle_add_shipment_dropoff_number,
+            DispatcherState.ADD_SHIPMENT_DROPOFF_APARTMENT.value: self._handle_add_shipment_dropoff_apartment,
             DispatcherState.ADD_SHIPMENT_DESCRIPTION.value: self._handle_add_shipment_description,
             DispatcherState.ADD_SHIPMENT_FEE.value: self._handle_add_shipment_fee,
             DispatcherState.ADD_SHIPMENT_CONFIRM.value: self._handle_add_shipment_confirm,
@@ -350,9 +346,32 @@ class DispatcherStateHandler:
             response = MessageResponse("מספר הבית חייב להכיל ספרה. אנא הזן מספר תקין:")
             return response, DispatcherState.ADD_SHIPMENT_DROPOFF_NUMBER.value, {}
 
+        response = MessageResponse(
+            f"עיר: {escape(context.get('dropoff_city', ''))} ✓\n"
+            f"רחוב: {escape(context.get('dropoff_street', ''))} {escape(number)} ✓\n\n"
+            "מספר דירה/יחידה? (או 'דלג' אם אין)"
+        )
+        return (
+            response,
+            DispatcherState.ADD_SHIPMENT_DROPOFF_APARTMENT.value,
+            {"dropoff_number": number},
+        )
+
+    async def _handle_add_shipment_dropoff_apartment(
+        self, user: User, message: str, context: dict
+    ):
+        """דירה/יחידה ביעד"""
+        apartment = message.strip()
         city = context.get("dropoff_city", "")
         street = context.get("dropoff_street", "")
-        dropoff_address = f"{street} {number}, {city}"
+        number = context.get("dropoff_number", "")
+
+        if apartment and apartment not in ("דלג", "-", "0"):
+            dropoff_address = f"{street} {number} דירה {apartment}, {city}"
+            ctx_update = {"dropoff_apartment": apartment, "dropoff_address": dropoff_address}
+        else:
+            dropoff_address = f"{street} {number}, {city}"
+            ctx_update = {"dropoff_apartment": None, "dropoff_address": dropoff_address}
 
         response = MessageResponse(
             f"🎯 כתובת יעד: {escape(dropoff_address)} ✓\n\n"
@@ -362,10 +381,7 @@ class DispatcherStateHandler:
         return (
             response,
             DispatcherState.ADD_SHIPMENT_DESCRIPTION.value,
-            {
-                "dropoff_number": number,
-                "dropoff_address": dropoff_address,
-            },
+            ctx_update,
         )
 
     async def _handle_add_shipment_description(

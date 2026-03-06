@@ -1,0 +1,21 @@
+[run]
+source = app
+omit =
+    app/workers/*
+    app/db/migrations/*
+
+[report]
+# סף כיסוי גלובלי
+fail_under = 70
+
+exclude_lines =
+    pragma: no cover
+    if __name__ == .__main__
+    raise NotImplementedError
+    \.\.\.
+
+show_missing = true
+skip_empty = true
+
+[html]
+directory = htmlcov

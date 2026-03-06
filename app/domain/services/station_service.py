@@ -65,9 +65,13 @@ class StationService:
     ) -> tuple[bool, str]:
         """בדיקת הרשאה — רק בעלים פעיל יכול לבצע פעולות מנהלתיות על הגדרות תחנה.
 
-        דילוג כש-actor_user_id=None (תאימות לאחור עם קריאות פנימיות).
+        כש-actor_user_id=None נרשם warning — קריאות פנימיות צריכות לספק actor מפורש.
         """
         if actor_user_id is None:
+            logger.warning(
+                "בדיקת הרשאת בעלים בוצעה ללא actor_user_id — מותר כתאימות לאחור",
+                extra_data={"station_id": station_id},
+            )
             return True, ""
         if not await self.is_owner_of_station(actor_user_id, station_id):
             return False, "אין הרשאה לבצע פעולה זו — רק בעלים פעיל בתחנה."

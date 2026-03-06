@@ -1,6 +1,7 @@
 """
 State Manager - Handles state transitions and context management
 """
+import copy
 from typing import Optional, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -92,9 +93,10 @@ class StateManager:
         # Update state
         session.current_state = new_state
 
-        # Update context if provided - create NEW dict to trigger SQLAlchemy change detection
+        # Update context if provided - deep copy to trigger SQLAlchemy change detection
+        # ולהבטיח שאובייקטים מקוננים (lists, dicts) לא ישותפו עם המקור
         if context_update:
-            current_context = dict(session.context_data or {})  # Create copy!
+            current_context = copy.deepcopy(session.context_data or {})
             current_context.update(context_update)
             session.context_data = current_context
 
@@ -129,7 +131,7 @@ class StateManager:
     ) -> None:
         """Update a single context key"""
         session = await self.get_or_create_session(user_id, platform)
-        context = dict(session.context_data or {})  # Create copy!
+        context = copy.deepcopy(session.context_data or {})
         context[key] = value
         session.context_data = context
         await self.db.commit()
