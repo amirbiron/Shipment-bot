@@ -1314,7 +1314,9 @@ def periodic_health_check() -> dict:
             )
             # fallback בזיכרון — כש-Redis לא זמין, throttle לפי timestamp מקומי
             now = time.monotonic()
-            last_sent = _health_alert_local_throttle.get(throttle_key, 0.0)
+            # ברירת מחדל שלילית מספיק כדי שההתראה הראשונה תמיד תעבור,
+            # גם אם time.monotonic() קטן מ-_THROTTLE_SECONDS (קונטיינר טרי)
+            last_sent = _health_alert_local_throttle.get(throttle_key, -_THROTTLE_SECONDS)
             if now - last_sent < _THROTTLE_SECONDS:
                 logger.info(
                     "בדיקת בריאות — התראה כבר נשלחה (throttled, in-memory fallback)",
