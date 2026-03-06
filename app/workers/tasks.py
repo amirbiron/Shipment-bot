@@ -1293,6 +1293,10 @@ def periodic_health_check() -> dict:
         # throttling — מפתח גלובלי אחד למניעת הצפה בכשלונות מדורגים.
         # כשכשלון מתרחב (למשל DB בלבד → DB+Redis), מפתח per-combination
         # ישתנה ויעקוף את ה-throttle. לכן משתמשים במפתח גלובלי יחיד.
+        #
+        # אטומיות: SET NX משמש גם כבדיקה וגם כנעילה — רק worker אחד רוכש
+        # את המפתח ושולח התראה. אם השליחה נכשלת, המפתח נמחק כדי לאפשר
+        # ניסיון חוזר במחזור הבא.
         throttle_key = f"{_THROTTLE_PREFIX}global"
         use_redis_throttle = True
         try:
@@ -1304,10 +1308,12 @@ def periodic_health_check() -> dict:
                 settings.REDIS_URL, decode_responses=True
             )
             try:
-                existing = await throttle_redis.get(throttle_key)
+                was_set = await throttle_redis.set(
+                    throttle_key, "1", nx=True, ex=_THROTTLE_SECONDS
+                )
             finally:
                 await throttle_redis.aclose()
-            if existing:
+            if not was_set:
                 # כבר נשלחה התראה — לא שולחים שוב
                 logger.info(
                     "בדיקת בריאות — התראה כבר נשלחה (throttled)",
@@ -1360,36 +1366,36 @@ def periodic_health_check() -> dict:
                     exc_info=True,
                 )
 
-        # throttle נקבע רק אחרי שליחה מוצלחת — כשלון לא חוסם ניסיון חוזר
-        if alert_sent:
+        # כשלון בשליחה — מחיקת מפתח throttle כדי לאפשר ניסיון חוזר
+        if not alert_sent:
             if use_redis_throttle:
                 try:
                     import redis.asyncio as aioredis
 
-                    throttle_redis = aioredis.from_url(
+                    del_redis = aioredis.from_url(
                         settings.REDIS_URL, decode_responses=True
                     )
                     try:
-                        await throttle_redis.set(
-                            throttle_key, "1", nx=True, ex=_THROTTLE_SECONDS
-                        )
+                        await del_redis.delete(throttle_key)
                     finally:
-                        await throttle_redis.aclose()
-                except Exception as e:
+                        await del_redis.aclose()
+                except Exception as del_err:
                     logger.warning(
-                        "כשלון בהגדרת throttle ב-Redis אחרי שליחת התראה",
-                        extra_data={"error": str(e)},
+                        "כשלון במחיקת throttle ב-Redis אחרי כשלון שליחה",
+                        extra_data={"error": str(del_err)},
                     )
-            else:
+            if tg_targets:
+                logger.error(
+                    "כשלון בשליחת התראת בריאות לכל המנהלים",
+                    extra_data={
+                        "status": overall_status,
+                        "targets_count": len(tg_targets),
+                    },
+                )
+        else:
+            # שליחה מוצלחת — עדכון fallback בזיכרון למקרה ש-Redis ייפול בהמשך
+            if not use_redis_throttle:
                 _health_alert_local_throttle[throttle_key] = time.monotonic()
-        elif tg_targets:
-            logger.error(
-                "כשלון בשליחת התראת בריאות לכל המנהלים",
-                extra_data={
-                    "status": overall_status,
-                    "targets_count": len(tg_targets),
-                },
-            )
 
         return {"status": overall_status, "alert_sent": alert_sent}
 

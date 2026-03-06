@@ -1,6 +1,7 @@
 """
 בדיקות יחידה ל-Health Check endpoints — liveness, readiness ו-detailed.
 """
+import asyncio
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
@@ -658,58 +659,237 @@ class TestCheckDetailedFunction:
 # ============================================================================
 
 
+def _run_async_in_new_loop(coro):
+    """מחליף את run_async של Celery — מריץ את ה-coroutine ב-loop חדש."""
+    return asyncio.run(coro)
+
+
 class TestPeriodicHealthCheckTask:
-    """בדיקות ל-task התקופתי של ניטור בריאות."""
+    """בדיקות ל-task התקופתי של ניטור בריאות — כולל throttle, שליחת התראות ו-fallback."""
+
+    _UNHEALTHY_RESULT: dict = {
+        "status": "unhealthy",
+        "components": {
+            "db": {"status": "error: db_unavailable", "response_time_ms": 100.0},
+            "redis": {"status": "ok", "response_time_ms": 1.0},
+            "whatsapp_gateway": {"status": "ok", "response_time_ms": 1.0},
+            "celery": {"status": "ok", "response_time_ms": 1.0},
+        },
+        "circuit_breakers": [],
+        "db_pool": {},
+    }
+
+    _HEALTHY_RESULT: dict = {
+        "status": "healthy",
+        "components": {
+            "db": {"status": "ok", "response_time_ms": 1.0},
+            "redis": {"status": "ok", "response_time_ms": 1.0},
+            "whatsapp_gateway": {"status": "ok", "response_time_ms": 1.0},
+            "celery": {"status": "ok", "response_time_ms": 1.0},
+        },
+        "circuit_breakers": [],
+        "db_pool": {},
+    }
+
+    def _build_mock_redis(self, get_return: str | None = None, set_return: bool = True) -> MagicMock:
+        """בונה mock ל-Redis client עם תמיכה ב-GET/SET/DELETE/aclose."""
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=get_return)
+        mock_client.set = AsyncMock(return_value=set_return)
+        mock_client.delete = AsyncMock()
+        mock_client.aclose = AsyncMock()
+        return mock_client
 
     @pytest.mark.unit
-    async def test_periodic_task_healthy_no_alert(self) -> None:
-        """כשהכל תקין — לא שולח התראה."""
-        mock_detailed = {
-            "status": "healthy",
-            "components": {
-                "db": {"status": "ok", "response_time_ms": 1.0},
-                "redis": {"status": "ok", "response_time_ms": 1.0},
-                "whatsapp_gateway": {"status": "ok", "response_time_ms": 1.0},
-                "celery": {"status": "ok", "response_time_ms": 1.0},
-            },
-            "circuit_breakers": [],
-            "db_pool": {},
-        }
-
+    def test_healthy_status_no_alert(self) -> None:
+        """כשהכל תקין — task מחזיר status=healthy ולא שולח התראה."""
         with patch(
             "app.domain.services.health_service.check_detailed",
             new_callable=AsyncMock,
-            return_value=mock_detailed,
+            return_value=self._HEALTHY_RESULT,
+        ), patch(
+            "app.workers.tasks.run_async",
+            side_effect=_run_async_in_new_loop,
         ):
-            # קריאה ישירה ל-async function הפנימית
-            from app.domain.services.health_service import check_detailed
-            result = await check_detailed()
+            from app.workers.tasks import periodic_health_check
+            result = periodic_health_check()
 
         assert result["status"] == "healthy"
+        assert result["alert_sent"] is False
 
     @pytest.mark.unit
-    async def test_periodic_task_unhealthy_triggers_alert(self) -> None:
-        """כש-DB נכשל — task מזהה ומתכונן לשלוח התראה."""
-        mock_detailed = {
-            "status": "unhealthy",
-            "components": {
-                "db": {"status": "error: db_unavailable", "response_time_ms": 100.0},
-                "redis": {"status": "ok", "response_time_ms": 1.0},
-                "whatsapp_gateway": {"status": "ok", "response_time_ms": 1.0},
-                "celery": {"status": "ok", "response_time_ms": 1.0},
-            },
-            "circuit_breakers": [],
-            "db_pool": {},
-        }
+    def test_unhealthy_sends_alert_and_sets_throttle(self) -> None:
+        """כש-DB נכשל — task שולח התראה ומגדיר throttle ב-Redis (SET NX אטומי)."""
+        mock_redis = self._build_mock_redis(set_return=True)
+        mock_send = AsyncMock(return_value=True)
 
         with patch(
             "app.domain.services.health_service.check_detailed",
             new_callable=AsyncMock,
-            return_value=mock_detailed,
-        ):
-            from app.domain.services.health_service import check_detailed
-            result = await check_detailed()
+            return_value=self._UNHEALTHY_RESULT,
+        ), patch(
+            "app.workers.tasks.run_async",
+            side_effect=_run_async_in_new_loop,
+        ), patch(
+            "redis.asyncio.from_url",
+            return_value=mock_redis,
+        ), patch(
+            "app.domain.services.admin_notification_service.AdminNotificationService._send_telegram_message",
+            mock_send,
+        ), patch(
+            "app.core.config.settings"
+        ) as mock_settings:
+            mock_settings.REDIS_URL = "redis://localhost"
+            mock_settings.TELEGRAM_ADMIN_CHAT_IDS = "123"
+            mock_settings.TELEGRAM_ADMIN_CHAT_ID = "123"
+            from app.workers.tasks import periodic_health_check
+            result = periodic_health_check()
 
         assert result["status"] == "unhealthy"
-        # וידוא שהרכיב הכושל מזוהה
-        assert result["components"]["db"]["status"] == "error: db_unavailable"
+        assert result["alert_sent"] is True
+        # ווידוא ש-SET NX נקרא (נעילה אטומית)
+        mock_redis.set.assert_called_once()
+        # ווידוא שלא נמחק (שליחה מוצלחת — throttle נשאר)
+        mock_redis.delete.assert_not_called()
+        mock_send.assert_called_once()
+
+    @pytest.mark.unit
+    def test_throttle_blocks_duplicate_alert(self) -> None:
+        """כש-throttle כבר נקבע ב-Redis (SET NX מחזיר False) — task לא שולח התראה."""
+        mock_redis = self._build_mock_redis(set_return=False)
+        mock_send = AsyncMock(return_value=True)
+
+        with patch(
+            "app.domain.services.health_service.check_detailed",
+            new_callable=AsyncMock,
+            return_value=self._UNHEALTHY_RESULT,
+        ), patch(
+            "app.workers.tasks.run_async",
+            side_effect=_run_async_in_new_loop,
+        ), patch(
+            "redis.asyncio.from_url",
+            return_value=mock_redis,
+        ), patch(
+            "app.domain.services.admin_notification_service.AdminNotificationService._send_telegram_message",
+            mock_send,
+        ), patch(
+            "app.core.config.settings"
+        ) as mock_settings:
+            mock_settings.REDIS_URL = "redis://localhost"
+            mock_settings.TELEGRAM_ADMIN_CHAT_IDS = "123"
+            mock_settings.TELEGRAM_ADMIN_CHAT_ID = "123"
+            from app.workers.tasks import periodic_health_check
+            result = periodic_health_check()
+
+        assert result["status"] == "unhealthy"
+        assert result["alert_sent"] is False
+        # ווידוא שלא ניסה לשלוח
+        mock_send.assert_not_called()
+
+    @pytest.mark.unit
+    def test_send_failure_deletes_throttle_key(self) -> None:
+        """כשכל שליחות ההתראה נכשלות — throttle נמחק מ-Redis לניסיון חוזר."""
+        mock_redis = self._build_mock_redis(set_return=True)
+        mock_send = AsyncMock(return_value=False)
+
+        with patch(
+            "app.domain.services.health_service.check_detailed",
+            new_callable=AsyncMock,
+            return_value=self._UNHEALTHY_RESULT,
+        ), patch(
+            "app.workers.tasks.run_async",
+            side_effect=_run_async_in_new_loop,
+        ), patch(
+            "redis.asyncio.from_url",
+            return_value=mock_redis,
+        ), patch(
+            "app.domain.services.admin_notification_service.AdminNotificationService._send_telegram_message",
+            mock_send,
+        ), patch(
+            "app.core.config.settings"
+        ) as mock_settings:
+            mock_settings.REDIS_URL = "redis://localhost"
+            mock_settings.TELEGRAM_ADMIN_CHAT_IDS = "123"
+            mock_settings.TELEGRAM_ADMIN_CHAT_ID = "123"
+            from app.workers.tasks import periodic_health_check
+            result = periodic_health_check()
+
+        assert result["status"] == "unhealthy"
+        assert result["alert_sent"] is False
+        # ווידוא שה-throttle key נמחק כדי לאפשר ניסיון חוזר
+        mock_redis.delete.assert_called_once()
+
+    @pytest.mark.unit
+    def test_redis_failure_uses_inmemory_fallback(self) -> None:
+        """כש-Redis לא זמין — fallback בזיכרון ושליחת התראה."""
+        import app.workers.tasks as tasks_module
+
+        mock_send = AsyncMock(return_value=True)
+        # ניקוי throttle בזיכרון לפני הבדיקה
+        tasks_module._health_alert_local_throttle.clear()
+
+        with patch(
+            "app.domain.services.health_service.check_detailed",
+            new_callable=AsyncMock,
+            return_value=self._UNHEALTHY_RESULT,
+        ), patch(
+            "app.workers.tasks.run_async",
+            side_effect=_run_async_in_new_loop,
+        ), patch(
+            "redis.asyncio.from_url",
+            side_effect=ConnectionError("redis unavailable"),
+        ), patch(
+            "app.domain.services.admin_notification_service.AdminNotificationService._send_telegram_message",
+            mock_send,
+        ), patch(
+            "app.core.config.settings"
+        ) as mock_settings:
+            mock_settings.REDIS_URL = "redis://localhost"
+            mock_settings.TELEGRAM_ADMIN_CHAT_IDS = "456"
+            mock_settings.TELEGRAM_ADMIN_CHAT_ID = "456"
+            from app.workers.tasks import periodic_health_check
+            result = periodic_health_check()
+
+        assert result["status"] == "unhealthy"
+        assert result["alert_sent"] is True
+        mock_send.assert_called_once()
+
+    @pytest.mark.unit
+    def test_inmemory_fallback_throttles_second_call(self) -> None:
+        """fallback בזיכרון חוסם התראה כפולה כשה-timestamp עדיין תקף."""
+        import app.workers.tasks as tasks_module
+        import time
+
+        throttle_key = "alert_throttle:health_global"
+        # סימולציה: ההתראה נשלחה ממש עכשיו
+        tasks_module._health_alert_local_throttle[throttle_key] = time.monotonic()
+
+        mock_send = AsyncMock(return_value=True)
+
+        with patch(
+            "app.domain.services.health_service.check_detailed",
+            new_callable=AsyncMock,
+            return_value=self._UNHEALTHY_RESULT,
+        ), patch(
+            "app.workers.tasks.run_async",
+            side_effect=_run_async_in_new_loop,
+        ), patch(
+            "redis.asyncio.from_url",
+            side_effect=ConnectionError("redis unavailable"),
+        ), patch(
+            "app.domain.services.admin_notification_service.AdminNotificationService._send_telegram_message",
+            mock_send,
+        ), patch(
+            "app.core.config.settings"
+        ) as mock_settings:
+            mock_settings.REDIS_URL = "redis://localhost"
+            mock_settings.TELEGRAM_ADMIN_CHAT_IDS = "789"
+            mock_settings.TELEGRAM_ADMIN_CHAT_ID = "789"
+            from app.workers.tasks import periodic_health_check
+            result = periodic_health_check()
+
+        assert result["status"] == "unhealthy"
+        assert result["alert_sent"] is False
+        mock_send.assert_not_called()
+        # ניקוי
+        tasks_module._health_alert_local_throttle.clear()
