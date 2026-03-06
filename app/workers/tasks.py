@@ -8,6 +8,7 @@ via WhatsApp or Telegram.
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime, timedelta, timezone
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
@@ -1228,3 +1229,184 @@ def check_whatsapp_connection() -> dict:
         return {"status": status, "alert_sent": alert_sent}
 
     return run_async(_check())
+
+
+# ============================================================================
+# ניטור בריאות תקופתי — בדיקת כל הרכיבים ושליחת התראה בחריגה
+# ============================================================================
+
+# fallback throttle בזיכרון — כשגם Redis לא זמין
+_health_alert_local_throttle: dict[str, float] = {}
+
+
+@celery_app.task(name="app.workers.tasks.periodic_health_check", ignore_result=True)
+def periodic_health_check() -> dict:
+    """
+    בדיקת בריאות תקופתית של כל רכיבי המערכת.
+
+    רצה כל 2 דקות. בודק DB, Redis, Celery broker, WhatsApp Gateway
+    ו-circuit breakers. אם תלות קריטית לא זמינה — שולח התראה
+    למנהלים דרך Telegram. משתמש ב-Redis throttling למניעת הצפת התראות
+    (פעם ב-10 דקות לכל סוג כשלון).
+    """
+    from app.core.config import settings
+
+    # throttle — התראה אחת ל-10 דקות לכל סוג כשלון
+    _THROTTLE_PREFIX = "alert_throttle:health_"
+    _THROTTLE_SECONDS = 600
+
+    async def _run_health_check() -> dict:
+        from app.domain.services.health_service import check_detailed
+
+        result = await check_detailed(celery_mode=True)
+        overall_status = result["status"]
+
+        if overall_status == "healthy":
+            logger.debug("בדיקת בריאות תקופתית — הכל תקין")
+            return {"status": overall_status, "alert_sent": False}
+
+        if overall_status == "degraded":
+            # מצב degraded = תלות לא קריטית (כגון WhatsApp) לא זמינה.
+            # לא שולחים התראה כדי למנוע alert fatigue.
+            logger.info(
+                "בדיקת בריאות — מצב degraded, לא שולחים התראה",
+                extra_data={"status": overall_status},
+            )
+            return {"status": overall_status, "alert_sent": False}
+
+        # זיהוי רכיבים כושלים
+        failed_components = []
+        for name, info in result.get("components", {}).items():
+            component_status = info.get("status", "unknown") if isinstance(info, dict) else info
+            if component_status != "ok":
+                failed_components.append(f"{name}: {component_status}")
+
+        # בדיקת circuit breakers פתוחים
+        open_breakers = []
+        for cb in result.get("circuit_breakers", []):
+            if cb.get("state") != "closed":
+                open_breakers.append(f"{cb['service']}: {cb['state']}")
+
+        # בניית הודעת התראה
+        alert_parts = [f"התראת בריאות מערכת — מצב: {overall_status}"]
+        if failed_components:
+            alert_parts.append("רכיבים כושלים:")
+            alert_parts.extend(f"  - {c}" for c in failed_components)
+        if open_breakers:
+            alert_parts.append("Circuit breakers פתוחים:")
+            alert_parts.extend(f"  - {b}" for b in open_breakers)
+
+        alert_message = "\n".join(alert_parts)
+        alert_sent = False
+
+        # throttling — מפתח גלובלי אחד למניעת הצפה בכשלונות מדורגים.
+        # כשכשלון מתרחב (למשל DB בלבד → DB+Redis), מפתח per-combination
+        # ישתנה ויעקוף את ה-throttle. לכן משתמשים במפתח גלובלי יחיד.
+        #
+        # אטומיות: SET NX משמש גם כבדיקה וגם כנעילה — רק worker אחד רוכש
+        # את המפתח ושולח התראה. אם השליחה נכשלת, המפתח נמחק כדי לאפשר
+        # ניסיון חוזר במחזור הבא.
+        throttle_key = f"{_THROTTLE_PREFIX}global"
+        use_redis_throttle = True
+        try:
+            # חיבור Redis חדש per-call — Celery יוצר event loop חדש לכל task,
+            # ולכן ה-singleton של get_redis() לא תקין כאן (event loop mismatch)
+            import redis.asyncio as aioredis
+
+            throttle_redis = aioredis.from_url(
+                settings.REDIS_URL, decode_responses=True
+            )
+            try:
+                was_set = await throttle_redis.set(
+                    throttle_key, "1", nx=True, ex=_THROTTLE_SECONDS
+                )
+            finally:
+                await throttle_redis.aclose()
+            if not was_set:
+                # כבר נשלחה התראה — לא שולחים שוב
+                logger.info(
+                    "בדיקת בריאות — התראה כבר נשלחה (throttled)",
+                    extra_data={"status": overall_status},
+                )
+                return {"status": overall_status, "alert_sent": False}
+        except Exception as e:
+            logger.warning(
+                "כשלון בבדיקת throttle ב-Redis — שימוש ב-fallback בזיכרון",
+                extra_data={"error": str(e)},
+            )
+            use_redis_throttle = False
+            # fallback בזיכרון — כש-Redis לא זמין, throttle לפי timestamp מקומי
+            now = time.monotonic()
+            # ברירת מחדל שלילית מספיק כדי שההתראה הראשונה תמיד תעבור,
+            # גם אם time.monotonic() קטן מ-_THROTTLE_SECONDS (קונטיינר טרי)
+            last_sent = _health_alert_local_throttle.get(throttle_key, -_THROTTLE_SECONDS)
+            if now - last_sent < _THROTTLE_SECONDS:
+                logger.info(
+                    "בדיקת בריאות — התראה כבר נשלחה (throttled, in-memory fallback)",
+                    extra_data={"status": overall_status},
+                )
+                return {"status": overall_status, "alert_sent": False}
+
+        # שליחת התראה למנהלים דרך Telegram
+        from app.domain.services.admin_notification_service import (
+            AdminNotificationService,
+            _parse_csv_setting,
+        )
+
+        tg_targets: list[str] = _parse_csv_setting(settings.TELEGRAM_ADMIN_CHAT_IDS)
+        if settings.TELEGRAM_ADMIN_CHAT_ID and settings.TELEGRAM_ADMIN_CHAT_ID not in tg_targets:
+            tg_targets.append(settings.TELEGRAM_ADMIN_CHAT_ID)
+
+        for target in tg_targets:
+            try:
+                sent = await AdminNotificationService._send_telegram_message(
+                    target, alert_message
+                )
+                if sent:
+                    alert_sent = True
+                    logger.info(
+                        "התראת בריאות נשלחה למנהל",
+                        extra_data={"target": target, "status": overall_status},
+                    )
+            except Exception as e:
+                logger.error(
+                    "כשלון בשליחת התראת בריאות",
+                    extra_data={"target": target, "error": str(e)},
+                    exc_info=True,
+                )
+
+        # כשלון בשליחה — מחיקת מפתח throttle כדי לאפשר ניסיון חוזר
+        if not alert_sent:
+            # ניקוי גם in-memory throttle כדי שלא יחסום retry אם Redis ייפול
+            _health_alert_local_throttle.pop(throttle_key, None)
+            if use_redis_throttle:
+                try:
+                    import redis.asyncio as aioredis
+
+                    del_redis = aioredis.from_url(
+                        settings.REDIS_URL, decode_responses=True
+                    )
+                    try:
+                        await del_redis.delete(throttle_key)
+                    finally:
+                        await del_redis.aclose()
+                except Exception as del_err:
+                    logger.warning(
+                        "כשלון במחיקת throttle ב-Redis אחרי כשלון שליחה",
+                        extra_data={"error": str(del_err)},
+                    )
+            if tg_targets:
+                logger.error(
+                    "כשלון בשליחת התראת בריאות לכל המנהלים",
+                    extra_data={
+                        "status": overall_status,
+                        "targets_count": len(tg_targets),
+                    },
+                )
+        else:
+            # שליחה מוצלחת — עדכון fallback בזיכרון למקרה ש-Redis ייפול בהמשך
+            _health_alert_local_throttle[throttle_key] = time.monotonic()
+
+        return {"status": overall_status, "alert_sent": alert_sent}
+
+    return run_async(_run_health_check())
