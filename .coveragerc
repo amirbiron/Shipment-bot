@@ -13,7 +13,7 @@ skip_empty = true
 exclude_lines =
     pragma: no cover
     if __name__ == .__main__
-    pass
+    ^\s*pass\s*$
 
 [html]
 directory = htmlcov
