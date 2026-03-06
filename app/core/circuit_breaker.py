@@ -148,61 +148,8 @@ class CircuitBreaker:
             }
         )
 
-    async def record_success(self) -> None:
-        """Record a successful call"""
-        with self._lock:
-            if self._state.state == CircuitState.HALF_OPEN:
-                self._state.success_count += 1
-                if self._state.success_count >= self.config.success_threshold:
-                    self._transition_to_sync(CircuitState.CLOSED)
-            elif self._state.state == CircuitState.CLOSED:
-                # Reset failure count on success
-                self._state.failure_count = 0
-
-    async def record_failure(self, error: Exception | None = None) -> None:
-        """Record a failed call"""
-        with self._lock:
-            self._state.failure_count += 1
-            self._state.last_failure_time = time.time()
-
-            logger.warning(
-                f"Circuit breaker '{self.service_name}' recorded failure",
-                extra_data={
-                    "service": self.service_name,
-                    "failure_count": self._state.failure_count,
-                    "threshold": self.config.failure_threshold,
-                    "error": str(error) if error else None
-                }
-            )
-
-            if self._state.state == CircuitState.HALF_OPEN:
-                # Any failure in half-open goes back to open
-                self._transition_to_sync(CircuitState.OPEN)
-            elif self._state.failure_count >= self.config.failure_threshold:
-                self._transition_to_sync(CircuitState.OPEN)
-
-    async def can_execute(self) -> bool:
-        """Check if a request can be executed"""
-        with self._lock:
-            if self._state.state == CircuitState.CLOSED:
-                return True
-
-            if self._state.state == CircuitState.OPEN:
-                if self._should_attempt_reset():
-                    self._transition_to_sync(CircuitState.HALF_OPEN)
-                    return True
-                return False
-
-            if self._state.state == CircuitState.HALF_OPEN:
-                if self._state.half_open_calls < self.config.half_open_max_calls:
-                    self._state.half_open_calls += 1
-                    return True
-                return False
-
-            return False
-
     def _check_can_execute_sync(self) -> bool:
-        """בדיקה סינכרונית אם ניתן להריץ — לשימוש מתוך sync_wrapper"""
+        """בדיקה אם ניתן להריץ — מימוש יחיד לשימוש sync ו-async"""
         with self._lock:
             if self._state.state == CircuitState.CLOSED:
                 return True
@@ -219,7 +166,7 @@ class CircuitBreaker:
             return False
 
     def _record_success_sync(self) -> None:
-        """רישום הצלחה סינכרוני — לשימוש מתוך sync_wrapper"""
+        """רישום הצלחה — מימוש יחיד לשימוש sync ו-async"""
         with self._lock:
             if self._state.state == CircuitState.HALF_OPEN:
                 self._state.success_count += 1
@@ -229,7 +176,7 @@ class CircuitBreaker:
                 self._state.failure_count = 0
 
     def _record_failure_sync(self, error: Exception | None = None) -> None:
-        """רישום כשלון סינכרוני — לשימוש מתוך sync_wrapper"""
+        """רישום כשלון — מימוש יחיד לשימוש sync ו-async"""
         with self._lock:
             self._state.failure_count += 1
             self._state.last_failure_time = time.time()
@@ -246,6 +193,18 @@ class CircuitBreaker:
                 self._transition_to_sync(CircuitState.OPEN)
             elif self._state.failure_count >= self.config.failure_threshold:
                 self._transition_to_sync(CircuitState.OPEN)
+
+    async def record_success(self) -> None:
+        """Record a successful call (האצלה למימוש sync — אין await בלוגיקה)"""
+        self._record_success_sync()
+
+    async def record_failure(self, error: Exception | None = None) -> None:
+        """Record a failed call (האצלה למימוש sync — אין await בלוגיקה)"""
+        self._record_failure_sync(error)
+
+    async def can_execute(self) -> bool:
+        """Check if a request can be executed (האצלה למימוש sync — אין await בלוגיקה)"""
+        return self._check_can_execute_sync()
 
     def get_retry_after(self) -> float:
         """Get seconds until circuit might close"""
