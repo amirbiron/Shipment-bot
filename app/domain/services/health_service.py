@@ -6,13 +6,15 @@
 - readiness: בדיקה מקיפה של כל התלויות החיצוניות
 - detailed: בדיקה מעמיקה עם זמני תגובה, מצב circuit breakers, מידע DB pool ו-uptime
 """
+import asyncio
 import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable, Coroutine
 
 import httpx
 import redis.asyncio as aioredis
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -160,7 +162,45 @@ async def check_readiness() -> dict[str, Any]:
 # ============================================================================
 
 
-async def _timed_check(check_fn: Any) -> dict[str, Any]:
+async def _check_db_celery() -> str:
+    """בדיקת חיבור ל-DB בטוחה ל-Celery — יוצרת engine חדש per-call."""
+    try:
+        task_engine = create_async_engine(
+            settings.DATABASE_URL,
+            echo=False,
+            pool_pre_ping=True,
+            pool_size=1,
+            max_overflow=0,
+        )
+        try:
+            task_session_maker = async_sessionmaker(
+                bind=task_engine, class_=AsyncSession, expire_on_commit=False
+            )
+            async with task_session_maker() as session:
+                await session.execute(text("SELECT 1"))
+            return _CHECK_OK
+        finally:
+            await task_engine.dispose()
+    except Exception as e:
+        logger.warning("בדיקת בריאות DB נכשלה (celery)", extra_data={"error": str(e)})
+        return _ERROR_DB
+
+
+async def _check_redis_celery() -> str:
+    """בדיקת חיבור ל-Redis בטוחה ל-Celery — יוצרת חיבור חדש per-call."""
+    try:
+        client = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+        try:
+            await client.ping()
+            return _CHECK_OK
+        finally:
+            await client.aclose()
+    except Exception as e:
+        logger.warning("בדיקת בריאות Redis נכשלה (celery)", extra_data={"error": str(e)})
+        return _ERROR_REDIS
+
+
+async def _timed_check(check_fn: Callable[[], Coroutine[Any, Any, str]]) -> dict[str, Any]:
     """הרצת פונקציית בדיקה עם מדידת זמן תגובה (ms)."""
     start = time.monotonic()
     try:
@@ -215,7 +255,7 @@ def _get_db_pool_info() -> dict[str, Any]:
     }
 
 
-async def check_detailed() -> dict[str, Any]:
+async def check_detailed(*, celery_mode: bool = False) -> dict[str, Any]:
     """
     בדיקת בריאות מפורטת — מחזיר מידע מורחב על כל הרכיבים.
 
@@ -225,12 +265,23 @@ async def check_detailed() -> dict[str, Any]:
     - מידע על DB connection pool
     - uptime של התהליך
     - חותמת זמן של הבדיקה
+
+    Args:
+        celery_mode: כשהפונקציה רצה מתוך Celery task, משתמש ב-engine
+                     וחיבור Redis חדשים per-call כדי למנוע event loop mismatch.
     """
+    # בחירת פונקציות בדיקה — Celery יוצר event loop חדש per-task,
+    # לכן חייבים engine וחיבור Redis חדשים (לא ה-singletons של המודול)
+    db_fn = _check_db_celery if celery_mode else _check_db
+    redis_fn = _check_redis_celery if celery_mode else _check_redis
+
     # הרצת בדיקות במקביל עם מדידת זמנים
-    db_result = await _timed_check(_check_db)
-    redis_result = await _timed_check(_check_redis)
-    whatsapp_result = await _timed_check(_check_whatsapp_gateway)
-    celery_result = await _timed_check(_check_celery)
+    db_result, redis_result, whatsapp_result, celery_result = await asyncio.gather(
+        _timed_check(db_fn),
+        _timed_check(redis_fn),
+        _timed_check(_check_whatsapp_gateway),
+        _timed_check(_check_celery),
+    )
 
     components = {
         "db": db_result,

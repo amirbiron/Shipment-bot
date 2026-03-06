@@ -1255,7 +1255,7 @@ def periodic_health_check() -> dict:
     async def _run_health_check() -> dict:
         from app.domain.services.health_service import check_detailed
 
-        result = await check_detailed()
+        result = await check_detailed(celery_mode=True)
         overall_status = result["status"]
 
         if overall_status == "healthy":
@@ -1308,12 +1308,12 @@ def periodic_health_check() -> dict:
             )
 
         # שליחת התראה למנהלים דרך Telegram
-        from app.domain.services.admin_notification_service import AdminNotificationService
+        from app.domain.services.admin_notification_service import (
+            AdminNotificationService,
+            _parse_csv_setting,
+        )
 
-        tg_admin_ids = settings.TELEGRAM_ADMIN_CHAT_IDS
-        tg_targets: list[str] = []
-        if tg_admin_ids:
-            tg_targets = [t.strip() for t in tg_admin_ids.split(",") if t.strip()]
+        tg_targets: list[str] = _parse_csv_setting(settings.TELEGRAM_ADMIN_CHAT_IDS)
         if settings.TELEGRAM_ADMIN_CHAT_ID and settings.TELEGRAM_ADMIN_CHAT_ID not in tg_targets:
             tg_targets.append(settings.TELEGRAM_ADMIN_CHAT_ID)
 
