@@ -510,16 +510,26 @@ class AmountValidator:
         Returns:
             Tuple of (is_valid, error_message)
         """
+        # בדיקת NaN/Inf לפני השוואות — NaN comparisons תמיד מחזירות False
+        import math
+        if math.isnan(amount) or math.isinf(amount):
+            return False, "Invalid amount format"
+
         if amount < min_value:
             return False, f"Amount must be at least {min_value}"
 
         if amount > max_value:
             return False, f"Amount cannot exceed {max_value}"
 
-        # בדיקת 2 ספרות עשרוניות באמצעות Decimal למניעת שגיאות floating point
+        # בדיקת 2 ספרות עשרוניות באמצעות Decimal.
+        # עיגול ל-2 ספרות סופג שגיאות floating point קטנות (כמו 0.1+0.2=0.30000000000000004),
+        # אבל אם ההפרש מהערך המקורי גדול מ-tolerance — יש באמת יותר מ-2 ספרות.
         from decimal import Decimal, InvalidOperation
+        rounded = round(amount, 2)
+        if abs(rounded - amount) > 1e-9:
+            return False, "Amount cannot have more than 2 decimal places"
         try:
-            d = Decimal(str(amount))
+            d = Decimal(str(rounded))
         except InvalidOperation:
             return False, "Invalid amount format"
         if d.as_tuple().exponent < -2:

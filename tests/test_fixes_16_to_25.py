@@ -139,17 +139,34 @@ class TestAmountValidatorDecimal:
         assert "decimal" in err.lower()
 
     @pytest.mark.unit
-    def test_floating_point_edge_case(self):
-        """0.1 + 0.2 = 0.30000000000000004 — צריך לעבור כי str() = '0.30000000000000004'
-        אבל round(0.1+0.2, 2) = 0.3, ו-Decimal('0.3') הוא חוקי"""
-        # הערך 0.3 הוא חוקי
+    def test_floating_point_edge_case_direct(self):
+        """0.3 — ערך ישיר חוקי"""
         is_valid, err = AmountValidator.validate(0.3)
+        assert is_valid is True
+
+    @pytest.mark.unit
+    def test_floating_point_edge_case_arithmetic(self):
+        """0.1 + 0.2 = 0.30000000000000004 — צריך לעבור בזכות round"""
+        is_valid, err = AmountValidator.validate(0.1 + 0.2)
         assert is_valid is True
 
     @pytest.mark.unit
     def test_integer_amount_valid(self):
         is_valid, err = AmountValidator.validate(100.0)
         assert is_valid is True
+
+    @pytest.mark.unit
+    def test_nan_rejected(self):
+        """NaN חייב להידחות"""
+        is_valid, err = AmountValidator.validate(float("nan"))
+        assert is_valid is False
+        assert "Invalid" in err
+
+    @pytest.mark.unit
+    def test_inf_rejected(self):
+        """Infinity חייב להידחות"""
+        is_valid, err = AmountValidator.validate(float("inf"))
+        assert is_valid is False
 
 
 # ============================================================================
