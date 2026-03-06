@@ -101,10 +101,11 @@ class DriverMenuService:
             NotFoundException: פרופיל נהג לא נמצא
         """
         # שליפה מאוחדת: profile + user בשאילתה אחת (מונע N+1)
+        # LEFT JOIN כדי שפרופיל ללא user לא ייעלם — שומר על fallback מקורי
         from app.db.models.user import User
         result = await self.db.execute(
             select(DriverProfile, User)
-            .join(User, User.id == DriverProfile.user_id)
+            .outerjoin(User, User.id == DriverProfile.user_id)
             .where(DriverProfile.user_id == user_id)
         )
         row = result.one_or_none()
