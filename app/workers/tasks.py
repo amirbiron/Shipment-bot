@@ -8,6 +8,7 @@ via WhatsApp or Telegram.
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime, timedelta, timezone
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
@@ -1234,6 +1235,9 @@ def check_whatsapp_connection() -> dict:
 # ניטור בריאות תקופתי — בדיקת כל הרכיבים ושליחת התראה בחריגה
 # ============================================================================
 
+# fallback throttle בזיכרון — כשגם Redis לא זמין
+_health_alert_local_throttle: dict[str, float] = {}
+
 
 @celery_app.task(name="app.workers.tasks.periodic_health_check", ignore_result=True)
 def periodic_health_check() -> dict:
@@ -1308,9 +1312,19 @@ def periodic_health_check() -> dict:
                 return {"status": overall_status, "alert_sent": False}
         except Exception as e:
             logger.warning(
-                "כשלון בבדיקת throttle",
+                "כשלון בבדיקת throttle ב-Redis — שימוש ב-fallback בזיכרון",
                 extra_data={"error": str(e)},
             )
+            # fallback בזיכרון — כש-Redis לא זמין, throttle לפי timestamp מקומי
+            now = time.monotonic()
+            last_sent = _health_alert_local_throttle.get(throttle_key, 0.0)
+            if now - last_sent < _THROTTLE_SECONDS:
+                logger.info(
+                    "בדיקת בריאות — התראה כבר נשלחה (throttled, in-memory fallback)",
+                    extra_data={"status": overall_status},
+                )
+                return {"status": overall_status, "alert_sent": False}
+            _health_alert_local_throttle[throttle_key] = now
 
         # שליחת התראה למנהלים דרך Telegram
         from app.domain.services.admin_notification_service import (
