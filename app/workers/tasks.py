@@ -1377,6 +1377,8 @@ def periodic_health_check() -> dict:
 
         # כשלון בשליחה — מחיקת מפתח throttle כדי לאפשר ניסיון חוזר
         if not alert_sent:
+            # ניקוי גם in-memory throttle כדי שלא יחסום retry אם Redis ייפול
+            _health_alert_local_throttle.pop(throttle_key, None)
             if use_redis_throttle:
                 try:
                     import redis.asyncio as aioredis
