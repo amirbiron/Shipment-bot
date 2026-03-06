@@ -190,7 +190,12 @@ async def _check_db_celery() -> str:
 async def _check_redis_celery() -> str:
     """בדיקת חיבור ל-Redis בטוחה ל-Celery — יוצרת חיבור חדש per-call."""
     try:
-        client = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+        client = aioredis.from_url(
+            settings.REDIS_URL,
+            decode_responses=True,
+            socket_timeout=10,
+            socket_connect_timeout=10,
+        )
         try:
             await client.ping()
             return _CHECK_OK
@@ -304,12 +309,16 @@ async def check_detailed(*, celery_mode: bool = False) -> dict[str, Any]:
     else:
         overall_status = _STATUS_HEALTHY
 
-    # מצב circuit breakers
-    try:
-        circuit_breakers = _get_circuit_breakers_status()
-    except Exception as e:
-        logger.warning("כשלון בשליפת מצב circuit breakers", extra_data={"error": str(e)})
-        circuit_breakers = []
+    # מצב circuit breakers — רלוונטי רק ל-web process;
+    # ב-Celery הם singletons נפרדים שתמיד במצב ראשוני ולכן לא מייצגים מצב אמיתי
+    if celery_mode:
+        circuit_breakers: list[dict[str, Any]] = []
+    else:
+        try:
+            circuit_breakers = _get_circuit_breakers_status()
+        except Exception as e:
+            logger.warning("כשלון בשליפת מצב circuit breakers", extra_data={"error": str(e)})
+            circuit_breakers = []
 
     # מידע DB pool — רלוונטי רק ל-web process; ב-Celery ה-engine המודולרי לא בשימוש
     if celery_mode:
