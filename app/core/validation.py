@@ -516,10 +516,13 @@ class AmountValidator:
         if amount > max_value:
             return False, f"Amount cannot exceed {max_value}"
 
-        # Check for reasonable decimal places (2 for currency)
-        # שימוש בהשוואה עם tolerance כי floating point לא מדויק
-        # לדוגמה: 0.1 + 0.2 = 0.30000000000000004
-        if abs(round(amount, 2) - amount) > 1e-9:
+        # בדיקת 2 ספרות עשרוניות באמצעות Decimal למניעת שגיאות floating point
+        from decimal import Decimal, InvalidOperation
+        try:
+            d = Decimal(str(amount))
+        except InvalidOperation:
+            return False, "Invalid amount format"
+        if d.as_tuple().exponent < -2:
             return False, "Amount cannot have more than 2 decimal places"
 
         return True, None

@@ -78,14 +78,15 @@ class CircuitBreaker:
         service_name: str,
         config: CircuitBreakerConfig | None = None
     ) -> "CircuitBreaker":
-        """Get or create circuit breaker instance for a service"""
-        # בדיקה מהירה ללא נעילה (double-checked locking pattern)
-        if service_name not in cls._instances:
-            with cls._instances_lock:
-                # בדיקה נוספת בתוך הנעילה למניעת race condition
-                if service_name not in cls._instances:
-                    cls._instances[service_name] = cls(service_name, config)
-        return cls._instances[service_name]
+        """Get or create circuit breaker instance for a service.
+
+        נעילה מלאה למניעת race condition — הביצוע בטוח גם מחוץ ל-GIL
+        (למשל ב-async context switches).
+        """
+        with cls._instances_lock:
+            if service_name not in cls._instances:
+                cls._instances[service_name] = cls(service_name, config)
+            return cls._instances[service_name]
 
     @classmethod
     def reset_all(cls) -> None:
@@ -200,6 +201,52 @@ class CircuitBreaker:
 
             return False
 
+    def _check_can_execute_sync(self) -> bool:
+        """בדיקה סינכרונית אם ניתן להריץ — לשימוש מתוך sync_wrapper"""
+        with self._lock:
+            if self._state.state == CircuitState.CLOSED:
+                return True
+            if self._state.state == CircuitState.OPEN:
+                if self._should_attempt_reset():
+                    self._transition_to_sync(CircuitState.HALF_OPEN)
+                    return True
+                return False
+            if self._state.state == CircuitState.HALF_OPEN:
+                if self._state.half_open_calls < self.config.half_open_max_calls:
+                    self._state.half_open_calls += 1
+                    return True
+                return False
+            return False
+
+    def _record_success_sync(self) -> None:
+        """רישום הצלחה סינכרוני — לשימוש מתוך sync_wrapper"""
+        with self._lock:
+            if self._state.state == CircuitState.HALF_OPEN:
+                self._state.success_count += 1
+                if self._state.success_count >= self.config.success_threshold:
+                    self._transition_to_sync(CircuitState.CLOSED)
+            elif self._state.state == CircuitState.CLOSED:
+                self._state.failure_count = 0
+
+    def _record_failure_sync(self, error: Exception | None = None) -> None:
+        """רישום כשלון סינכרוני — לשימוש מתוך sync_wrapper"""
+        with self._lock:
+            self._state.failure_count += 1
+            self._state.last_failure_time = time.time()
+            logger.warning(
+                f"Circuit breaker '{self.service_name}' recorded failure",
+                extra_data={
+                    "service": self.service_name,
+                    "failure_count": self._state.failure_count,
+                    "threshold": self.config.failure_threshold,
+                    "error": str(error) if error else None
+                }
+            )
+            if self._state.state == CircuitState.HALF_OPEN:
+                self._transition_to_sync(CircuitState.OPEN)
+            elif self._state.failure_count >= self.config.failure_threshold:
+                self._transition_to_sync(CircuitState.OPEN)
+
     def get_retry_after(self) -> float:
         """Get seconds until circuit might close"""
         if self._state.state != CircuitState.OPEN:
@@ -271,13 +318,33 @@ def circuit_breaker(
 
         @wraps(func)
         def sync_wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
-            # Create a new event loop to avoid issues with already-running loops
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+            # שימוש ב-event loop קיים אם רץ (למשל מתוך FastAPI handler),
+            # אחרת יצירת loop חדש
             try:
-                return loop.run_until_complete(cb.execute(func, *args, **kwargs))
-            finally:
-                loop.close()
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+
+            if loop and loop.is_running():
+                # כבר רץ event loop — מריצים סינכרונית דרך ה-CB ישירות
+                # (לא ניתן לקרוא run_until_complete מתוך loop פעיל)
+                if not cb._check_can_execute_sync():
+                    retry_after = cb.get_retry_after()
+                    raise CircuitBreakerOpenError(cb.service_name, retry_after)
+                try:
+                    result = func(*args, **kwargs)
+                    cb._record_success_sync()
+                    return result
+                except Exception as e:
+                    cb._record_failure_sync(e)
+                    raise
+            else:
+                new_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(new_loop)
+                try:
+                    return new_loop.run_until_complete(cb.execute(func, *args, **kwargs))
+                finally:
+                    new_loop.close()
 
         if asyncio.iscoroutinefunction(func):
             return async_wrapper  # type: ignore

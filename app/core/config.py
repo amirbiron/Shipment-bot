@@ -123,6 +123,22 @@ class Settings(BaseSettings):
     WEBHOOK_RATE_LIMIT_MAX_REQUESTS: int = 100  # מספר בקשות מקסימלי לכל IP
     WEBHOOK_RATE_LIMIT_WINDOW_SECONDS: int = 60  # חלון זמן בשניות
 
+    @field_validator("WEBHOOK_RATE_LIMIT_MAX_REQUESTS", mode="after")
+    @classmethod
+    def validate_rate_limit_max_requests(cls, v: int) -> int:
+        """וידוא שמספר הבקשות המקסימלי חיובי למניעת השבתת rate limiting בשקט"""
+        if v <= 0:
+            raise ValueError("WEBHOOK_RATE_LIMIT_MAX_REQUESTS must be greater than 0")
+        return v
+
+    @field_validator("WEBHOOK_RATE_LIMIT_WINDOW_SECONDS", mode="after")
+    @classmethod
+    def validate_rate_limit_window(cls, v: int) -> int:
+        """וידוא שחלון הזמן חיובי למניעת השבתת rate limiting בשקט"""
+        if v <= 0:
+            raise ValueError("WEBHOOK_RATE_LIMIT_WINDOW_SECONDS must be greater than 0")
+        return v
+
     # Admin debug endpoints — מפתח API לגישה ל-endpoints דיאגנוסטיים
     ADMIN_API_KEY: str = ""  # openssl rand -hex 32
 
