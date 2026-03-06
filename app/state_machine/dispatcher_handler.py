@@ -77,18 +77,6 @@ class DispatcherStateHandler:
         "ride_price",
     }
 
-    def _is_add_shipment_flow_state(self, state: str) -> bool:
-        """בודק אם המצב שייך לזרימת הוספת משלוח"""
-        return state.startswith("DISPATCHER.ADD_SHIPMENT.")
-
-    def _is_manual_charge_flow_state(self, state: str) -> bool:
-        """בודק אם המצב שייך לזרימת חיוב ידני"""
-        return state.startswith("DISPATCHER.MANUAL_CHARGE.")
-
-    def _is_post_ride_flow_state(self, state: str) -> bool:
-        """בודק אם המצב שייך לזרימת פרסום נסיעה (סשן 9)"""
-        return state.startswith("DISPATCHER.POST_RIDE.")
-
     def _is_multi_step_flow_state(self, state: str) -> bool:
         """בודק אם המצב שייך לזרימה רב-שלבית.
 
