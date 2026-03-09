@@ -99,6 +99,40 @@ class TestUserAPI:
         assert data["phone_number"] == sample_sender.phone_number
 
     @pytest.mark.integration
+    async def test_get_user_by_phone_unnormalized(
+        self,
+        test_client: AsyncClient,
+        sample_sender: User
+    ):
+        """חיפוש משתמש לפי טלפון לא מנורמל — צריך למצוא אותו"""
+        # sample_sender.phone_number הוא בפורמט +972...
+        # נשלח בפורמט מקומי (0...) ונוודא שהנירמול עובד
+        local_phone = "0" + sample_sender.phone_number[4:]  # +972X -> 0X
+        with patch.object(settings, "ADMIN_API_KEY", "test-key"):
+            response = await test_client.get(
+                f"/api/users/phone/{local_phone}",
+                headers={"X-Admin-API-Key": "test-key"},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["phone_number"] == sample_sender.phone_number
+
+    @pytest.mark.integration
+    async def test_get_user_by_phone_invalid(
+        self,
+        test_client: AsyncClient,
+    ):
+        """חיפוש לפי טלפון לא תקין — מחזיר 422"""
+        with patch.object(settings, "ADMIN_API_KEY", "test-key"):
+            response = await test_client.get(
+                "/api/users/phone/invalid",
+                headers={"X-Admin-API-Key": "test-key"},
+            )
+
+        assert response.status_code == 422
+
+    @pytest.mark.integration
     async def test_get_couriers(
         self,
         test_client: AsyncClient,
