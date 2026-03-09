@@ -28,6 +28,7 @@ from app.core.config import settings
 class TestAutoCancel:
     """בדיקות ביטול אוטומטי של משלוחים"""
 
+    @pytest.mark.asyncio
     @pytest.mark.unit
     async def test_delivery_created_with_expires_at(self, db_session: AsyncSession):
         """משלוח חדש נוצר עם שדה expires_at"""
@@ -60,6 +61,7 @@ class TestAutoCancel:
         diff = abs((delivery.expires_at - expected_expiry).total_seconds())
         assert diff < 5  # הפרש של פחות מ-5 שניות
 
+    @pytest.mark.asyncio
     @pytest.mark.unit
     async def test_get_expired_deliveries(self, db_session: AsyncSession):
         """שליפת משלוחים שפג תוקפם"""
@@ -108,6 +110,7 @@ class TestAutoCancel:
         assert len(result) == 1
         assert result[0].id == expired.id
 
+    @pytest.mark.asyncio
     @pytest.mark.unit
     async def test_get_expiring_deliveries_warning(self, db_session: AsyncSession):
         """שליפת משלוחים שעומדים לפוג (לפני שליחת התראה)"""
@@ -157,6 +160,7 @@ class TestAutoCancel:
         assert len(result) == 1
         assert result[0].id == expiring_soon.id
 
+    @pytest.mark.asyncio
     @pytest.mark.unit
     async def test_auto_cancel_delivery(self, db_session: AsyncSession):
         """ביטול אוטומטי של משלוח שפג תוקפו — ביצוע ידני (SQLite לא תומך ב-with_for_update)"""
@@ -205,6 +209,7 @@ class TestAutoCancel:
         assert notification is not None
         assert str(delivery.id) in notification.message_content.get("message_text", "")
 
+    @pytest.mark.asyncio
     @pytest.mark.unit
     async def test_auto_cancel_ignores_captured_delivery(self, db_session: AsyncSession):
         """ביטול אוטומטי לא חל על משלוחים שכבר נתפסו"""
@@ -244,6 +249,7 @@ class TestAutoCancel:
 class TestDeadLetterQueue:
     """בדיקות dead letter queue"""
 
+    @pytest.mark.asyncio
     @pytest.mark.unit
     async def test_message_moves_to_dead_letter_after_max_retries(
         self, db_session: AsyncSession
@@ -283,6 +289,7 @@ class TestDeadLetterQueue:
         assert dead_letter.failure_reason == "max_retries_exceeded"
         assert dead_letter.last_error == "Connection refused"
 
+    @pytest.mark.asyncio
     @pytest.mark.unit
     async def test_permanent_error_goes_directly_to_dead_letter(
         self, db_session: AsyncSession
@@ -322,6 +329,7 @@ class TestDeadLetterQueue:
         assert dead_letter is not None
         assert dead_letter.failure_reason == "permanent"
 
+    @pytest.mark.asyncio
     @pytest.mark.unit
     async def test_transient_error_retries_before_dead_letter(
         self, db_session: AsyncSession
@@ -352,6 +360,7 @@ class TestDeadLetterQueue:
         assert message.retry_count == 1
         assert message.next_retry_at is not None
 
+    @pytest.mark.asyncio
     @pytest.mark.unit
     async def test_retry_dead_letter_message(self, db_session: AsyncSession):
         """שליחה חוזרת ידנית של הודעה מ-dead letter queue"""
@@ -388,6 +397,7 @@ class TestDeadLetterQueue:
         assert dead_letter.status == DeadLetterStatus.RETRIED
         assert dead_letter.retried_at is not None
 
+    @pytest.mark.asyncio
     @pytest.mark.unit
     async def test_get_dead_letter_count(self, db_session: AsyncSession):
         """ספירת הודעות כושלות ב-dead letter queue"""
