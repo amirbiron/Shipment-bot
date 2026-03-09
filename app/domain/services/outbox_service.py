@@ -312,14 +312,18 @@ class OutboxService:
     async def queue_auto_cancel_notification(
         self, delivery: Delivery
     ) -> List[OutboxMessage]:
-        """שליחת התראה לשולח על ביטול אוטומטי של משלוח שלא נתפס."""
+        """שליחת התראה לשולח על ביטול אוטומטי של משלוח שלא נתפס.
+
+        מצפה ש-delivery.sender כבר נטען (joinedload או refresh).
+        """
         messages = []
 
-        sender_result = await self.db.execute(
-            select(User).where(User.id == delivery.sender_id)
-        )
-        sender = sender_result.scalar_one_or_none()
+        sender = delivery.sender
         if not sender:
+            logger.warning(
+                "לא נמצא שולח למשלוח — לא ניתן לשלוח התראת ביטול אוטומטי",
+                extra_data={"delivery_id": delivery.id, "sender_id": delivery.sender_id},
+            )
             return messages
 
         # קביעת פלטפורמה ונמען
@@ -356,14 +360,18 @@ class OutboxService:
     async def queue_expiry_warning(
         self, delivery: Delivery, minutes_remaining: int
     ) -> List[OutboxMessage]:
-        """שליחת התראה לשולח שהמשלוח עומד לפוג בעוד X דקות."""
+        """שליחת התראה לשולח שהמשלוח עומד לפוג בעוד X דקות.
+
+        מצפה ש-delivery.sender כבר נטען (joinedload או refresh).
+        """
         messages = []
 
-        sender_result = await self.db.execute(
-            select(User).where(User.id == delivery.sender_id)
-        )
-        sender = sender_result.scalar_one_or_none()
+        sender = delivery.sender
         if not sender:
+            logger.warning(
+                "לא נמצא שולח למשלוח — לא ניתן לשלוח התראת תפוגה",
+                extra_data={"delivery_id": delivery.id, "sender_id": delivery.sender_id},
+            )
             return messages
 
         if sender.telegram_chat_id:

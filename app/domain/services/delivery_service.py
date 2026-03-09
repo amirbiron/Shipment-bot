@@ -306,13 +306,13 @@ class DeliveryService:
         מבצע ביטול עם נעילת שורה, שולח התראה לשולח דרך outbox,
         ומפרסם התראה לפאנל.
         """
+        # נעילת שורה בלי joinedload — PostgreSQL דוחה FOR UPDATE על LEFT JOIN
         result = await self.db.execute(
             select(Delivery)
-            .options(joinedload(Delivery.sender))
             .where(Delivery.id == delivery_id)
             .with_for_update()
         )
-        delivery = result.unique().scalar_one_or_none()
+        delivery = result.scalar_one_or_none()
         if not delivery:
             return None
 
@@ -323,6 +323,9 @@ class DeliveryService:
 
         delivery.status = DeliveryStatus.CANCELLED
         delivery.updated_at = datetime.utcnow()
+
+        # טעינת sender בנפרד (לא ב-joinedload עם for_update)
+        await self.db.refresh(delivery, attribute_names=["sender"])
 
         # הודעה לשולח דרך outbox
         await self.outbox_service.queue_auto_cancel_notification(delivery)
