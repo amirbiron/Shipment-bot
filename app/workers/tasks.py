@@ -322,7 +322,7 @@ async def _process_single_message(message: OutboxMessage) -> tuple:
                     # אם אין SendResult כושלים (למשל Telegram שמחזיר bool) → transient
                     failed_results = [
                         r for r in results
-                        if not isinstance(r, Exception)
+                        if not isinstance(r, BaseException)
                         and isinstance(r, SendResult)
                         and not r.success
                     ]
@@ -393,7 +393,7 @@ async def _process_single_message(message: OutboxMessage) -> tuple:
                     # סיווג שגיאה: permanent רק אם יש כשלונות SendResult וכולם permanent
                     failed_results = [
                         r for r in results
-                        if not isinstance(r, Exception)
+                        if not isinstance(r, BaseException)
                         and isinstance(r, SendResult)
                         and not r.success
                     ]
@@ -1539,9 +1539,6 @@ def auto_cancel_expired_deliveries() -> dict:
             warnings_sent = 0
             deliveries_cancelled = 0
 
-            # מזהים של משלוחים שקיבלו התראה בריצה הזו — לא נבטל אותם מיד
-            warned_ids: set[int] = set()
-
             # --- שלב 1: שליחת התראות לשולחים על משלוחים שעומדים לפוג ---
             try:
                 expiring = await delivery_service.get_expiring_deliveries(
@@ -1574,7 +1571,6 @@ def auto_cancel_expired_deliveries() -> dict:
                         delivery.expiry_warning_sent = datetime.utcnow()
                         await db.commit()
                         warnings_sent += 1
-                        warned_ids.add(delivery_id)
                         logger.info(
                             "התראת תפוגה נשלחה לשולח",
                             extra_data={"delivery_id": delivery_id},
@@ -1604,13 +1600,6 @@ def auto_cancel_expired_deliveries() -> dict:
                 expired_ids = [d.id for d in expired]
 
                 for delivery_id in expired_ids:
-                    # דילוג על משלוחים שקיבלו התראה בריצה הזו — למנוע התראה + ביטול מיידי
-                    if delivery_id in warned_ids:
-                        logger.info(
-                            "דילוג על ביטול — משלוח קיבל התראת תפוגה בריצה הזו",
-                            extra_data={"delivery_id": delivery_id},
-                        )
-                        continue
                     try:
                         result = await delivery_service.auto_cancel_delivery(
                             delivery_id
