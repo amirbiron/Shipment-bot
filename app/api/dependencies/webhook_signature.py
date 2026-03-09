@@ -177,6 +177,47 @@ async def verify_webhook_signature(
         pass
 
 
+async def require_wppconnect_signature(request: Request) -> None:
+    """Dependency לאימות חתימת WPPConnect — רץ לפני פרסור ה-body של FastAPI.
+
+    שימוש כ-Depends() כדי לוודא שבקשות לא מאומתות נדחות
+    לפני שה-JSON מפורסר ונחשף מבנה ה-schema (מונע 422 על חתימה שגויה).
+
+    Raises:
+        HTTPException: 403 אם חתימה לא תקינה, 429 אם IP חסום
+    """
+    client_ip = _get_client_ip(request)
+
+    if _is_ip_blocked(client_ip):
+        logger.warning(
+            "בקשת webhook מ-IP חסום",
+            extra_data={"client_ip": client_ip, "provider": "wppconnect"},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="IP חסום זמנית עקב ניסיונות אימות כושלים חוזרים",
+        )
+
+    secret = settings.WPPCONNECT_WEBHOOK_SECRET
+    if not secret:
+        # אימות לא מוגדר — מדלג
+        return
+
+    body = await request.body()
+    signature = request.headers.get("X-Webhook-Signature")
+
+    if not verify_wppconnect_signature(body, signature):
+        _record_failed_attempt(client_ip)
+        logger.warning(
+            "WPPConnect webhook: חתימה לא תקינה",
+            extra_data={"client_ip": client_ip},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="חתימת webhook לא תקינה",
+        )
+
+
 def get_blocked_ips() -> dict[str, float]:
     """שליפת רשימת IP חסומים — לצורך ניטור."""
     now = time.time()

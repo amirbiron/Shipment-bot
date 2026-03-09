@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select, update
 
+from app.api.dependencies.webhook_signature import require_wppconnect_signature
 from app.db.database import get_db
 from app.db.models.user import User, UserRole, ApprovalStatus
 from app.db.models.webhook_event import WebhookEvent
@@ -1050,14 +1051,12 @@ async def whatsapp_webhook(
     payload: WhatsAppWebhookPayload,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
+    _signature: None = Depends(require_wppconnect_signature),
 ):
     """
     Handle incoming WhatsApp messages.
     Routes to sender or courier handlers based on user role.
     """
-    # פיצ'ר 4: אימות חתימת WPPConnect + חסימת IP אוטומטית
-    from app.api.dependencies.webhook_signature import verify_webhook_signature
-    await verify_webhook_signature(request, provider="wppconnect")
 
     responses = []
 

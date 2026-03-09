@@ -318,7 +318,17 @@ async def _process_single_message(message: OutboxMessage) -> tuple:
                     await outbox_service.mark_as_sent(message.id)
                     return True, f"Partial broadcast: {success_count}/{total_count} succeeded"
                 else:
-                    await outbox_service.mark_as_failed(message.id, "All recipients failed")
+                    # בדיקה אם כל הכשלונות קבועים (permanent) — אם כן, לא כדאי לנסות שוב
+                    all_permanent = all(
+                        isinstance(r, SendResult) and not r.is_transient
+                        for r in results
+                        if not isinstance(r, Exception) and isinstance(r, SendResult) and not r.success
+                    )
+                    await outbox_service.mark_as_failed(
+                        message.id,
+                        "All recipients failed",
+                        is_transient=not all_permanent,
+                    )
                     return False, "Broadcast failed"
 
             # שלב 4: שידור לסדרני תחנה
@@ -374,8 +384,16 @@ async def _process_single_message(message: OutboxMessage) -> tuple:
                     await outbox_service.mark_as_sent(message.id)
                     return True, f"Sent to {success_count}/{len(results)} dispatchers"
                 else:
+                    # בדיקה אם כל הכשלונות קבועים — אם כן, retry לא יעזור
+                    all_permanent = all(
+                        isinstance(r, SendResult) and not r.is_transient
+                        for r in results
+                        if not isinstance(r, Exception) and isinstance(r, SendResult) and not r.success
+                    )
                     await outbox_service.mark_as_failed(
-                        message.id, "All dispatchers failed"
+                        message.id,
+                        "All dispatchers failed",
+                        is_transient=not all_permanent,
                     )
                     return False, "Dispatcher broadcast failed"
 
@@ -1515,11 +1533,6 @@ def auto_cancel_expired_deliveries() -> dict:
                 expiring = await delivery_service.get_expiring_deliveries(
                     warning_minutes=_settings.AUTO_CANCEL_WARNING_MINUTES
                 )
-                # חילוץ נתונים לערכי Python — מונע MissingGreenlet אחרי rollback
-                expiring_data = [
-                    (d.id, d.sender_id, d.pickup_address, d.dropoff_address)
-                    for d in expiring
-                ]
 
                 for delivery in expiring:
                     try:
