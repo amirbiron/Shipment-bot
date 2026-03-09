@@ -185,7 +185,7 @@ async def cloud_api_webhook(
     )
 
     client_ip = _get_client_ip(request)
-    if _is_ip_blocked(client_ip):
+    if await _is_ip_blocked(client_ip):
         logger.warning(
             "Cloud API webhook: בקשה מ-IP חסום",
             extra_data={"client_ip": client_ip},
@@ -207,7 +207,7 @@ async def cloud_api_webhook(
         raise HTTPException(status_code=403, detail="חתימה לא ניתנת לאימות")
 
     if not _verify_signature(body, signature):
-        _record_failed_attempt(client_ip)
+        await _record_failed_attempt(client_ip)
         logger.warning(
             "Cloud API webhook: חתימה לא תקינה",
             extra_data={"client_ip": client_ip},

@@ -2,7 +2,7 @@
 בדיקות לאימות חתימת webhook מטלגרם (X-Telegram-Bot-Api-Secret-Token).
 """
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 
 from app.core.config import settings
 from app.api.dependencies.webhook_auth import verify_telegram_webhook_token
@@ -14,6 +14,17 @@ def _make_mock_request(client_ip: str = "127.0.0.1") -> MagicMock:
     request.client.host = client_ip
     request.headers.get.return_value = None  # אין X-Forwarded-For
     return request
+
+
+# mock שמונע חסימת IP בבדיקות — _is_ip_blocked תמיד מחזיר False
+_no_ip_block = patch(
+    "app.api.dependencies.webhook_signature._is_ip_blocked",
+    new=AsyncMock(return_value=False),
+)
+_no_record_attempt = patch(
+    "app.api.dependencies.webhook_signature._record_failed_attempt",
+    new=AsyncMock(),
+)
 
 
 # ──────────────────────────────────────────────
@@ -36,7 +47,8 @@ class TestVerifyTelegramWebhookToken:
     async def test_rejects_missing_header(self) -> None:
         """אם הטוקן מוגדר אבל הכותרת חסרה — 403."""
         from fastapi import HTTPException
-        with patch.object(settings, "TELEGRAM_WEBHOOK_SECRET_TOKEN", "my-secret"):
+        with patch.object(settings, "TELEGRAM_WEBHOOK_SECRET_TOKEN", "my-secret"), \
+             _no_ip_block, _no_record_attempt:
             with pytest.raises(HTTPException) as exc_info:
                 await verify_telegram_webhook_token(_make_mock_request(), None)
             assert exc_info.value.status_code == 403
@@ -46,7 +58,8 @@ class TestVerifyTelegramWebhookToken:
     async def test_rejects_wrong_token(self) -> None:
         """אם הטוקן לא תואם — 403."""
         from fastapi import HTTPException
-        with patch.object(settings, "TELEGRAM_WEBHOOK_SECRET_TOKEN", "my-secret"):
+        with patch.object(settings, "TELEGRAM_WEBHOOK_SECRET_TOKEN", "my-secret"), \
+             _no_ip_block, _no_record_attempt:
             with pytest.raises(HTTPException) as exc_info:
                 await verify_telegram_webhook_token(_make_mock_request(), "wrong-token")
             assert exc_info.value.status_code == 403
@@ -55,7 +68,8 @@ class TestVerifyTelegramWebhookToken:
     @pytest.mark.unit
     async def test_accepts_valid_token(self) -> None:
         """אם הטוקן תואם — עובר ללא שגיאה."""
-        with patch.object(settings, "TELEGRAM_WEBHOOK_SECRET_TOKEN", "my-secret"):
+        with patch.object(settings, "TELEGRAM_WEBHOOK_SECRET_TOKEN", "my-secret"), \
+             _no_ip_block:
             await verify_telegram_webhook_token(_make_mock_request(), "my-secret")
 
 
@@ -81,14 +95,16 @@ class TestWebhookAuthIntegration:
     @pytest.mark.asyncio
     async def test_webhook_rejects_missing_token_when_configured(self, test_client) -> None:
         """כותרת חסרה + טוקן מוגדר → 403."""
-        with patch.object(settings, "TELEGRAM_WEBHOOK_SECRET_TOKEN", "test-secret-abc"):
+        with patch.object(settings, "TELEGRAM_WEBHOOK_SECRET_TOKEN", "test-secret-abc"), \
+             _no_ip_block, _no_record_attempt:
             resp = await test_client.post("/api/telegram/webhook", json=_VALID_UPDATE)
             assert resp.status_code == 403
 
     @pytest.mark.asyncio
     async def test_webhook_rejects_wrong_token(self, test_client) -> None:
         """כותרת שגויה + טוקן מוגדר → 403."""
-        with patch.object(settings, "TELEGRAM_WEBHOOK_SECRET_TOKEN", "test-secret-abc"):
+        with patch.object(settings, "TELEGRAM_WEBHOOK_SECRET_TOKEN", "test-secret-abc"), \
+             _no_ip_block, _no_record_attempt:
             resp = await test_client.post(
                 "/api/telegram/webhook",
                 json=_VALID_UPDATE,
@@ -99,7 +115,8 @@ class TestWebhookAuthIntegration:
     @pytest.mark.asyncio
     async def test_webhook_accepts_valid_token(self, test_client) -> None:
         """כותרת תואמת → 200."""
-        with patch.object(settings, "TELEGRAM_WEBHOOK_SECRET_TOKEN", "test-secret-abc"):
+        with patch.object(settings, "TELEGRAM_WEBHOOK_SECRET_TOKEN", "test-secret-abc"), \
+             _no_ip_block:
             resp = await test_client.post(
                 "/api/telegram/webhook",
                 json=_VALID_UPDATE,

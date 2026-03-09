@@ -50,7 +50,7 @@ async def verify_telegram_webhook_token(
     client_ip = _get_client_ip(request)
 
     # בדיקת חסימת IP — רק כשאימות מופעל
-    if _is_ip_blocked(client_ip):
+    if await _is_ip_blocked(client_ip):
         logger.warning(
             "Telegram webhook: בקשה מ-IP חסום",
             extra_data={"client_ip": client_ip},
@@ -61,7 +61,7 @@ async def verify_telegram_webhook_token(
         )
 
     if not x_telegram_bot_api_secret_token:
-        _record_failed_attempt(client_ip)
+        await _record_failed_attempt(client_ip)
         logger.warning(
             "בקשת webhook ללא כותרת X-Telegram-Bot-Api-Secret-Token",
             extra_data={"client_ip": client_ip},
@@ -73,7 +73,7 @@ async def verify_telegram_webhook_token(
 
     # השוואה בטוחה מפני timing attacks
     if not hmac.compare_digest(x_telegram_bot_api_secret_token, expected):
-        _record_failed_attempt(client_ip)
+        await _record_failed_attempt(client_ip)
         logger.warning(
             "בקשת webhook עם טוקן שגוי",
             extra_data={"client_ip": client_ip},
