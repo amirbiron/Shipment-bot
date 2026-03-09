@@ -47,6 +47,17 @@ class Settings(BaseSettings):
     WHATSAPP_GATEWAY_URL: str = "http://localhost:3000"
     # סוג ספק WhatsApp: "wppconnect" (ברירת מחדל) או "pywa" (Cloud API)
     WHATSAPP_PROVIDER: str = "wppconnect"
+    # אימות webhook מ-WPPConnect — HMAC-SHA256 על ה-payload
+    WPPCONNECT_WEBHOOK_SECRET: str = ""  # openssl rand -hex 32
+
+    # חסימת IP אוטומטית אחרי ניסיונות אימות כושלים
+    WEBHOOK_SIGNATURE_BLOCK_AFTER: int = 10  # מספר ניסיונות כושלים לחסימה
+    WEBHOOK_SIGNATURE_ATTEMPT_WINDOW_SECONDS: int = 600  # חלון ספירת ניסיונות — 10 דקות
+    WEBHOOK_SIGNATURE_BLOCK_DURATION_SECONDS: int = 3600  # משך חסימה — שעה
+    # כתובות IP של reverse proxies מהימנים — רק מהם נסמוך על X-Forwarded-For.
+    # מופרדות בפסיקים, למשל: "10.0.0.1,10.0.0.2"
+    # ריק = לא סומכים על X-Forwarded-For (משתמשים ב-client IP ישירות)
+    TRUSTED_PROXY_IPS: str = ""
 
     # WhatsApp Cloud API (pywa — Arm A)
     WHATSAPP_CLOUD_API_TOKEN: str = ""            # Meta access token
@@ -95,6 +106,11 @@ class Settings(BaseSettings):
     # ב-Render מוגדר אוטומטית דרך RENDER_EXTERNAL_URL.
     # דוגמה: https://my-app.onrender.com
     TELEGRAM_WEBHOOK_BASE_URL: str = ""
+
+    # ביטול אוטומטי של משלוחים שלא נתפסו
+    AUTO_CANCEL_UNCAPTURED_HOURS: int = 24  # שעות עד ביטול אוטומטי
+    AUTO_CANCEL_WARNING_MINUTES: int = 30  # דקות לפני ביטול — שליחת התראה לשולח
+    AUTO_CANCEL_CHECK_INTERVAL_SECONDS: int = 900  # כל 15 דקות
 
     # Credit settings
     DEFAULT_CREDIT_LIMIT: float = -500.0  # Minimum balance allowed (500₪ credit)

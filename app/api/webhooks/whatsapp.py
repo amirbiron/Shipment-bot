@@ -6,13 +6,14 @@ import asyncio
 import re
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, BackgroundTasks
+from fastapi import APIRouter, Depends, BackgroundTasks, Request
 from pydantic import BaseModel, model_validator
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select, update
 
+from app.api.dependencies.webhook_signature import require_wppconnect_signature
 from app.db.database import get_db
 from app.db.models.user import User, UserRole, ApprovalStatus
 from app.db.models.webhook_event import WebhookEvent
@@ -167,6 +168,28 @@ class WhatsAppWebhookPayload(BaseModel):
     """WhatsApp webhook payload"""
 
     messages: list[WhatsAppMessage] = []
+
+
+async def _get_verified_payload(
+    request: Request,
+    _signature: None = Depends(require_wppconnect_signature),
+) -> WhatsAppWebhookPayload:
+    """פרסור ה-payload רק אחרי אימות חתימה.
+
+    מבטיח שבקשות לא מאומתות נדחות עם 403 לפני
+    שפרטי ה-schema נחשפים דרך שגיאת ולידציה 422.
+
+    Raises:
+        RequestValidationError: אם ה-JSON לא תואם לסכמה (422)
+    """
+    from fastapi.exceptions import RequestValidationError
+    from pydantic import ValidationError
+
+    body = await request.body()
+    try:
+        return WhatsAppWebhookPayload.model_validate_json(body)
+    except ValidationError as exc:
+        raise RequestValidationError(exc.errors()) from exc
 
 
 def _extract_real_phone(value: str | None) -> str | None:
@@ -1039,16 +1062,23 @@ async def send_welcome_message(phone_number: str):
         "נקודת כניסה לקבלת הודעות מ-WhatsApp Gateway. "
         "מבצעת ניתוב לזרימת שולח/שליח לפי role ומנהלת state machine."
     ),
+    responses={
+        200: {"description": "הודעה התקבלה ועובדה"},
+        403: {"description": "חתימה לא תקינה"},
+        429: {"description": "IP חסום עקב ניסיונות אימות כושלים"},
+    },
 )
 async def whatsapp_webhook(
-    payload: WhatsAppWebhookPayload,
+    request: Request,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
+    payload: WhatsAppWebhookPayload = Depends(_get_verified_payload),
 ):
     """
     Handle incoming WhatsApp messages.
     Routes to sender or courier handlers based on user role.
     """
+
     responses = []
 
     for message in payload.messages:

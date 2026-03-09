@@ -125,7 +125,7 @@ class TestSendWhatsAppMessage:
         result = await _send_whatsapp_message(
             "+972501234567", {"message_text": "שלום"}
         )
-        assert result is True
+        assert bool(result) is True
 
     @pytest.mark.asyncio
     async def test_send_whatsapp_failure_returns_false(self) -> None:
@@ -146,7 +146,7 @@ class TestSendWhatsAppMessage:
             result = await _send_whatsapp_message(
                 "+972501234567", {"message_text": "שלום"}
             )
-            assert result is False
+            assert bool(result) is False
 
     @pytest.mark.asyncio
     async def test_send_whatsapp_converts_html_to_whatsapp_format(
@@ -180,7 +180,7 @@ class TestSendWhatsAppMessage:
             result = await _send_whatsapp_message(
                 "+972501234567", {"message_text": "test"}
             )
-            assert result is False
+            assert bool(result) is False
 
 
 # ============================================================================

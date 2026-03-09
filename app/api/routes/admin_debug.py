@@ -299,6 +299,227 @@ async def retry_outbox_message(
     )
 
 
+# ─── 1b. IP חסומים (Webhook Signature) ────────────────────────────────────
+
+
+class BlockedIpEntry(BaseModel):
+    """IP חסום"""
+    ip: str
+    remaining_seconds: float
+
+
+class FailedAttemptEntry(BaseModel):
+    """ניסיונות כושלים לכל IP"""
+    ip: str
+    failed_count: int
+
+
+class WebhookSecurityResponse(BaseModel):
+    """מצב אבטחת webhook — IP חסומים וניסיונות כושלים"""
+    blocked_ips: list[BlockedIpEntry]
+    failed_attempts: list[FailedAttemptEntry]
+
+
+@router.get(
+    "/webhook-security/blocked-ips",
+    response_model=WebhookSecurityResponse,
+    summary="מצב אבטחת webhook",
+    description="מחזיר IP חסומים וניסיונות אימות כושלים לכל IP.",
+    responses={
+        200: {"description": "מצב אבטחת webhook"},
+        401: {"description": "חסר מפתח API"},
+        403: {"description": "מפתח API שגוי"},
+    },
+    tags=["Admin Debug"],
+)
+async def get_blocked_ips_list(
+    _: None = Depends(require_admin_api_key),
+) -> WebhookSecurityResponse:
+    """מצב אבטחת webhook — IP חסומים וניסיונות כושלים"""
+    from app.api.dependencies.webhook_signature import (
+        get_blocked_ips,
+        get_failed_attempt_counts,
+    )
+
+    blocked = await get_blocked_ips()
+    failed = await get_failed_attempt_counts()
+    return WebhookSecurityResponse(
+        blocked_ips=[
+            BlockedIpEntry(ip=ip, remaining_seconds=remaining)
+            for ip, remaining in blocked.items()
+        ],
+        failed_attempts=[
+            FailedAttemptEntry(ip=ip, failed_count=count)
+            for ip, count in failed.items()
+        ],
+    )
+
+
+# ─── 2b. Dead Letter Queue ────────────────────────────────────────────────
+
+
+class DeadLetterMessageResponse(BaseModel):
+    """הודעה מ-dead letter queue"""
+    id: int
+    original_message_id: int
+    platform: str
+    recipient_id: str
+    message_type: str
+    retry_count: int
+    last_error: str | None
+    failure_reason: str | None
+    status: str
+    created_at: datetime | None
+    original_created_at: datetime | None
+
+    class Config:
+        from_attributes = True
+
+
+class DeadLetterSummaryResponse(BaseModel):
+    """סיכום dead letter queue"""
+    failed_count: int
+    retried_count: int
+    discarded_count: int
+
+
+class DeadLetterRetryResponse(BaseModel):
+    """תשובה ל-retry של הודעה מ-dead letter queue"""
+    dead_letter_id: int
+    new_message_id: int
+    status: str
+
+
+@router.get(
+    "/dead-letter/summary",
+    response_model=DeadLetterSummaryResponse,
+    summary="סיכום dead letter queue",
+    description="מחזיר ספירה לפי סטטוס של הודעות ב-dead letter queue.",
+    responses={
+        200: {"description": "סיכום כמותי"},
+        401: {"description": "חסר מפתח API"},
+        403: {"description": "מפתח API שגוי"},
+    },
+    tags=["Admin Debug"],
+)
+async def get_dead_letter_summary(
+    _: None = Depends(require_admin_api_key),
+    db: AsyncSession = Depends(get_db),
+) -> DeadLetterSummaryResponse:
+    """ספירת הודעות dead letter לפי סטטוס"""
+    from app.db.models.dead_letter_message import DeadLetterMessage, DeadLetterStatus
+
+    result = await db.execute(
+        select(DeadLetterMessage.status, func.count(DeadLetterMessage.id))
+        .group_by(DeadLetterMessage.status)
+    )
+    counts: dict[str, int] = {}
+    for row_status, count in result.all():
+        counts[row_status.value if hasattr(row_status, "value") else str(row_status)] = count
+
+    return DeadLetterSummaryResponse(
+        failed_count=counts.get("failed", 0),
+        retried_count=counts.get("retried", 0),
+        discarded_count=counts.get("discarded", 0),
+    )
+
+
+@router.get(
+    "/dead-letter/messages",
+    response_model=list[DeadLetterMessageResponse],
+    summary="הודעות ב-dead letter queue",
+    description="שליפת הודעות שנכשלו סופית וממתינות לטיפול ידני.",
+    responses={
+        200: {"description": "רשימת הודעות כושלות"},
+        401: {"description": "חסר מפתח API"},
+        403: {"description": "מפתח API שגוי"},
+    },
+    tags=["Admin Debug"],
+)
+async def get_dead_letter_messages(
+    _: None = Depends(require_admin_api_key),
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(default=50, ge=1, le=200, description="מספר הודעות מקסימלי"),
+    offset: int = Query(default=0, ge=0, description="מיקום התחלתי"),
+) -> list[DeadLetterMessageResponse]:
+    """שליפת הודעות מ-dead letter queue"""
+    from app.db.models.dead_letter_message import DeadLetterMessage, DeadLetterStatus
+
+    result = await db.execute(
+        select(DeadLetterMessage)
+        .where(DeadLetterMessage.status == DeadLetterStatus.FAILED)
+        .order_by(DeadLetterMessage.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    messages = result.scalars().all()
+
+    return [
+        DeadLetterMessageResponse(
+            id=msg.id,
+            original_message_id=msg.original_message_id,
+            platform=msg.platform,
+            recipient_id=msg.recipient_id,
+            message_type=msg.message_type,
+            retry_count=msg.retry_count,
+            last_error=msg.last_error,
+            failure_reason=msg.failure_reason,
+            status=msg.status.value if hasattr(msg.status, "value") else str(msg.status),
+            created_at=msg.created_at,
+            original_created_at=msg.original_created_at,
+        )
+        for msg in messages
+    ]
+
+
+@router.post(
+    "/dead-letter/messages/{dead_letter_id}/retry",
+    response_model=DeadLetterRetryResponse,
+    summary="retry ידני להודעה מ-dead letter queue",
+    description=(
+        "יוצר הודעת outbox חדשה מהודעה ב-dead letter queue "
+        "ומסמן את ההודעה המקורית כ-retried."
+    ),
+    responses={
+        200: {"description": "ההודעה נשלחה מחדש"},
+        401: {"description": "חסר מפתח API"},
+        403: {"description": "מפתח API שגוי"},
+        404: {"description": "הודעה לא נמצאה"},
+    },
+    tags=["Admin Debug"],
+)
+async def retry_dead_letter_message(
+    dead_letter_id: int,
+    _: None = Depends(require_admin_api_key),
+    db: AsyncSession = Depends(get_db),
+) -> DeadLetterRetryResponse:
+    """retry ידני — יוצר הודעת outbox חדשה מ-dead letter queue"""
+    from app.domain.services.outbox_service import OutboxService
+
+    outbox_service = OutboxService(db)
+    new_message = await outbox_service.retry_dead_letter(dead_letter_id)
+
+    if not new_message:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"הודעה {dead_letter_id} לא נמצאה או לא בסטטוס failed",
+        )
+
+    logger.info(
+        "retry ידני להודעה מ-dead letter queue",
+        extra_data={
+            "dead_letter_id": dead_letter_id,
+            "new_message_id": new_message.id,
+        },
+    )
+
+    return DeadLetterRetryResponse(
+        dead_letter_id=dead_letter_id,
+        new_message_id=new_message.id,
+        status="retried",
+    )
+
+
 # ─── 3. State Machine של משתמש ──────────────────────────────────────────────
 
 @router.get(

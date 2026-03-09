@@ -589,6 +589,7 @@ query = select(Delivery).options(
 - **חובה indexes** על שדות בשימוש תכוף ב-WHERE, JOIN, ORDER BY
 - **אסור אינדקס כפול על עמודת UNIQUE** — PostgreSQL יוצר אינדקס ייחודי אוטומטית לאכיפת אילוץ `UNIQUE`. אין לייצר `CREATE INDEX` ידני על אותה עמודה
 - **להעדיף batch operations** במקום לולאות עם queries בודדים
+- **אסור `joinedload` עם `with_for_update()`** — PostgreSQL דוחה `FOR UPDATE` על `LEFT OUTER JOIN` (ש-joinedload מייצר). לפצל לשתי שאילתות: קודם נעילה בלי joinedload, ואז `refresh()` או שאילתה נפרדת לטעינת הקשרים
 
 ### ארגון קוד
 - כל endpoint/handler חייב להיות **קצר וקריא**
@@ -624,6 +625,23 @@ class TestPhoneValidation:
     @pytest.mark.unit
     def test_normalize_phone(self):
         assert PhoneNumberValidator.normalize("050-123-4567") == "+972501234567"
+```
+
+### mock ברמת מודול — דליפת state
+**אסור `patch(..., new=AsyncMock())` ברמת מודול** — אותו אובייקט mock משותף בין כל הטסטים,
+וספירת קריאות (`call_count`, `call_args`) מצטברת. להשתמש בפונקציה שמחזירה `patch` חדש:
+
+```python
+# לא נכון — אותו AsyncMock לכל הטסטים
+_my_mock = patch("module.func", new=AsyncMock())
+
+# נכון — פונקציה שיוצרת patch + mock טריים
+def _my_mock():
+    return patch("module.func", new=AsyncMock())
+
+# שימוש
+with _my_mock():
+    ...
 ```
 
 ---
@@ -855,6 +873,15 @@ async def _handle_initial(self, user, message, context):
 
 ---
 
+## הרצת בדיקות לפני push
+
+- **CI רץ אוטומטית אחרי push** — אין צורך להריץ את כל הטסטים לפני כל push.
+- **שינויים בסיכון נמוך** (תיקוני טקסט, שינויי UI, עדכון CLAUDE.md, תיקוני לוגים) — אפשר לדחוף בלי להריץ טסטים מקומית.
+- **שינויים בסיכון בינוני** (שינוי handler בודד, תיקון באג מקומי) — להריץ רק את הטסטים הרלוונטיים: `pytest tests/test_<module>.py`.
+- **שינויים בסיכון גבוה** (שינוי מודלים, מיגרציות DB, שינוי ב-state machine/transitions, שינוי בשירותים משותפים כמו validation/outbox) — להריץ את כל הטסטים: `pytest`.
+
+---
+
 ## צ'קליסט לפני PR
 
 > **חובה למלא את תבנית ה-PR** (`.github/PULL_REQUEST_TEMPLATE.md`) — GitHub טוען אותה אוטומטית בפתיחת PR.
@@ -897,3 +924,6 @@ async def _handle_initial(self, user, message, context):
 23. **אסור מעבר state שלא מוגדר ב-TRANSITIONS** - כל state חדש שמוחזר מ-handler חייב להופיע ברשימת המעברים המותרים
 24. **אסור `re.search(r"(\d+)")` לחילוץ בחירה מכפתור** - לעגן את ה-regex לפורמט הכפתור המדויק כדי למנוע התאמת מספרים אקראיים בטקסט חופשי
 25. **אסור הודעת עזרה שמציעה פעולה לא נתמכת ב-state הנוכחי** - לוודא שכל חלופה מוצעת באמת מטופלת ב-handler
+26. **אסור `joinedload` עם `with_for_update()`** - PostgreSQL דוחה FOR UPDATE על LEFT OUTER JOIN. לפצל לשתי שאילתות נפרדות
+27. **אסור `patch(..., new=AsyncMock())` ברמת מודול בטסטים** - אותו mock משותף בין טסטים וגורם לדליפת state. להשתמש בפונקציה שמחזירה patch חדש
+28. **אסור `isinstance(r, Exception)` לסינון תוצאות `asyncio.gather(return_exceptions=True)`** - `CancelledError` הוא `BaseException` ולא `Exception`; להשתמש ב-`isinstance(r, BaseException)`

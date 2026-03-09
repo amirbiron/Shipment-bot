@@ -13,10 +13,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import or_, select
 
 from app.core.config import settings
+from app.core.logging import get_logger
 from app.db.models.outbox_message import OutboxMessage, MessagePlatform, MessageStatus
+from app.db.models.dead_letter_message import DeadLetterMessage, DeadLetterStatus
 from app.db.models.delivery import Delivery
 from app.db.models.station import Station
 from app.db.models.user import User
+
+logger = get_logger(__name__)
 
 
 def _calculate_backoff_seconds(
@@ -305,6 +309,100 @@ class OutboxService:
         messages.append(msg)
         return messages
 
+    async def queue_auto_cancel_notification(
+        self, delivery: Delivery
+    ) -> List[OutboxMessage]:
+        """שליחת התראה לשולח על ביטול אוטומטי של משלוח שלא נתפס.
+
+        מצפה ש-delivery.sender כבר נטען (joinedload או refresh).
+        """
+        messages = []
+
+        sender = delivery.sender
+        if not sender:
+            logger.warning(
+                "לא נמצא שולח למשלוח — לא ניתן לשלוח התראת ביטול אוטומטי",
+                extra_data={"delivery_id": delivery.id, "sender_id": delivery.sender_id},
+            )
+            return messages
+
+        # קביעת פלטפורמה ונמען
+        if sender.telegram_chat_id:
+            platform = MessagePlatform.TELEGRAM
+            recipient = sender.telegram_chat_id
+        else:
+            platform = MessagePlatform.WHATSAPP
+            recipient = sender.phone_number
+
+        if not recipient:
+            return messages
+
+        content = {
+            "delivery_id": delivery.id,
+            "message_text": (
+                f"⏰ המשלוח #{delivery.id} בוטל אוטומטית\n\n"
+                f"המשלוח לא נתפס על ידי שליח בזמן שהוקצב ולכן בוטל.\n\n"
+                f"📍 איסוף: {escape(delivery.pickup_address)}\n"
+                f"🎯 יעד: {escape(delivery.dropoff_address)}\n\n"
+                f"ניתן ליצור משלוח חדש מהתפריט הראשי."
+            ),
+        }
+
+        msg = await self.queue_message(
+            platform=platform,
+            recipient_id=recipient,
+            message_type="auto_cancel_notification",
+            message_content=content,
+        )
+        messages.append(msg)
+        return messages
+
+    async def queue_expiry_warning(
+        self, delivery: Delivery, minutes_remaining: int
+    ) -> List[OutboxMessage]:
+        """שליחת התראה לשולח שהמשלוח עומד לפוג בעוד X דקות.
+
+        מצפה ש-delivery.sender כבר נטען (joinedload או refresh).
+        """
+        messages = []
+
+        sender = delivery.sender
+        if not sender:
+            logger.warning(
+                "לא נמצא שולח למשלוח — לא ניתן לשלוח התראת תפוגה",
+                extra_data={"delivery_id": delivery.id, "sender_id": delivery.sender_id},
+            )
+            return messages
+
+        if sender.telegram_chat_id:
+            platform = MessagePlatform.TELEGRAM
+            recipient = sender.telegram_chat_id
+        else:
+            platform = MessagePlatform.WHATSAPP
+            recipient = sender.phone_number
+
+        if not recipient:
+            return messages
+
+        content = {
+            "delivery_id": delivery.id,
+            "message_text": (
+                f"⚠️ המשלוח #{delivery.id} עומד להתבטל בעוד {minutes_remaining} דקות!\n\n"
+                f"📍 איסוף: {escape(delivery.pickup_address)}\n"
+                f"🎯 יעד: {escape(delivery.dropoff_address)}\n\n"
+                f"אם אף שליח לא יתפוס את המשלוח — הוא יבוטל אוטומטית."
+            ),
+        }
+
+        msg = await self.queue_message(
+            platform=platform,
+            recipient_id=recipient,
+            message_type="expiry_warning",
+            message_content=content,
+        )
+        messages.append(msg)
+        return messages
+
     async def get_pending_messages(self, limit: int = 100) -> List[OutboxMessage]:
         """שליפת הודעות ממתינות לעיבוד.
 
@@ -348,18 +446,37 @@ class OutboxService:
             message.processed_at = datetime.utcnow()
             await self.db.commit()
 
-    async def mark_as_failed(self, message_id: int, error: str) -> None:
-        """Mark message as failed with error"""
+    async def mark_as_failed(
+        self, message_id: int, error: str, *, is_transient: bool = True
+    ) -> None:
+        """סימון הודעה ככושלת.
+
+        Args:
+            message_id: מזהה ההודעה
+            error: תיאור השגיאה
+            is_transient: האם השגיאה זמנית (retry) או קבועה (dead letter מיידי)
+        """
         result = await self.db.execute(
             select(OutboxMessage).where(OutboxMessage.id == message_id)
         )
         message = result.scalar_one_or_none()
         if message:
-            message.retry_count += 1
             message.last_error = error
 
-            if message.retry_count >= message.max_retries:
+            # שגיאה קבועה (4xx) → dead letter מיידי, בלי retry נוסף
+            if not is_transient:
+                permanently_failed = True
+            else:
+                message.retry_count += 1
+                permanently_failed = message.retry_count >= message.max_retries
+
+            if permanently_failed:
                 message.status = MessageStatus.FAILED
+                # העברה ל-dead letter queue
+                await self._move_to_dead_letter(
+                    message,
+                    failure_reason="permanent" if not is_transient else "max_retries_exceeded",
+                )
             else:
                 message.status = MessageStatus.PENDING
                 # Exponential backoff for retry
@@ -373,3 +490,74 @@ class OutboxService:
                 )
 
             await self.db.commit()
+
+    async def _move_to_dead_letter(
+        self, message: OutboxMessage, failure_reason: str
+    ) -> None:
+        """העברת הודעה שנכשלה סופית ל-dead letter queue."""
+        dead_letter = DeadLetterMessage(
+            original_message_id=message.id,
+            platform=message.platform.value if isinstance(message.platform, MessagePlatform) else message.platform,
+            recipient_id=message.recipient_id,
+            message_type=message.message_type,
+            message_content=message.message_content,
+            retry_count=message.retry_count,
+            last_error=message.last_error,
+            failure_reason=failure_reason,
+            status=DeadLetterStatus.FAILED,
+            original_created_at=message.created_at,
+        )
+        self.db.add(dead_letter)
+        logger.warning(
+            "הודעה הועברה ל-dead letter queue",
+            extra_data={
+                "message_id": message.id,
+                "platform": str(message.platform),
+                "message_type": message.message_type,
+                "retry_count": message.retry_count,
+                "failure_reason": failure_reason,
+            },
+        )
+
+    async def retry_dead_letter(self, dead_letter_id: int) -> OutboxMessage | None:
+        """שליחה חוזרת של הודעה מ-dead letter queue.
+
+        יוצרת הודעת outbox חדשה ומסמנת את ה-dead letter כ-retried.
+        """
+        result = await self.db.execute(
+            select(DeadLetterMessage).where(
+                DeadLetterMessage.id == dead_letter_id,
+                DeadLetterMessage.status == DeadLetterStatus.FAILED,
+            )
+        )
+        dead_letter = result.scalar_one_or_none()
+        if not dead_letter:
+            return None
+
+        # יצירת הודעת outbox חדשה
+        new_message = OutboxMessage(
+            platform=MessagePlatform(dead_letter.platform),
+            recipient_id=dead_letter.recipient_id,
+            message_type=dead_letter.message_type,
+            message_content=dead_letter.message_content,
+            status=MessageStatus.PENDING,
+            retry_count=0,
+        )
+        self.db.add(new_message)
+
+        # סימון כ-retried
+        dead_letter.status = DeadLetterStatus.RETRIED
+        dead_letter.retried_at = datetime.utcnow()
+
+        await self.db.commit()
+        await self.db.refresh(new_message)
+
+        logger.info(
+            "הודעה מ-dead letter queue נשלחה מחדש",
+            extra_data={
+                "dead_letter_id": dead_letter_id,
+                "new_message_id": new_message.id,
+            },
+        )
+        return new_message
+

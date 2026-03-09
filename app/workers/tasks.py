@@ -27,6 +27,7 @@ from app.core.circuit_breaker import get_telegram_circuit_breaker
 from app.core.exceptions import TelegramError
 from app.core.validation import PhoneNumberValidator
 from sqlalchemy import select
+from sqlalchemy.orm import joinedload
 
 logger = get_logger(__name__)
 
@@ -74,11 +75,93 @@ def run_async(coro):
         return loop.run_until_complete(coro)
 
 
-async def _send_whatsapp_message(phone: str, content: dict) -> bool:
+class SendResult:
+    """תוצאת שליחת הודעה — כולל סיווג שגיאה (transient/permanent).
+
+    תומך ב-bool() כך ש-``if result`` ו-``bool(result)`` עובדים.
+    """
+
+    def __init__(self, success: bool, is_transient: bool = True, error: str = "") -> None:
+        self.success = success
+        self.is_transient = is_transient
+        self.error = error
+
+    def __bool__(self) -> bool:
+        return self.success
+
+
+def _classify_broadcast_failure(
+    results: list[object],
+    message_id: int,
+    broadcast_label: str,
+) -> bool:
+    """סיווג כשלון ברודקאסט — האם השגיאה transient (ניתנת ל-retry)?
+
+    מחזיר True אם הכשלון זמני (כדאי לנסות שוב), False אם קבוע (DLQ).
+    """
+    exception_results = [r for r in results if isinstance(r, BaseException)]
+    failed_send_results = [
+        r for r in results
+        if not isinstance(r, BaseException)
+        and isinstance(r, SendResult)
+        and not r.success
+    ]
+    if failed_send_results:
+        return any(r.is_transient for r in failed_send_results)
+    if exception_results:
+        logger.warning(
+            f"כל תוצאות {broadcast_label} הן exceptions",
+            extra_data={
+                "message_id": message_id,
+                "exception_count": len(exception_results),
+                "first_error": str(exception_results[0]),
+            },
+        )
+        return True
+    # אין SendResult כושלים ואין exceptions (למשל bool=False) → transient
+    return True
+
+
+def _is_transient_error(exc: Exception) -> bool:
+    """בדיקה האם שגיאת HTTP היא זמנית (transient) על בסיס קוד סטטוס.
+
+    שגיאות 4xx (חוץ מ-429) נחשבות קבועות — retry לא יעזור.
+    שגיאות 5xx ו-429 נחשבות זמניות — ניתן לנסות שוב.
+    """
+    from app.core.config import settings as _cfg
+
+    transient_codes = set()
+    for code_str in _cfg.WHATSAPP_TRANSIENT_STATUS_CODES.split(","):
+        code_str = code_str.strip()
+        if code_str.isdigit():
+            transient_codes.add(int(code_str))
+
+    # חילוץ קוד HTTP מה-exception אם קיים
+    status_code = getattr(exc, "status_code", None)
+    if status_code is None:
+        # ניסיון לחלץ מ-response attribute
+        response = getattr(exc, "response", None)
+        if response is not None:
+            status_code = getattr(response, "status_code", None)
+
+    if status_code is not None:
+        if status_code in transient_codes:
+            return True
+        # 4xx שלא ברשימה → שגיאה קבועה
+        if 400 <= status_code < 500:
+            return False
+
+    # ברירת מחדל: שגיאות רשת ולא מסווגות → transient
+    return True
+
+
+async def _send_whatsapp_message(phone: str, content: dict) -> SendResult:
     """
     שליחת הודעה דרך ספק WhatsApp הפעיל — ניתוב אוטומטי לפי סוג היעד.
     קבוצה (@g.us) → WPPConnect, פרטי → Cloud API (במצב hybrid) / WPPConnect.
     ממיר תגי HTML לפורמט הספק לפני שליחה.
+
+    מחזירה SendResult עם סיווג שגיאה (transient/permanent).
     """
     message_text = content.get("message_text", "")
     if phone.endswith("@g.us"):
@@ -88,14 +171,19 @@ async def _send_whatsapp_message(phone: str, content: dict) -> bool:
     formatted_text = provider.format_text(message_text)
     try:
         await provider.send_text(to=phone, text=formatted_text)
-        return True
+        return SendResult(success=True)
     except Exception as exc:
+        is_transient = _is_transient_error(exc)
         logger.error(
             "WhatsApp send error",
-            extra_data={"phone": PhoneNumberValidator.mask(phone), "error": str(exc)},
+            extra_data={
+                "phone": PhoneNumberValidator.mask(phone),
+                "error": str(exc),
+                "is_transient": is_transient,
+            },
             exc_info=True,
         )
-        return False
+        return SendResult(success=False, is_transient=is_transient, error=str(exc))
 
 
 async def _send_telegram_message(chat_id: str, content: dict) -> bool:
@@ -249,7 +337,10 @@ async def _process_single_message(message: OutboxMessage) -> tuple:
                     return False, f"No valid recipients for {message.platform.value}"
 
                 results = await asyncio.gather(*tasks, return_exceptions=True)
-                success_count = sum(1 for r in results if r is True)
+                success_count = sum(
+                    1 for r in results
+                    if not isinstance(r, BaseException) and bool(r)
+                )
                 total_count = len(results)
 
                 if success_count == total_count:
@@ -259,7 +350,14 @@ async def _process_single_message(message: OutboxMessage) -> tuple:
                     await outbox_service.mark_as_sent(message.id)
                     return True, f"Partial broadcast: {success_count}/{total_count} succeeded"
                 else:
-                    await outbox_service.mark_as_failed(message.id, "All recipients failed")
+                    is_transient = _classify_broadcast_failure(
+                        results, message.id, "הברודקאסט"
+                    )
+                    await outbox_service.mark_as_failed(
+                        message.id,
+                        "All recipients failed",
+                        is_transient=is_transient,
+                    )
                     return False, "Broadcast failed"
 
             # שלב 4: שידור לסדרני תחנה
@@ -306,27 +404,40 @@ async def _process_single_message(message: OutboxMessage) -> tuple:
                     return False, "No valid dispatcher recipients"
 
                 results = await asyncio.gather(*tasks, return_exceptions=True)
-                success_count = sum(1 for r in results if r is True)
+                success_count = sum(
+                    1 for r in results
+                    if not isinstance(r, BaseException) and bool(r)
+                )
 
                 if success_count > 0:
                     await outbox_service.mark_as_sent(message.id)
                     return True, f"Sent to {success_count}/{len(results)} dispatchers"
                 else:
+                    is_transient = _classify_broadcast_failure(
+                        results, message.id, "ברודקאסט הסדרנים"
+                    )
                     await outbox_service.mark_as_failed(
-                        message.id, "All dispatchers failed"
+                        message.id,
+                        "All dispatchers failed",
+                        is_transient=is_transient,
                     )
                     return False, "Dispatcher broadcast failed"
 
             # Handle direct messages
             else:
                 if message.platform == MessagePlatform.WHATSAPP:
-                    success = await _send_whatsapp_message(
+                    result = await _send_whatsapp_message(
                         message.recipient_id, content
                     )
+                    success = result.success
+                    is_transient = result.is_transient
+                    error_msg = result.error
                 else:
                     success = await _send_telegram_message(
                         message.recipient_id, content
                     )
+                    is_transient = True
+                    error_msg = "Send failed"
 
                 if success:
                     await outbox_service.mark_as_sent(message.id)
@@ -343,16 +454,19 @@ async def _process_single_message(message: OutboxMessage) -> tuple:
                     )
                     return True, "Message sent successfully"
                 else:
-                    await outbox_service.mark_as_failed(message.id, "Send failed")
+                    await outbox_service.mark_as_failed(
+                        message.id, error_msg, is_transient=is_transient
+                    )
                     logger.warning(
                         "שליחת הודעה ישירה נכשלה",
                         extra_data={
                             "message_id": message.id,
                             "message_type": message.message_type,
                             "platform": message.platform.value,
+                            "is_transient": is_transient,
                         },
                     )
-                    return False, "Send failed"
+                    return False, error_msg
 
         except Exception as e:
             await outbox_service.mark_as_failed(message.id, str(e))
@@ -1410,3 +1524,135 @@ def periodic_health_check() -> dict:
         return {"status": overall_status, "alert_sent": alert_sent}
 
     return run_async(_run_health_check())
+
+
+@celery_app.task(name="app.workers.tasks.auto_cancel_expired_deliveries")
+def auto_cancel_expired_deliveries() -> dict:
+    """
+    פיצ'ר 2: ביטול אוטומטי של משלוחים שלא נתפסו.
+
+    רצה כל 15 דקות. בכל ריצה:
+    1. שולח התראה לשולחים על משלוחים שעומדים לפוג בעוד 30 דקות
+    2. מבטל משלוחים שעבר זמן התפוגה שלהם (expires_at)
+    חל על משלוחים בסטטוס OPEN ו-PENDING_APPROVAL.
+    """
+    from app.db.models.delivery import Delivery, DeliveryStatus
+    from app.domain.services.delivery_service import DeliveryService
+    from app.domain.services.outbox_service import OutboxService
+    from app.core.config import settings as _settings
+
+    async def _process() -> dict:
+        async with get_task_session() as db:
+            delivery_service = DeliveryService(db)
+            outbox_service = OutboxService(db)
+            warnings_sent = 0
+            deliveries_cancelled = 0
+
+            # --- שלב 1: שליחת התראות לשולחים על משלוחים שעומדים לפוג ---
+            try:
+                expiring = await delivery_service.get_expiring_deliveries(
+                    warning_minutes=_settings.AUTO_CANCEL_WARNING_MINUTES
+                )
+                # חילוץ מזהים לערכי Python — מונע MissingGreenlet אחרי commit
+                expiring_ids = [d.id for d in expiring]
+
+                for delivery_id in expiring_ids:
+                    try:
+                        # שליפה מחדש בכל איטרציה — מונע גישה ל-attributes שפגו
+                        # joinedload(sender) נדרש כי queue_expiry_warning ניגש ל-delivery.sender
+                        delivery_result = await db.execute(
+                            select(Delivery)
+                            .options(joinedload(Delivery.sender))
+                            .where(Delivery.id == delivery_id)
+                        )
+                        delivery = delivery_result.unique().scalar_one_or_none()
+                        if not delivery:
+                            continue
+
+                        # בדיקה חוזרת — המשלוח עלול להשתנות בין השליפה הראשונית לכאן
+                        # השאילתה המקורית שולפת OPEN ו-PENDING_APPROVAL
+                        if delivery.status not in (DeliveryStatus.OPEN, DeliveryStatus.PENDING_APPROVAL) or delivery.expiry_warning_sent is not None:
+                            continue
+
+                        # חישוב הזמן בפועל עד תפוגה — לא ערך קונפיגורציה קבוע
+                        actual_remaining = max(
+                            1,
+                            int((delivery.expires_at - datetime.utcnow()).total_seconds() / 60),
+                        )
+                        await outbox_service.queue_expiry_warning(
+                            delivery,
+                            minutes_remaining=actual_remaining,
+                        )
+                        delivery.expiry_warning_sent = datetime.utcnow()
+                        await db.commit()
+                        warnings_sent += 1
+                        logger.info(
+                            "התראת תפוגה נשלחה לשולח",
+                            extra_data={"delivery_id": delivery_id},
+                        )
+                    except Exception as e:
+                        logger.error(
+                            "כשלון בשליחת התראת תפוגה",
+                            extra_data={
+                                "delivery_id": delivery_id,
+                                "error": str(e),
+                            },
+                            exc_info=True,
+                        )
+                        await db.rollback()
+            except Exception as e:
+                logger.error(
+                    "כשלון בשליפת משלוחים שעומדים לפוג",
+                    extra_data={"error": str(e)},
+                    exc_info=True,
+                )
+                await db.rollback()
+
+            # --- שלב 2: ביטול משלוחים שפג תוקפם ---
+            try:
+                expired = await delivery_service.get_expired_deliveries()
+                # חילוץ מזהים לערכי Python — מונע MissingGreenlet
+                expired_ids = [d.id for d in expired]
+
+                for delivery_id in expired_ids:
+                    try:
+                        result = await delivery_service.auto_cancel_delivery(
+                            delivery_id
+                        )
+                        if result:
+                            deliveries_cancelled += 1
+                            logger.info(
+                                "משלוח בוטל אוטומטית — לא נתפס בזמן",
+                                extra_data={"delivery_id": delivery_id},
+                            )
+                    except Exception as e:
+                        logger.error(
+                            "כשלון בביטול אוטומטי של משלוח",
+                            extra_data={
+                                "delivery_id": delivery_id,
+                                "error": str(e),
+                            },
+                            exc_info=True,
+                        )
+                        await db.rollback()
+            except Exception as e:
+                logger.error(
+                    "כשלון בשליפת משלוחים שפג תוקפם",
+                    extra_data={"error": str(e)},
+                    exc_info=True,
+                )
+                await db.rollback()
+
+            logger.info(
+                "סיום בדיקת ביטול אוטומטי של משלוחים",
+                extra_data={
+                    "warnings_sent": warnings_sent,
+                    "deliveries_cancelled": deliveries_cancelled,
+                },
+            )
+            return {
+                "warnings_sent": warnings_sent,
+                "deliveries_cancelled": deliveries_cancelled,
+            }
+
+    return run_async(_process())

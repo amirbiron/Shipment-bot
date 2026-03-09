@@ -77,4 +77,9 @@ celery_app.conf.beat_schedule = {
         "task": "app.workers.tasks.periodic_health_check",
         "schedule": 120.0,  # 2 דקות
     },
+    # פיצ'ר 2: ביטול אוטומטי של משלוחים שלא נתפסו — כל 15 דקות
+    "auto-cancel-expired-deliveries": {
+        "task": "app.workers.tasks.auto_cancel_expired_deliveries",
+        "schedule": 900.0,  # 15 דקות
+    },
 }

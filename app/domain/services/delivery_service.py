@@ -1,7 +1,7 @@
 """
 Delivery Service - Handles delivery creation and management
 """
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -15,6 +15,7 @@ from app.domain.services.alert_service import (
     publish_delivery_delivered,
     publish_delivery_cancelled,
 )
+from app.core.config import settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -45,6 +46,11 @@ class DeliveryService:
         Create a new delivery and queue broadcast messages.
         Uses transactional outbox pattern.
         """
+        # חישוב זמן תפוגה אוטומטי
+        expires_at = datetime.utcnow() + timedelta(
+            hours=settings.AUTO_CANCEL_UNCAPTURED_HOURS
+        )
+
         delivery = Delivery(
             sender_id=sender_id,
             pickup_address=pickup_address,
@@ -57,7 +63,8 @@ class DeliveryService:
             dropoff_notes=dropoff_notes,
             fee=fee,
             status=DeliveryStatus.OPEN,
-            station_id=station_id
+            station_id=station_id,
+            expires_at=expires_at,
         )
 
         self.db.add(delivery)
@@ -252,3 +259,90 @@ class DeliveryService:
                     )
 
         return delivery
+
+    async def get_expiring_deliveries(
+        self, warning_minutes: int = 30
+    ) -> List[Delivery]:
+        """שליפת משלוחים שעומדים לפוג בעוד warning_minutes דקות ולא נשלחה להם התראה.
+
+        מחזירה משלוחים בסטטוס OPEN או PENDING_APPROVAL שתפוגתם בטווח
+        [now, now + warning_minutes] וטרם קיבלו התראת תפוגה.
+        """
+        now = datetime.utcnow()
+        warning_cutoff = now + timedelta(minutes=warning_minutes)
+        result = await self.db.execute(
+            select(Delivery)
+            .options(joinedload(Delivery.sender))
+            .where(
+                Delivery.status.in_([DeliveryStatus.OPEN, DeliveryStatus.PENDING_APPROVAL]),
+                Delivery.expires_at.isnot(None),
+                Delivery.expires_at <= warning_cutoff,
+                Delivery.expires_at > now,
+                Delivery.expiry_warning_sent.is_(None),
+            )
+        )
+        return list(result.unique().scalars().all())
+
+    async def get_expired_deliveries(self) -> List[Delivery]:
+        """שליפת משלוחים שפג תוקפם וצריך לבטלם אוטומטית.
+
+        מחזירה משלוחים בסטטוס OPEN או PENDING_APPROVAL שעבר זמן ה-expires_at שלהם.
+        הקורא משתמש רק ב-d.id ושולף מחדש עם נעילת שורה — אין צורך ב-joinedload.
+        """
+        now = datetime.utcnow()
+        result = await self.db.execute(
+            select(Delivery)
+            .where(
+                Delivery.status.in_([DeliveryStatus.OPEN, DeliveryStatus.PENDING_APPROVAL]),
+                Delivery.expires_at.isnot(None),
+                Delivery.expires_at <= now,
+            )
+        )
+        return list(result.scalars().all())
+
+    async def auto_cancel_delivery(self, delivery_id: int) -> Optional[Delivery]:
+        """ביטול אוטומטי של משלוח שפג תוקפו.
+
+        מבצע ביטול עם נעילת שורה, שולח התראה לשולח דרך outbox,
+        ומפרסם התראה לפאנל.
+        """
+        # נעילת שורה בלי joinedload — PostgreSQL דוחה FOR UPDATE על LEFT JOIN
+        result = await self.db.execute(
+            select(Delivery)
+            .where(Delivery.id == delivery_id)
+            .with_for_update()
+        )
+        delivery = result.scalar_one_or_none()
+        if not delivery:
+            return None
+
+        # ולידציה — רק משלוחים פתוחים/ממתינים לאישור
+        valid_statuses = (DeliveryStatus.OPEN, DeliveryStatus.PENDING_APPROVAL)
+        if delivery.status not in valid_statuses:
+            return None
+
+        delivery.status = DeliveryStatus.CANCELLED
+        delivery.updated_at = datetime.utcnow()
+
+        # טעינת sender בנפרד (לא ב-joinedload עם for_update)
+        await self.db.refresh(delivery, attribute_names=["sender"])
+
+        # הודעה לשולח דרך outbox
+        await self.outbox_service.queue_auto_cancel_notification(delivery)
+
+        await self.db.commit()
+        await self.db.refresh(delivery, attribute_names=["id", "status", "station_id"])
+
+        # התראה בזמן אמת לפאנל
+        if delivery.station_id:
+            try:
+                await publish_delivery_cancelled(
+                    station_id=delivery.station_id,
+                    delivery_id=delivery.id,
+                )
+            except Exception as e:
+                logger.error(
+                    "כשלון בפרסום התראת ביטול אוטומטי — הפעולה העסקית הצליחה",
+                    extra_data={"delivery_id": delivery.id, "error": str(e)},
+                    exc_info=True,
+                )
