@@ -178,9 +178,18 @@ async def _get_verified_payload(
 
     מבטיח שבקשות לא מאומתות נדחות עם 403 לפני
     שפרטי ה-schema נחשפים דרך שגיאת ולידציה 422.
+
+    Raises:
+        RequestValidationError: אם ה-JSON לא תואם לסכמה (422)
     """
+    from fastapi.exceptions import RequestValidationError
+    from pydantic import ValidationError
+
     body = await request.body()
-    return WhatsAppWebhookPayload.model_validate_json(body)
+    try:
+        return WhatsAppWebhookPayload.model_validate_json(body)
+    except ValidationError as exc:
+        raise RequestValidationError(exc.errors()) from exc
 
 
 def _extract_real_phone(value: str | None) -> str | None:

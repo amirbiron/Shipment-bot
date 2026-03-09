@@ -90,6 +90,38 @@ class SendResult:
         return self.success
 
 
+def _classify_broadcast_failure(
+    results: list[object],
+    message_id: int,
+    broadcast_label: str,
+) -> bool:
+    """סיווג כשלון ברודקאסט — האם השגיאה transient (ניתנת ל-retry)?
+
+    מחזיר True אם הכשלון זמני (כדאי לנסות שוב), False אם קבוע (DLQ).
+    """
+    exception_results = [r for r in results if isinstance(r, BaseException)]
+    failed_send_results = [
+        r for r in results
+        if not isinstance(r, BaseException)
+        and isinstance(r, SendResult)
+        and not r.success
+    ]
+    if failed_send_results:
+        return any(r.is_transient for r in failed_send_results)
+    if exception_results:
+        logger.warning(
+            f"כל תוצאות {broadcast_label} הן exceptions",
+            extra_data={
+                "message_id": message_id,
+                "exception_count": len(exception_results),
+                "first_error": str(exception_results[0]),
+            },
+        )
+        return True
+    # אין SendResult כושלים ואין exceptions (למשל bool=False) → transient
+    return True
+
+
 def _is_transient_error(exc: Exception) -> bool:
     """בדיקה האם שגיאת HTTP היא זמנית (transient) על בסיס קוד סטטוס.
 
@@ -318,35 +350,9 @@ async def _process_single_message(message: OutboxMessage) -> tuple:
                     await outbox_service.mark_as_sent(message.id)
                     return True, f"Partial broadcast: {success_count}/{total_count} succeeded"
                 else:
-                    # סיווג שגיאה: אם כל הכשלונות permanent → DLQ ישירות
-                    exception_results = [
-                        r for r in results if isinstance(r, BaseException)
-                    ]
-                    failed_send_results = [
-                        r for r in results
-                        if not isinstance(r, BaseException)
-                        and isinstance(r, SendResult)
-                        and not r.success
-                    ]
-                    if failed_send_results:
-                        # יש SendResult כושלים — לבדוק אם הם transient
-                        is_transient = any(
-                            r.is_transient for r in failed_send_results
-                        )
-                    elif exception_results:
-                        # כל הכשלונות הם exceptions (CancelledError, קריסות) — transient
-                        is_transient = True
-                        logger.warning(
-                            "כל תוצאות הברודקאסט הן exceptions",
-                            extra_data={
-                                "message_id": message.id,
-                                "exception_count": len(exception_results),
-                                "first_error": str(exception_results[0]),
-                            },
-                        )
-                    else:
-                        # אין SendResult כושלים ואין exceptions (למשל bool=False) → transient
-                        is_transient = True
+                    is_transient = _classify_broadcast_failure(
+                        results, message.id, "הברודקאסט"
+                    )
                     await outbox_service.mark_as_failed(
                         message.id,
                         "All recipients failed",
@@ -407,32 +413,9 @@ async def _process_single_message(message: OutboxMessage) -> tuple:
                     await outbox_service.mark_as_sent(message.id)
                     return True, f"Sent to {success_count}/{len(results)} dispatchers"
                 else:
-                    # סיווג שגיאה: permanent רק אם יש כשלונות SendResult וכולם permanent
-                    exception_results = [
-                        r for r in results if isinstance(r, BaseException)
-                    ]
-                    failed_send_results = [
-                        r for r in results
-                        if not isinstance(r, BaseException)
-                        and isinstance(r, SendResult)
-                        and not r.success
-                    ]
-                    if failed_send_results:
-                        is_transient = any(
-                            r.is_transient for r in failed_send_results
-                        )
-                    elif exception_results:
-                        is_transient = True
-                        logger.warning(
-                            "כל תוצאות ברודקאסט הסדרנים הן exceptions",
-                            extra_data={
-                                "message_id": message.id,
-                                "exception_count": len(exception_results),
-                                "first_error": str(exception_results[0]),
-                            },
-                        )
-                    else:
-                        is_transient = True
+                    is_transient = _classify_broadcast_failure(
+                        results, message.id, "ברודקאסט הסדרנים"
+                    )
                     await outbox_service.mark_as_failed(
                         message.id,
                         "All dispatchers failed",
