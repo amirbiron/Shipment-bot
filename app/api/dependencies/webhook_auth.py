@@ -36,6 +36,11 @@ async def verify_telegram_webhook_token(
     - אם הכותרת חסרה או לא תואמת — 403 Forbidden.
     - פיצ'ר 4: רושם ניסיונות כושלים לחסימת IP אוטומטית.
     """
+    expected = settings.TELEGRAM_WEBHOOK_SECRET_TOKEN
+    if not expected:
+        # טוקן לא מוגדר — אין אימות (אזהרה כבר נרשמת ב-startup)
+        return
+
     from app.api.dependencies.webhook_signature import (
         _get_client_ip,
         _is_ip_blocked,
@@ -44,7 +49,7 @@ async def verify_telegram_webhook_token(
 
     client_ip = _get_client_ip(request)
 
-    # בדיקת חסימת IP
+    # בדיקת חסימת IP — רק כשאימות מופעל
     if _is_ip_blocked(client_ip):
         logger.warning(
             "Telegram webhook: בקשה מ-IP חסום",
@@ -54,11 +59,6 @@ async def verify_telegram_webhook_token(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="IP חסום זמנית עקב ניסיונות אימות כושלים חוזרים",
         )
-
-    expected = settings.TELEGRAM_WEBHOOK_SECRET_TOKEN
-    if not expected:
-        # טוקן לא מוגדר — אין אימות (אזהרה כבר נרשמת ב-startup)
-        return
 
     if not x_telegram_bot_api_secret_token:
         _record_failed_attempt(client_ip)

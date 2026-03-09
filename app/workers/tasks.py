@@ -318,16 +318,22 @@ async def _process_single_message(message: OutboxMessage) -> tuple:
                     await outbox_service.mark_as_sent(message.id)
                     return True, f"Partial broadcast: {success_count}/{total_count} succeeded"
                 else:
-                    # בדיקה אם כל הכשלונות קבועים (permanent) — אם כן, לא כדאי לנסות שוב
-                    all_permanent = all(
-                        isinstance(r, SendResult) and not r.is_transient
-                        for r in results
-                        if not isinstance(r, Exception) and isinstance(r, SendResult) and not r.success
+                    # סיווג שגיאה: אם כל הכשלונות permanent → DLQ ישירות
+                    # אם אין SendResult כושלים (למשל Telegram שמחזיר bool) → transient
+                    failed_results = [
+                        r for r in results
+                        if not isinstance(r, Exception)
+                        and isinstance(r, SendResult)
+                        and not r.success
+                    ]
+                    is_transient = (
+                        not failed_results
+                        or any(r.is_transient for r in failed_results)
                     )
                     await outbox_service.mark_as_failed(
                         message.id,
                         "All recipients failed",
-                        is_transient=not all_permanent,
+                        is_transient=is_transient,
                     )
                     return False, "Broadcast failed"
 
@@ -384,16 +390,21 @@ async def _process_single_message(message: OutboxMessage) -> tuple:
                     await outbox_service.mark_as_sent(message.id)
                     return True, f"Sent to {success_count}/{len(results)} dispatchers"
                 else:
-                    # בדיקה אם כל הכשלונות קבועים — אם כן, retry לא יעזור
-                    all_permanent = all(
-                        isinstance(r, SendResult) and not r.is_transient
-                        for r in results
-                        if not isinstance(r, Exception) and isinstance(r, SendResult) and not r.success
+                    # סיווג שגיאה: permanent רק אם יש כשלונות SendResult וכולם permanent
+                    failed_results = [
+                        r for r in results
+                        if not isinstance(r, Exception)
+                        and isinstance(r, SendResult)
+                        and not r.success
+                    ]
+                    is_transient = (
+                        not failed_results
+                        or any(r.is_transient for r in failed_results)
                     )
                     await outbox_service.mark_as_failed(
                         message.id,
                         "All dispatchers failed",
-                        is_transient=not all_permanent,
+                        is_transient=is_transient,
                     )
                     return False, "Dispatcher broadcast failed"
 
