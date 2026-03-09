@@ -170,6 +170,19 @@ class WhatsAppWebhookPayload(BaseModel):
     messages: list[WhatsAppMessage] = []
 
 
+async def _get_verified_payload(
+    request: Request,
+    _signature: None = Depends(require_wppconnect_signature),
+) -> WhatsAppWebhookPayload:
+    """פרסור ה-payload רק אחרי אימות חתימה.
+
+    מבטיח שבקשות לא מאומתות נדחות עם 403 לפני
+    שפרטי ה-schema נחשפים דרך שגיאת ולידציה 422.
+    """
+    body = await request.body()
+    return WhatsAppWebhookPayload.model_validate_json(body)
+
+
 def _extract_real_phone(value: str | None) -> str | None:
     """
     ניסיון לחלץ מספר טלפון אמיתי מהשדות של WhatsApp.
@@ -1048,10 +1061,9 @@ async def send_welcome_message(phone_number: str):
 )
 async def whatsapp_webhook(
     request: Request,
-    payload: WhatsAppWebhookPayload,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    _signature: None = Depends(require_wppconnect_signature),
+    payload: WhatsAppWebhookPayload = Depends(_get_verified_payload),
 ):
     """
     Handle incoming WhatsApp messages.

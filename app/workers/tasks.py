@@ -319,17 +319,34 @@ async def _process_single_message(message: OutboxMessage) -> tuple:
                     return True, f"Partial broadcast: {success_count}/{total_count} succeeded"
                 else:
                     # סיווג שגיאה: אם כל הכשלונות permanent → DLQ ישירות
-                    # אם אין SendResult כושלים (למשל Telegram שמחזיר bool) → transient
-                    failed_results = [
+                    exception_results = [
+                        r for r in results if isinstance(r, BaseException)
+                    ]
+                    failed_send_results = [
                         r for r in results
                         if not isinstance(r, BaseException)
                         and isinstance(r, SendResult)
                         and not r.success
                     ]
-                    is_transient = (
-                        not failed_results
-                        or any(r.is_transient for r in failed_results)
-                    )
+                    if failed_send_results:
+                        # יש SendResult כושלים — לבדוק אם הם transient
+                        is_transient = any(
+                            r.is_transient for r in failed_send_results
+                        )
+                    elif exception_results:
+                        # כל הכשלונות הם exceptions (CancelledError, קריסות) — transient
+                        is_transient = True
+                        logger.warning(
+                            "כל תוצאות הברודקאסט הן exceptions",
+                            extra_data={
+                                "message_id": message.id,
+                                "exception_count": len(exception_results),
+                                "first_error": str(exception_results[0]),
+                            },
+                        )
+                    else:
+                        # אין SendResult כושלים ואין exceptions (למשל bool=False) → transient
+                        is_transient = True
                     await outbox_service.mark_as_failed(
                         message.id,
                         "All recipients failed",
@@ -391,16 +408,31 @@ async def _process_single_message(message: OutboxMessage) -> tuple:
                     return True, f"Sent to {success_count}/{len(results)} dispatchers"
                 else:
                     # סיווג שגיאה: permanent רק אם יש כשלונות SendResult וכולם permanent
-                    failed_results = [
+                    exception_results = [
+                        r for r in results if isinstance(r, BaseException)
+                    ]
+                    failed_send_results = [
                         r for r in results
                         if not isinstance(r, BaseException)
                         and isinstance(r, SendResult)
                         and not r.success
                     ]
-                    is_transient = (
-                        not failed_results
-                        or any(r.is_transient for r in failed_results)
-                    )
+                    if failed_send_results:
+                        is_transient = any(
+                            r.is_transient for r in failed_send_results
+                        )
+                    elif exception_results:
+                        is_transient = True
+                        logger.warning(
+                            "כל תוצאות ברודקאסט הסדרנים הן exceptions",
+                            extra_data={
+                                "message_id": message.id,
+                                "exception_count": len(exception_results),
+                                "first_error": str(exception_results[0]),
+                            },
+                        )
+                    else:
+                        is_transient = True
                     await outbox_service.mark_as_failed(
                         message.id,
                         "All dispatchers failed",
