@@ -186,60 +186,6 @@ def verify_wppconnect_signature(body: bytes, signature_header: str | None) -> bo
     return hmac.compare_digest(provided_sig, expected)
 
 
-async def verify_webhook_signature(
-    request: Request, provider: str
-) -> None:
-    """אימות חתימת webhook לפי ספק — עם חסימת IP אוטומטית.
-
-    Args:
-        request: אובייקט הבקשה
-        provider: שם הספק ("wppconnect" / "whatsapp_cloud" / "telegram")
-
-    Raises:
-        HTTPException: 403 אם האימות נכשל, 429 אם IP חסום
-    """
-    client_ip = _get_client_ip(request)
-
-    # בדיקת חסימת IP
-    if await _is_ip_blocked(client_ip):
-        logger.warning(
-            "בקשת webhook מ-IP חסום",
-            extra_data={"client_ip": client_ip, "provider": provider},
-        )
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="IP חסום זמנית עקב ניסיונות אימות כושלים חוזרים",
-        )
-
-    if provider == "wppconnect":
-        secret = settings.WPPCONNECT_WEBHOOK_SECRET
-        if not secret:
-            # אימות לא מוגדר — מדלג
-            return
-
-        body = await request.body()
-        signature = request.headers.get("X-Webhook-Signature")
-
-        if not verify_wppconnect_signature(body, signature):
-            await _record_failed_attempt(client_ip)
-            logger.warning(
-                "WPPConnect webhook: חתימה לא תקינה",
-                extra_data={"client_ip": client_ip},
-            )
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="חתימת webhook לא תקינה",
-            )
-
-    elif provider == "whatsapp_cloud":
-        # כבר מטופל ב-whatsapp_cloud.py — כאן רק בדיקת IP blocking
-        pass
-
-    elif provider == "telegram":
-        # כבר מטופל ב-webhook_auth.py — כאן רק בדיקת IP blocking
-        pass
-
-
 async def require_wppconnect_signature(request: Request) -> None:
     """Dependency לאימות חתימת WPPConnect — רץ לפני פרסור ה-body של FastAPI.
 

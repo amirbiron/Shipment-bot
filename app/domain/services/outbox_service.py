@@ -461,13 +461,14 @@ class OutboxService:
         )
         message = result.scalar_one_or_none()
         if message:
-            message.retry_count += 1
             message.last_error = error
 
             # שגיאה קבועה (4xx) → dead letter מיידי, בלי retry נוסף
-            permanently_failed = (
-                not is_transient or message.retry_count >= message.max_retries
-            )
+            if not is_transient:
+                permanently_failed = True
+            else:
+                message.retry_count += 1
+                permanently_failed = message.retry_count >= message.max_retries
 
             if permanently_failed:
                 message.status = MessageStatus.FAILED
@@ -560,25 +561,3 @@ class OutboxService:
         )
         return new_message
 
-    async def get_dead_letter_messages(
-        self, limit: int = 50, offset: int = 0
-    ) -> List[DeadLetterMessage]:
-        """שליפת הודעות מ-dead letter queue."""
-        result = await self.db.execute(
-            select(DeadLetterMessage)
-            .where(DeadLetterMessage.status == DeadLetterStatus.FAILED)
-            .order_by(DeadLetterMessage.created_at.desc())
-            .offset(offset)
-            .limit(limit)
-        )
-        return list(result.scalars().all())
-
-    async def get_dead_letter_count(self) -> int:
-        """מספר הודעות כושלות ב-dead letter queue."""
-        from sqlalchemy import func
-        result = await self.db.execute(
-            select(func.count(DeadLetterMessage.id)).where(
-                DeadLetterMessage.status == DeadLetterStatus.FAILED
-            )
-        )
-        return result.scalar() or 0

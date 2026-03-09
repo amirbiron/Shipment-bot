@@ -397,40 +397,6 @@ class TestDeadLetterQueue:
         assert dead_letter.status == DeadLetterStatus.RETRIED
         assert dead_letter.retried_at is not None
 
-    @pytest.mark.asyncio
-    @pytest.mark.unit
-    async def test_get_dead_letter_count(self, db_session: AsyncSession):
-        """ספירת הודעות כושלות ב-dead letter queue"""
-        from app.domain.services.outbox_service import OutboxService
-        from app.db.models.dead_letter_message import (
-            DeadLetterMessage,
-            DeadLetterStatus,
-        )
-
-        # יצירת 3 הודעות כושלות ו-1 שכבר עברה retry
-        for i in range(3):
-            db_session.add(DeadLetterMessage(
-                original_message_id=i + 100,
-                platform="telegram",
-                recipient_id=f"chat_{i}",
-                message_type="test",
-                message_content={"message_text": f"test {i}"},
-                status=DeadLetterStatus.FAILED,
-            ))
-        db_session.add(DeadLetterMessage(
-            original_message_id=200,
-            platform="whatsapp",
-            recipient_id="+972501234567",
-            message_type="test",
-            message_content={"message_text": "retried"},
-            status=DeadLetterStatus.RETRIED,
-        ))
-        await db_session.flush()
-
-        service = OutboxService(db_session)
-        count = await service.get_dead_letter_count()
-        assert count == 3
-
 
 # ============================================================================
 # פיצ'ר 3: סיווג שגיאות — transient vs permanent
