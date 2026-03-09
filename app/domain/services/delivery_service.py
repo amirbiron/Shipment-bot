@@ -287,18 +287,18 @@ class DeliveryService:
         """שליפת משלוחים שפג תוקפם וצריך לבטלם אוטומטית.
 
         מחזירה משלוחים בסטטוס OPEN או PENDING_APPROVAL שעבר זמן ה-expires_at שלהם.
+        הקורא משתמש רק ב-d.id ושולף מחדש עם נעילת שורה — אין צורך ב-joinedload.
         """
         now = datetime.utcnow()
         result = await self.db.execute(
             select(Delivery)
-            .options(joinedload(Delivery.sender))
             .where(
                 Delivery.status.in_([DeliveryStatus.OPEN, DeliveryStatus.PENDING_APPROVAL]),
                 Delivery.expires_at.isnot(None),
                 Delivery.expires_at <= now,
             )
         )
-        return list(result.unique().scalars().all())
+        return list(result.scalars().all())
 
     async def auto_cancel_delivery(self, delivery_id: int) -> Optional[Delivery]:
         """ביטול אוטומטי של משלוח שפג תוקפו.
