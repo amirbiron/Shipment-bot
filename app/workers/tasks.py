@@ -27,6 +27,7 @@ from app.core.circuit_breaker import get_telegram_circuit_breaker
 from app.core.exceptions import TelegramError
 from app.core.validation import PhoneNumberValidator
 from sqlalchemy import select
+from sqlalchemy.orm import joinedload
 
 logger = get_logger(__name__)
 
@@ -1550,12 +1551,13 @@ def auto_cancel_expired_deliveries() -> dict:
                 for delivery_id in expiring_ids:
                     try:
                         # שליפה מחדש בכל איטרציה — מונע גישה ל-attributes שפגו
+                        # joinedload(sender) נדרש כי queue_expiry_warning ניגש ל-delivery.sender
                         delivery_result = await db.execute(
-                            select(Delivery).where(
-                                Delivery.id == delivery_id
-                            )
+                            select(Delivery)
+                            .options(joinedload(Delivery.sender))
+                            .where(Delivery.id == delivery_id)
                         )
-                        delivery = delivery_result.scalar_one_or_none()
+                        delivery = delivery_result.unique().scalar_one_or_none()
                         if not delivery:
                             continue
 
