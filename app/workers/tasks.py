@@ -307,7 +307,7 @@ async def _process_single_message(message: OutboxMessage) -> tuple:
                 results = await asyncio.gather(*tasks, return_exceptions=True)
                 success_count = sum(
                     1 for r in results
-                    if not isinstance(r, Exception) and bool(r)
+                    if not isinstance(r, BaseException) and bool(r)
                 )
                 total_count = len(results)
 
@@ -383,7 +383,7 @@ async def _process_single_message(message: OutboxMessage) -> tuple:
                 results = await asyncio.gather(*tasks, return_exceptions=True)
                 success_count = sum(
                     1 for r in results
-                    if not isinstance(r, Exception) and bool(r)
+                    if not isinstance(r, BaseException) and bool(r)
                 )
 
                 if success_count > 0:
