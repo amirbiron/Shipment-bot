@@ -123,14 +123,13 @@ def _is_transient_error(exc: Exception) -> bool:
     return True
 
 
-async def _send_whatsapp_message(phone: str, content: dict) -> bool | SendResult:
+async def _send_whatsapp_message(phone: str, content: dict) -> SendResult:
     """
     שליחת הודעה דרך ספק WhatsApp הפעיל — ניתוב אוטומטי לפי סוג היעד.
     קבוצה (@g.us) → WPPConnect, פרטי → Cloud API (במצב hybrid) / WPPConnect.
     ממיר תגי HTML לפורמט הספק לפני שליחה.
 
     מחזירה SendResult עם סיווג שגיאה (transient/permanent).
-    למטרות תאימות לאחור, מחזירה גם True/False.
     """
     message_text = content.get("message_text", "")
     if phone.endswith("@g.us"):
@@ -415,15 +414,9 @@ async def _process_single_message(message: OutboxMessage) -> tuple:
                     result = await _send_whatsapp_message(
                         message.recipient_id, content
                     )
-                    # תמיכה ב-SendResult עם סיווג שגיאה
-                    if isinstance(result, SendResult):
-                        success = result.success
-                        is_transient = result.is_transient
-                        error_msg = result.error
-                    else:
-                        success = bool(result)
-                        is_transient = True
-                        error_msg = "Send failed"
+                    success = result.success
+                    is_transient = result.is_transient
+                    error_msg = result.error
                 else:
                     success = await _send_telegram_message(
                         message.recipient_id, content
@@ -1559,6 +1552,10 @@ def auto_cancel_expired_deliveries() -> dict:
                         )
                         delivery = delivery_result.unique().scalar_one_or_none()
                         if not delivery:
+                            continue
+
+                        # בדיקה חוזרת — המשלוח עלול להשתנות בין השליפה הראשונית לכאן
+                        if delivery.status != DeliveryStatus.OPEN or delivery.expiry_warning_sent is not None:
                             continue
 
                         # חישוב הזמן בפועל עד תפוגה — לא ערך קונפיגורציה קבוע
