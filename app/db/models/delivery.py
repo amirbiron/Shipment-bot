@@ -80,6 +80,11 @@ class Delivery(Base):
     delivered_at = Column(DateTime, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    # ביטול אוטומטי — זמן תפוגה למשלוחים שלא נתפסו
+    expires_at = Column(DateTime, nullable=True, index=True)
+    # האם נשלחה התראה לשולח לפני ביטול אוטומטי
+    expiry_warning_sent = Column(DateTime, nullable=True)
+
     # Relationships
     sender = relationship("User", foreign_keys=[sender_id])
     courier = relationship("User", foreign_keys=[courier_id])

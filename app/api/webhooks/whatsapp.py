@@ -6,7 +6,7 @@ import asyncio
 import re
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, BackgroundTasks
+from fastapi import APIRouter, Depends, BackgroundTasks, Request
 from pydantic import BaseModel, model_validator
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1039,8 +1039,14 @@ async def send_welcome_message(phone_number: str):
         "נקודת כניסה לקבלת הודעות מ-WhatsApp Gateway. "
         "מבצעת ניתוב לזרימת שולח/שליח לפי role ומנהלת state machine."
     ),
+    responses={
+        200: {"description": "הודעה התקבלה ועובדה"},
+        403: {"description": "חתימה לא תקינה"},
+        429: {"description": "IP חסום עקב ניסיונות אימות כושלים"},
+    },
 )
 async def whatsapp_webhook(
+    request: Request,
     payload: WhatsAppWebhookPayload,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
@@ -1049,6 +1055,10 @@ async def whatsapp_webhook(
     Handle incoming WhatsApp messages.
     Routes to sender or courier handlers based on user role.
     """
+    # פיצ'ר 4: אימות חתימת WPPConnect + חסימת IP אוטומטית
+    from app.api.dependencies.webhook_signature import verify_webhook_signature
+    await verify_webhook_signature(request, provider="wppconnect")
+
     responses = []
 
     for message in payload.messages:

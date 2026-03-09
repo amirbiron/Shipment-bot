@@ -177,6 +177,24 @@ async def cloud_api_webhook(
     4. זיהוי/יצירת משתמש (לפי מספר טלפון)
     5. ניתוב ל-state machine handlers
     """
+    # פיצ'ר 4: בדיקת חסימת IP אוטומטית לפני אימות חתימה
+    from app.api.dependencies.webhook_signature import (
+        _get_client_ip,
+        _is_ip_blocked,
+        _record_failed_attempt,
+    )
+
+    client_ip = _get_client_ip(request)
+    if _is_ip_blocked(client_ip):
+        logger.warning(
+            "Cloud API webhook: בקשה מ-IP חסום",
+            extra_data={"client_ip": client_ip},
+        )
+        raise HTTPException(
+            status_code=429,
+            detail="IP חסום זמנית עקב ניסיונות אימות כושלים חוזרים",
+        )
+
     # אימות חתימה
     body = await request.body()
     signature = request.headers.get("X-Hub-Signature-256", "")
@@ -189,7 +207,11 @@ async def cloud_api_webhook(
         raise HTTPException(status_code=403, detail="חתימה לא ניתנת לאימות")
 
     if not _verify_signature(body, signature):
-        logger.warning("Cloud API webhook: חתימה לא תקינה")
+        _record_failed_attempt(client_ip)
+        logger.warning(
+            "Cloud API webhook: חתימה לא תקינה",
+            extra_data={"client_ip": client_ip},
+        )
         raise HTTPException(status_code=403, detail="חתימה לא תקינה")
 
     payload = json.loads(body)
