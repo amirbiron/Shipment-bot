@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     # חסימת IP אוטומטית אחרי ניסיונות אימות כושלים
     WEBHOOK_SIGNATURE_BLOCK_AFTER: int = 10  # מספר ניסיונות כושלים לחסימה
     WEBHOOK_SIGNATURE_BLOCK_DURATION_SECONDS: int = 3600  # שעה
+    # כתובות IP של reverse proxies מהימנים — רק מהם נסמוך על X-Forwarded-For.
+    # מופרדות בפסיקים, למשל: "10.0.0.1,10.0.0.2"
+    # ריק = לא סומכים על X-Forwarded-For (משתמשים ב-client IP ישירות)
+    TRUSTED_PROXY_IPS: str = ""
 
     # WhatsApp Cloud API (pywa — Arm A)
     WHATSAPP_CLOUD_API_TOKEN: str = ""            # Meta access token

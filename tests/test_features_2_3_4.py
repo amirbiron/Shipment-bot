@@ -609,3 +609,49 @@ class TestIPBlocking:
             _blocked_ips.pop(test_ip2, None)
             _failed_attempts.pop(test_ip1, None)
             _failed_attempts.pop(test_ip2, None)
+
+    @pytest.mark.unit
+    def test_x_forwarded_for_ignored_without_trusted_proxy(self):
+        """X-Forwarded-For מתעלם כשאין proxy מהימן מוגדר"""
+        from unittest.mock import MagicMock
+        from app.api.dependencies.webhook_signature import _get_client_ip
+
+        request = MagicMock()
+        request.client.host = "1.2.3.4"
+        request.headers.get.return_value = "10.0.0.1"  # X-Forwarded-For מזויף
+
+        with patch.object(settings, "TRUSTED_PROXY_IPS", ""):
+            ip = _get_client_ip(request)
+            assert ip == "1.2.3.4"  # חייב להחזיר IP ישיר, לא הכותרת המזויפת
+
+    @pytest.mark.unit
+    def test_x_forwarded_for_trusted_when_proxy_configured(self):
+        """X-Forwarded-For נסמך כשהבקשה מגיעה מ-proxy מהימן"""
+        from unittest.mock import MagicMock
+        from app.api.dependencies.webhook_signature import _get_client_ip
+
+        request = MagicMock()
+        request.client.host = "10.0.0.50"  # ה-proxy
+        request.headers.get.return_value = "203.0.113.5"  # IP אמיתי
+
+        with patch.object(settings, "TRUSTED_PROXY_IPS", "10.0.0.50,10.0.0.51"):
+            ip = _get_client_ip(request)
+            assert ip == "203.0.113.5"  # סומך על X-Forwarded-For כי ה-proxy מהימן
+
+    @pytest.mark.unit
+    def test_get_failed_attempt_counts(self):
+        """שליפת מונה ניסיונות כושלים לכל IP"""
+        from app.api.dependencies.webhook_signature import (
+            get_failed_attempt_counts,
+            _failed_attempts,
+        )
+
+        test_ip = "192.168.99.99"
+        _failed_attempts.pop(test_ip, None)
+
+        try:
+            _failed_attempts[test_ip] = [time.time(), time.time()]
+            result = get_failed_attempt_counts()
+            assert result.get(test_ip) == 2
+        finally:
+            _failed_attempts.pop(test_ip, None)

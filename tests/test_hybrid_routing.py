@@ -122,7 +122,7 @@ class TestCeleryRoutingLogic:
                 "123456@g.us", {"message_text": "הודעה לקבוצה"}
             )
 
-        assert result is True
+        assert bool(result) is True
         mock_group_provider.send_text.assert_called_once()
         mock_main_provider.send_text.assert_not_called()
 
@@ -148,6 +148,6 @@ class TestCeleryRoutingLogic:
                 "+972501234567", {"message_text": "הודעה פרטית"}
             )
 
-        assert result is True
+        assert bool(result) is True
         mock_main_provider.send_text.assert_called_once()
         mock_group_provider.send_text.assert_not_called()

@@ -27,13 +27,34 @@ _failed_attempts: dict[str, list[float]] = defaultdict(list)
 _blocked_ips: dict[str, float] = {}
 
 
+def _get_trusted_proxy_ips() -> set[str]:
+    """רשימת כתובות IP של reverse proxies מהימנים."""
+    raw = settings.TRUSTED_PROXY_IPS
+    if not raw:
+        return set()
+    return {ip.strip() for ip in raw.split(",") if ip.strip()}
+
+
 def _get_client_ip(request: Request) -> str:
-    """חילוץ IP של הלקוח — מכבד X-Forwarded-For מאחורי reverse proxy."""
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        # הראשון ברשימה הוא ה-IP האמיתי
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    """חילוץ IP של הלקוח — מכבד X-Forwarded-For רק מ-proxy מהימן.
+
+    אם הבקשה מגיעה מ-IP שנמצא ב-TRUSTED_PROXY_IPS, סומכים על
+    X-Forwarded-For ולוקחים את ה-IP הראשון ברשימה.
+    אחרת משתמשים ב-client IP ישירות — מונע עקיפת חסימת IP.
+    """
+    direct_ip = request.client.host if request.client else "unknown"
+
+    trusted_proxies = _get_trusted_proxy_ips()
+    if not trusted_proxies:
+        # אין proxies מוגדרים — לא סומכים על X-Forwarded-For
+        return direct_ip
+
+    if direct_ip in trusted_proxies:
+        forwarded = request.headers.get("X-Forwarded-For")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+
+    return direct_ip
 
 
 def _is_ip_blocked(client_ip: str) -> bool:

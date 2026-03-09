@@ -2,10 +2,18 @@
 בדיקות לאימות חתימת webhook מטלגרם (X-Telegram-Bot-Api-Secret-Token).
 """
 import pytest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 from app.core.config import settings
 from app.api.dependencies.webhook_auth import verify_telegram_webhook_token
+
+
+def _make_mock_request(client_ip: str = "127.0.0.1") -> MagicMock:
+    """יצירת אובייקט Request מדומה לבדיקות יחידה."""
+    request = MagicMock()
+    request.client.host = client_ip
+    request.headers.get.return_value = None  # אין X-Forwarded-For
+    return request
 
 
 # ──────────────────────────────────────────────
@@ -21,7 +29,7 @@ class TestVerifyTelegramWebhookToken:
         """אם TELEGRAM_WEBHOOK_SECRET_TOKEN ריק — מדלג ללא שגיאה."""
         with patch.object(settings, "TELEGRAM_WEBHOOK_SECRET_TOKEN", ""):
             # לא צריך לזרוק exception
-            await verify_telegram_webhook_token(None)
+            await verify_telegram_webhook_token(_make_mock_request(), None)
 
     @pytest.mark.asyncio
     @pytest.mark.unit
@@ -30,7 +38,7 @@ class TestVerifyTelegramWebhookToken:
         from fastapi import HTTPException
         with patch.object(settings, "TELEGRAM_WEBHOOK_SECRET_TOKEN", "my-secret"):
             with pytest.raises(HTTPException) as exc_info:
-                await verify_telegram_webhook_token(None)
+                await verify_telegram_webhook_token(_make_mock_request(), None)
             assert exc_info.value.status_code == 403
 
     @pytest.mark.asyncio
@@ -40,7 +48,7 @@ class TestVerifyTelegramWebhookToken:
         from fastapi import HTTPException
         with patch.object(settings, "TELEGRAM_WEBHOOK_SECRET_TOKEN", "my-secret"):
             with pytest.raises(HTTPException) as exc_info:
-                await verify_telegram_webhook_token("wrong-token")
+                await verify_telegram_webhook_token(_make_mock_request(), "wrong-token")
             assert exc_info.value.status_code == 403
 
     @pytest.mark.asyncio
@@ -48,7 +56,7 @@ class TestVerifyTelegramWebhookToken:
     async def test_accepts_valid_token(self) -> None:
         """אם הטוקן תואם — עובר ללא שגיאה."""
         with patch.object(settings, "TELEGRAM_WEBHOOK_SECRET_TOKEN", "my-secret"):
-            await verify_telegram_webhook_token("my-secret")
+            await verify_telegram_webhook_token(_make_mock_request(), "my-secret")
 
 
 # ──────────────────────────────────────────────

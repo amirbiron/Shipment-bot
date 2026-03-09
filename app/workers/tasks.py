@@ -75,12 +75,18 @@ def run_async(coro):
 
 
 class SendResult:
-    """תוצאת שליחת הודעה — כולל סיווג שגיאה (transient/permanent)."""
+    """תוצאת שליחת הודעה — כולל סיווג שגיאה (transient/permanent).
+
+    תומך ב-bool() כך ש-``if result`` ו-``bool(result)`` עובדים.
+    """
 
     def __init__(self, success: bool, is_transient: bool = True, error: str = "") -> None:
         self.success = success
         self.is_transient = is_transient
         self.error = error
+
+    def __bool__(self) -> bool:
+        return self.success
 
 
 def _is_transient_error(exc: Exception) -> bool:
@@ -299,7 +305,10 @@ async def _process_single_message(message: OutboxMessage) -> tuple:
                     return False, f"No valid recipients for {message.platform.value}"
 
                 results = await asyncio.gather(*tasks, return_exceptions=True)
-                success_count = sum(1 for r in results if r is True)
+                success_count = sum(
+                    1 for r in results
+                    if not isinstance(r, Exception) and bool(r)
+                )
                 total_count = len(results)
 
                 if success_count == total_count:
@@ -356,7 +365,10 @@ async def _process_single_message(message: OutboxMessage) -> tuple:
                     return False, "No valid dispatcher recipients"
 
                 results = await asyncio.gather(*tasks, return_exceptions=True)
-                success_count = sum(1 for r in results if r is True)
+                success_count = sum(
+                    1 for r in results
+                    if not isinstance(r, Exception) and bool(r)
+                )
 
                 if success_count > 0:
                     await outbox_service.mark_as_sent(message.id)

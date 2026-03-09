@@ -302,19 +302,31 @@ async def retry_outbox_message(
 # ─── 1b. IP חסומים (Webhook Signature) ────────────────────────────────────
 
 
-class BlockedIpResponse(BaseModel):
+class BlockedIpEntry(BaseModel):
     """IP חסום"""
     ip: str
     remaining_seconds: float
 
 
+class FailedAttemptEntry(BaseModel):
+    """ניסיונות כושלים לכל IP"""
+    ip: str
+    failed_count: int
+
+
+class WebhookSecurityResponse(BaseModel):
+    """מצב אבטחת webhook — IP חסומים וניסיונות כושלים"""
+    blocked_ips: list[BlockedIpEntry]
+    failed_attempts: list[FailedAttemptEntry]
+
+
 @router.get(
     "/webhook-security/blocked-ips",
-    response_model=list[BlockedIpResponse],
-    summary="רשימת IP חסומים",
-    description="מחזיר IP שנחסמו אוטומטית אחרי ניסיונות אימות webhook כושלים.",
+    response_model=WebhookSecurityResponse,
+    summary="מצב אבטחת webhook",
+    description="מחזיר IP חסומים וניסיונות אימות כושלים לכל IP.",
     responses={
-        200: {"description": "רשימת IP חסומים"},
+        200: {"description": "מצב אבטחת webhook"},
         401: {"description": "חסר מפתח API"},
         403: {"description": "מפתח API שגוי"},
     },
@@ -322,15 +334,25 @@ class BlockedIpResponse(BaseModel):
 )
 async def get_blocked_ips_list(
     _: None = Depends(require_admin_api_key),
-) -> list[BlockedIpResponse]:
-    """רשימת IP שנחסמו אוטומטית"""
-    from app.api.dependencies.webhook_signature import get_blocked_ips
+) -> WebhookSecurityResponse:
+    """מצב אבטחת webhook — IP חסומים וניסיונות כושלים"""
+    from app.api.dependencies.webhook_signature import (
+        get_blocked_ips,
+        get_failed_attempt_counts,
+    )
 
     blocked = get_blocked_ips()
-    return [
-        BlockedIpResponse(ip=ip, remaining_seconds=remaining)
-        for ip, remaining in blocked.items()
-    ]
+    failed = get_failed_attempt_counts()
+    return WebhookSecurityResponse(
+        blocked_ips=[
+            BlockedIpEntry(ip=ip, remaining_seconds=remaining)
+            for ip, remaining in blocked.items()
+        ],
+        failed_attempts=[
+            FailedAttemptEntry(ip=ip, failed_count=count)
+            for ip, count in failed.items()
+        ],
+    )
 
 
 # ─── 2b. Dead Letter Queue ────────────────────────────────────────────────
