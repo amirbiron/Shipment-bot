@@ -99,7 +99,8 @@ async def _record_failed_attempt(client_ip: str) -> None:
     משתמש ב-Redis sorted set לספירת ניסיונות בחלון זמן,
     עובד נכון גם עם מספר workers.
     """
-    window = settings.WEBHOOK_SIGNATURE_BLOCK_DURATION_SECONDS
+    attempt_window = settings.WEBHOOK_SIGNATURE_ATTEMPT_WINDOW_SECONDS
+    block_duration = settings.WEBHOOK_SIGNATURE_BLOCK_DURATION_SECONDS
     threshold = settings.WEBHOOK_SIGNATURE_BLOCK_AFTER
 
     redis = await _get_redis_safe()
@@ -110,23 +111,23 @@ async def _record_failed_attempt(client_ip: str) -> None:
 
             # ניקוי ניסיונות ישנים + הוספת החדש באופן אטומי
             pipe = redis.pipeline()
-            pipe.zremrangebyscore(attempts_key, "-inf", now - window)
+            pipe.zremrangebyscore(attempts_key, "-inf", now - attempt_window)
             pipe.zadd(attempts_key, {str(now): now})
             pipe.zcard(attempts_key)
-            pipe.expire(attempts_key, int(window) + 1)
+            pipe.expire(attempts_key, int(attempt_window) + 1)
             results = await pipe.execute()
 
             attempt_count = results[2]
 
             if attempt_count >= threshold:
                 block_key = f"{_REDIS_BLOCK_KEY_PREFIX}{client_ip}"
-                await redis.setex(block_key, int(window), "1")
+                await redis.setex(block_key, int(block_duration), "1")
                 logger.warning(
                     "IP חסום אוטומטית אחרי ניסיונות אימות webhook כושלים",
                     extra_data={
                         "client_ip": client_ip,
                         "failed_attempts": attempt_count,
-                        "block_duration_seconds": window,
+                        "block_duration_seconds": block_duration,
                     },
                 )
             return
@@ -139,20 +140,20 @@ async def _record_failed_attempt(client_ip: str) -> None:
     # Fallback — זיכרון מקומי
     now = time.time()
     _failed_attempts[client_ip] = [
-        ts for ts in _failed_attempts[client_ip] if now - ts < window
+        ts for ts in _failed_attempts[client_ip] if now - ts < attempt_window
     ]
     _failed_attempts[client_ip].append(now)
 
     attempt_count = len(_failed_attempts[client_ip])
 
     if attempt_count >= threshold:
-        _blocked_ips[client_ip] = now + window
+        _blocked_ips[client_ip] = now + block_duration
         logger.warning(
             "IP חסום אוטומטית אחרי ניסיונות אימות webhook כושלים (fallback מקומי)",
             extra_data={
                 "client_ip": client_ip,
                 "failed_attempts": attempt_count,
-                "block_duration_seconds": window,
+                "block_duration_seconds": block_duration,
             },
         )
 

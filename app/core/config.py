@@ -52,7 +52,8 @@ class Settings(BaseSettings):
 
     # חסימת IP אוטומטית אחרי ניסיונות אימות כושלים
     WEBHOOK_SIGNATURE_BLOCK_AFTER: int = 10  # מספר ניסיונות כושלים לחסימה
-    WEBHOOK_SIGNATURE_BLOCK_DURATION_SECONDS: int = 3600  # שעה
+    WEBHOOK_SIGNATURE_ATTEMPT_WINDOW_SECONDS: int = 600  # חלון ספירת ניסיונות — 10 דקות
+    WEBHOOK_SIGNATURE_BLOCK_DURATION_SECONDS: int = 3600  # משך חסימה — שעה
     # כתובות IP של reverse proxies מהימנים — רק מהם נסמוך על X-Forwarded-For.
     # מופרדות בפסיקים, למשל: "10.0.0.1,10.0.0.2"
     # ריק = לא סומכים על X-Forwarded-For (משתמשים ב-client IP ישירות)
