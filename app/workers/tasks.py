@@ -1555,7 +1555,8 @@ def auto_cancel_expired_deliveries() -> dict:
                             continue
 
                         # בדיקה חוזרת — המשלוח עלול להשתנות בין השליפה הראשונית לכאן
-                        if delivery.status != DeliveryStatus.OPEN or delivery.expiry_warning_sent is not None:
+                        # השאילתה המקורית שולפת OPEN ו-PENDING_APPROVAL
+                        if delivery.status not in (DeliveryStatus.OPEN, DeliveryStatus.PENDING_APPROVAL) or delivery.expiry_warning_sent is not None:
                             continue
 
                         # חישוב הזמן בפועל עד תפוגה — לא ערך קונפיגורציה קבוע
