@@ -1562,9 +1562,14 @@ def auto_cancel_expired_deliveries() -> dict:
                         if not delivery:
                             continue
 
+                        # חישוב הזמן בפועל עד תפוגה — לא ערך קונפיגורציה קבוע
+                        actual_remaining = max(
+                            1,
+                            int((delivery.expires_at - datetime.utcnow()).total_seconds() / 60),
+                        )
                         await outbox_service.queue_expiry_warning(
                             delivery,
-                            minutes_remaining=_settings.AUTO_CANCEL_WARNING_MINUTES,
+                            minutes_remaining=actual_remaining,
                         )
                         delivery.expiry_warning_sent = datetime.utcnow()
                         await db.commit()

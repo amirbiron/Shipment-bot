@@ -6,7 +6,8 @@
 - WhatsApp Cloud API: X-Hub-Signature-256 (HMAC-SHA256)
 - WPPConnect: X-Webhook-Signature (HMAC-SHA256)
 
-כולל חסימת IP אוטומטית אחרי X ניסיונות אימות כושלים.
+חסימת IP מבוססת Redis — עובדת נכון גם עם מספר workers/pods.
+Fallback לזיכרון מקומי אם Redis לא זמין.
 """
 import hashlib
 import hmac
@@ -20,11 +21,22 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
+# מפתחות Redis לחסימת IP
+_REDIS_BLOCK_KEY_PREFIX = "webhook:blocked:"
+_REDIS_ATTEMPTS_KEY_PREFIX = "webhook:attempts:"
 
-# מעקב אחרי ניסיונות כושלים לכל IP
+# Fallback לזיכרון מקומי — משמש רק כש-Redis לא זמין
 _failed_attempts: dict[str, list[float]] = defaultdict(list)
-# רשימת IP חסומים — {ip: expiry_timestamp}
 _blocked_ips: dict[str, float] = {}
+
+
+async def _get_redis_safe() -> "aioredis.Redis | None":
+    """מחזיר Redis client או None אם לא זמין."""
+    try:
+        from app.core.redis_client import get_redis
+        return await get_redis()
+    except Exception:
+        return None
 
 
 def _get_trusted_proxy_ips() -> set[str]:
@@ -57,25 +69,75 @@ def _get_client_ip(request: Request) -> str:
     return direct_ip
 
 
-def _is_ip_blocked(client_ip: str) -> bool:
-    """בדיקה האם IP חסום."""
+async def _is_ip_blocked(client_ip: str) -> bool:
+    """בדיקה האם IP חסום — Redis עם fallback לזיכרון מקומי."""
+    redis = await _get_redis_safe()
+    if redis is not None:
+        try:
+            blocked = await redis.exists(f"{_REDIS_BLOCK_KEY_PREFIX}{client_ip}")
+            return bool(blocked)
+        except Exception as e:
+            logger.warning(
+                "כשלון בבדיקת חסימת IP ב-Redis — fallback לזיכרון מקומי",
+                extra_data={"error": str(e)},
+            )
+
+    # Fallback — זיכרון מקומי
     expiry = _blocked_ips.get(client_ip)
     if expiry is None:
         return False
     if time.time() > expiry:
-        # חסימה פגה — מנקים
         del _blocked_ips[client_ip]
         _failed_attempts.pop(client_ip, None)
         return False
     return True
 
 
-def _record_failed_attempt(client_ip: str) -> None:
-    """רישום ניסיון אימות כושל וחסימת IP אם חרג מהמכסה."""
-    now = time.time()
-    window = settings.WEBHOOK_SIGNATURE_BLOCK_DURATION_SECONDS
+async def _record_failed_attempt(client_ip: str) -> None:
+    """רישום ניסיון אימות כושל וחסימת IP אם חרג מהמכסה.
 
-    # ניקוי ניסיונות ישנים מחוץ לחלון הזמן
+    משתמש ב-Redis sorted set לספירת ניסיונות בחלון זמן,
+    עובד נכון גם עם מספר workers.
+    """
+    window = settings.WEBHOOK_SIGNATURE_BLOCK_DURATION_SECONDS
+    threshold = settings.WEBHOOK_SIGNATURE_BLOCK_AFTER
+
+    redis = await _get_redis_safe()
+    if redis is not None:
+        try:
+            now = time.time()
+            attempts_key = f"{_REDIS_ATTEMPTS_KEY_PREFIX}{client_ip}"
+
+            # ניקוי ניסיונות ישנים + הוספת החדש באופן אטומי
+            pipe = redis.pipeline()
+            pipe.zremrangebyscore(attempts_key, "-inf", now - window)
+            pipe.zadd(attempts_key, {str(now): now})
+            pipe.zcard(attempts_key)
+            pipe.expire(attempts_key, int(window) + 1)
+            results = await pipe.execute()
+
+            attempt_count = results[2]
+
+            if attempt_count >= threshold:
+                block_key = f"{_REDIS_BLOCK_KEY_PREFIX}{client_ip}"
+                await redis.setex(block_key, int(window), "1")
+                logger.warning(
+                    "IP חסום אוטומטית אחרי ניסיונות אימות webhook כושלים",
+                    extra_data={
+                        "client_ip": client_ip,
+                        "failed_attempts": attempt_count,
+                        "block_duration_seconds": window,
+                    },
+                )
+            return
+        except Exception as e:
+            logger.warning(
+                "כשלון ברישום ניסיון כושל ב-Redis — fallback לזיכרון מקומי",
+                extra_data={"error": str(e)},
+            )
+
+    # Fallback — זיכרון מקומי
+    now = time.time()
     _failed_attempts[client_ip] = [
         ts for ts in _failed_attempts[client_ip] if now - ts < window
     ]
@@ -83,10 +145,10 @@ def _record_failed_attempt(client_ip: str) -> None:
 
     attempt_count = len(_failed_attempts[client_ip])
 
-    if attempt_count >= settings.WEBHOOK_SIGNATURE_BLOCK_AFTER:
+    if attempt_count >= threshold:
         _blocked_ips[client_ip] = now + window
         logger.warning(
-            "IP חסום אוטומטית אחרי ניסיונות אימות webhook כושלים",
+            "IP חסום אוטומטית אחרי ניסיונות אימות webhook כושלים (fallback מקומי)",
             extra_data={
                 "client_ip": client_ip,
                 "failed_attempts": attempt_count,
@@ -138,7 +200,7 @@ async def verify_webhook_signature(
     client_ip = _get_client_ip(request)
 
     # בדיקת חסימת IP
-    if _is_ip_blocked(client_ip):
+    if await _is_ip_blocked(client_ip):
         logger.warning(
             "בקשת webhook מ-IP חסום",
             extra_data={"client_ip": client_ip, "provider": provider},
@@ -158,7 +220,7 @@ async def verify_webhook_signature(
         signature = request.headers.get("X-Webhook-Signature")
 
         if not verify_wppconnect_signature(body, signature):
-            _record_failed_attempt(client_ip)
+            await _record_failed_attempt(client_ip)
             logger.warning(
                 "WPPConnect webhook: חתימה לא תקינה",
                 extra_data={"client_ip": client_ip},
@@ -188,7 +250,7 @@ async def require_wppconnect_signature(request: Request) -> None:
     """
     client_ip = _get_client_ip(request)
 
-    if _is_ip_blocked(client_ip):
+    if await _is_ip_blocked(client_ip):
         logger.warning(
             "בקשת webhook מ-IP חסום",
             extra_data={"client_ip": client_ip, "provider": "wppconnect"},
@@ -207,7 +269,7 @@ async def require_wppconnect_signature(request: Request) -> None:
     signature = request.headers.get("X-Webhook-Signature")
 
     if not verify_wppconnect_signature(body, signature):
-        _record_failed_attempt(client_ip)
+        await _record_failed_attempt(client_ip)
         logger.warning(
             "WPPConnect webhook: חתימה לא תקינה",
             extra_data={"client_ip": client_ip},
@@ -218,10 +280,36 @@ async def require_wppconnect_signature(request: Request) -> None:
         )
 
 
-def get_blocked_ips() -> dict[str, float]:
+async def get_blocked_ips() -> dict[str, float]:
     """שליפת רשימת IP חסומים — לצורך ניטור."""
+    redis = await _get_redis_safe()
+    if redis is not None:
+        try:
+            # סריקת כל מפתחות חסימה ב-Redis
+            blocked: dict[str, float] = {}
+            cursor = "0"
+            while True:
+                cursor, keys = await redis.scan(
+                    cursor=cursor,
+                    match=f"{_REDIS_BLOCK_KEY_PREFIX}*",
+                    count=100,
+                )
+                for key in keys:
+                    ttl = await redis.ttl(key)
+                    if ttl > 0:
+                        ip = key.replace(_REDIS_BLOCK_KEY_PREFIX, "")
+                        blocked[ip] = float(ttl)
+                if cursor == "0" or cursor == 0:
+                    break
+            return blocked
+        except Exception as e:
+            logger.warning(
+                "כשלון בשליפת IP חסומים מ-Redis",
+                extra_data={"error": str(e)},
+            )
+
+    # Fallback — זיכרון מקומי
     now = time.time()
-    # ניקוי חסימות שפגו
     expired = [ip for ip, expiry in _blocked_ips.items() if now > expiry]
     for ip in expired:
         del _blocked_ips[ip]
@@ -233,6 +321,32 @@ def get_blocked_ips() -> dict[str, float]:
     }
 
 
-def get_failed_attempt_counts() -> dict[str, int]:
+async def get_failed_attempt_counts() -> dict[str, int]:
     """מספר ניסיונות כושלים לכל IP — לצורך ניטור."""
+    redis = await _get_redis_safe()
+    if redis is not None:
+        try:
+            counts: dict[str, int] = {}
+            cursor = "0"
+            while True:
+                cursor, keys = await redis.scan(
+                    cursor=cursor,
+                    match=f"{_REDIS_ATTEMPTS_KEY_PREFIX}*",
+                    count=100,
+                )
+                for key in keys:
+                    count = await redis.zcard(key)
+                    if count > 0:
+                        ip = key.replace(_REDIS_ATTEMPTS_KEY_PREFIX, "")
+                        counts[ip] = count
+                if cursor == "0" or cursor == 0:
+                    break
+            return counts
+        except Exception as e:
+            logger.warning(
+                "כשלון בשליפת ניסיונות כושלים מ-Redis",
+                extra_data={"error": str(e)},
+            )
+
+    # Fallback — זיכרון מקומי
     return {ip: len(attempts) for ip, attempts in _failed_attempts.items() if attempts}

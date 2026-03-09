@@ -537,7 +537,8 @@ class TestIPBlocking:
     """בדיקות חסימת IP אוטומטית"""
 
     @pytest.mark.unit
-    def test_ip_blocked_after_threshold(self):
+    @pytest.mark.asyncio
+    async def test_ip_blocked_after_threshold(self):
         """IP נחסם אחרי X ניסיונות כושלים"""
         from app.api.dependencies.webhook_signature import (
             _record_failed_attempt,
@@ -553,20 +554,23 @@ class TestIPBlocking:
         _blocked_ips.pop(test_ip, None)
 
         try:
-            assert _is_ip_blocked(test_ip) is False
+            # כופה fallback לזיכרון מקומי (בלי Redis)
+            with patch("app.api.dependencies.webhook_signature._get_redis_safe", new=AsyncMock(return_value=None)):
+                assert await _is_ip_blocked(test_ip) is False
 
-            # רישום ניסיונות כושלים עד לסף
-            for _ in range(settings.WEBHOOK_SIGNATURE_BLOCK_AFTER):
-                _record_failed_attempt(test_ip)
+                # רישום ניסיונות כושלים עד לסף
+                for _ in range(settings.WEBHOOK_SIGNATURE_BLOCK_AFTER):
+                    await _record_failed_attempt(test_ip)
 
-            assert _is_ip_blocked(test_ip) is True
+                assert await _is_ip_blocked(test_ip) is True
         finally:
             # ניקוי
             _failed_attempts.pop(test_ip, None)
             _blocked_ips.pop(test_ip, None)
 
     @pytest.mark.unit
-    def test_ip_unblocked_after_duration(self):
+    @pytest.mark.asyncio
+    async def test_ip_unblocked_after_duration(self):
         """IP משוחרר אחרי תקופת החסימה"""
         from app.api.dependencies.webhook_signature import (
             _is_ip_blocked,
@@ -584,14 +588,17 @@ class TestIPBlocking:
             # חסימה שפגה (timestamp בעבר)
             _blocked_ips[test_ip] = time.time() - 1
 
-            assert _is_ip_blocked(test_ip) is False
-            assert test_ip not in _blocked_ips  # נוקה אוטומטית
+            # כופה fallback לזיכרון מקומי (בלי Redis)
+            with patch("app.api.dependencies.webhook_signature._get_redis_safe", new=AsyncMock(return_value=None)):
+                assert await _is_ip_blocked(test_ip) is False
+                assert test_ip not in _blocked_ips  # נוקה אוטומטית
         finally:
             _failed_attempts.pop(test_ip, None)
             _blocked_ips.pop(test_ip, None)
 
     @pytest.mark.unit
-    def test_get_blocked_ips(self):
+    @pytest.mark.asyncio
+    async def test_get_blocked_ips(self):
         """שליפת רשימת IP חסומים"""
         from app.api.dependencies.webhook_signature import (
             get_blocked_ips,
@@ -611,9 +618,11 @@ class TestIPBlocking:
             _blocked_ips[test_ip1] = time.time() + 3600
             _blocked_ips[test_ip2] = time.time() - 10  # פגה
 
-            result = get_blocked_ips()
-            assert test_ip1 in result
-            assert test_ip2 not in result  # נוקה כי פגה
+            # כופה fallback לזיכרון מקומי (בלי Redis)
+            with patch("app.api.dependencies.webhook_signature._get_redis_safe", new=AsyncMock(return_value=None)):
+                result = await get_blocked_ips()
+                assert test_ip1 in result
+                assert test_ip2 not in result  # נוקה כי פגה
         finally:
             _blocked_ips.pop(test_ip1, None)
             _blocked_ips.pop(test_ip2, None)
@@ -649,7 +658,8 @@ class TestIPBlocking:
             assert ip == "203.0.113.5"  # סומך על X-Forwarded-For כי ה-proxy מהימן
 
     @pytest.mark.unit
-    def test_get_failed_attempt_counts(self):
+    @pytest.mark.asyncio
+    async def test_get_failed_attempt_counts(self):
         """שליפת מונה ניסיונות כושלים לכל IP"""
         from app.api.dependencies.webhook_signature import (
             get_failed_attempt_counts,
@@ -661,7 +671,9 @@ class TestIPBlocking:
 
         try:
             _failed_attempts[test_ip] = [time.time(), time.time()]
-            result = get_failed_attempt_counts()
-            assert result.get(test_ip) == 2
+            # כופה fallback לזיכרון מקומי (בלי Redis)
+            with patch("app.api.dependencies.webhook_signature._get_redis_safe", new=AsyncMock(return_value=None)):
+                result = await get_failed_attempt_counts()
+                assert result.get(test_ip) == 2
         finally:
             _failed_attempts.pop(test_ip, None)

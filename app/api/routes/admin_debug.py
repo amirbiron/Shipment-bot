@@ -341,8 +341,8 @@ async def get_blocked_ips_list(
         get_failed_attempt_counts,
     )
 
-    blocked = get_blocked_ips()
-    failed = get_failed_attempt_counts()
+    blocked = await get_blocked_ips()
+    failed = await get_failed_attempt_counts()
     return WebhookSecurityResponse(
         blocked_ips=[
             BlockedIpEntry(ip=ip, remaining_seconds=remaining)
