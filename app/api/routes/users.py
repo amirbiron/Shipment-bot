@@ -176,8 +176,11 @@ async def get_user_by_phone(
     db: AsyncSession = Depends(get_db),
 ):
     """חיפוש משתמש לפי מספר טלפון — מוגן למניעת enumeration"""
+    if not PhoneNumberValidator.validate(phone_number):
+        raise HTTPException(status_code=422, detail="מספר טלפון לא תקין")
+    normalized_phone = PhoneNumberValidator.normalize(phone_number)
     result = await db.execute(
-        select(User).where(User.phone_number == phone_number)
+        select(User).where(User.phone_number == normalized_phone)
     )
     user = result.scalar_one_or_none()
     if not user:
