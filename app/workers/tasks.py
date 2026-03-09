@@ -1544,9 +1544,21 @@ def auto_cancel_expired_deliveries() -> dict:
                 expiring = await delivery_service.get_expiring_deliveries(
                     warning_minutes=_settings.AUTO_CANCEL_WARNING_MINUTES
                 )
+                # חילוץ מזהים לערכי Python — מונע MissingGreenlet אחרי commit
+                expiring_ids = [d.id for d in expiring]
 
-                for delivery in expiring:
+                for delivery_id in expiring_ids:
                     try:
+                        # שליפה מחדש בכל איטרציה — מונע גישה ל-attributes שפגו
+                        delivery_result = await db.execute(
+                            select(Delivery).where(
+                                Delivery.id == delivery_id
+                            )
+                        )
+                        delivery = delivery_result.scalar_one_or_none()
+                        if not delivery:
+                            continue
+
                         await outbox_service.queue_expiry_warning(
                             delivery,
                             minutes_remaining=_settings.AUTO_CANCEL_WARNING_MINUTES,
@@ -1556,13 +1568,13 @@ def auto_cancel_expired_deliveries() -> dict:
                         warnings_sent += 1
                         logger.info(
                             "התראת תפוגה נשלחה לשולח",
-                            extra_data={"delivery_id": delivery.id},
+                            extra_data={"delivery_id": delivery_id},
                         )
                     except Exception as e:
                         logger.error(
                             "כשלון בשליחת התראת תפוגה",
                             extra_data={
-                                "delivery_id": delivery.id,
+                                "delivery_id": delivery_id,
                                 "error": str(e),
                             },
                             exc_info=True,
