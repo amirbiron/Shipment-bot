@@ -16,15 +16,20 @@ def _make_mock_request(client_ip: str = "127.0.0.1") -> MagicMock:
     return request
 
 
-# mock שמונע חסימת IP בבדיקות — _is_ip_blocked תמיד מחזיר False
-_no_ip_block = patch(
-    "app.api.dependencies.webhook_signature._is_ip_blocked",
-    new=AsyncMock(return_value=False),
-)
-_no_record_attempt = patch(
-    "app.api.dependencies.webhook_signature._record_failed_attempt",
-    new=AsyncMock(),
-)
+def _no_ip_block():
+    """mock שמונע חסימת IP בבדיקות — יוצר AsyncMock חדש בכל טסט למניעת דליפת state."""
+    return patch(
+        "app.api.dependencies.webhook_signature._is_ip_blocked",
+        new=AsyncMock(return_value=False),
+    )
+
+
+def _no_record_attempt():
+    """mock שמונע רישום ניסיון כושל — יוצר AsyncMock חדש בכל טסט."""
+    return patch(
+        "app.api.dependencies.webhook_signature._record_failed_attempt",
+        new=AsyncMock(),
+    )
 
 
 # ──────────────────────────────────────────────
@@ -48,7 +53,7 @@ class TestVerifyTelegramWebhookToken:
         """אם הטוקן מוגדר אבל הכותרת חסרה — 403."""
         from fastapi import HTTPException
         with patch.object(settings, "TELEGRAM_WEBHOOK_SECRET_TOKEN", "my-secret"), \
-             _no_ip_block, _no_record_attempt:
+             _no_ip_block(), _no_record_attempt():
             with pytest.raises(HTTPException) as exc_info:
                 await verify_telegram_webhook_token(_make_mock_request(), None)
             assert exc_info.value.status_code == 403
@@ -59,7 +64,7 @@ class TestVerifyTelegramWebhookToken:
         """אם הטוקן לא תואם — 403."""
         from fastapi import HTTPException
         with patch.object(settings, "TELEGRAM_WEBHOOK_SECRET_TOKEN", "my-secret"), \
-             _no_ip_block, _no_record_attempt:
+             _no_ip_block(), _no_record_attempt():
             with pytest.raises(HTTPException) as exc_info:
                 await verify_telegram_webhook_token(_make_mock_request(), "wrong-token")
             assert exc_info.value.status_code == 403
@@ -69,7 +74,7 @@ class TestVerifyTelegramWebhookToken:
     async def test_accepts_valid_token(self) -> None:
         """אם הטוקן תואם — עובר ללא שגיאה."""
         with patch.object(settings, "TELEGRAM_WEBHOOK_SECRET_TOKEN", "my-secret"), \
-             _no_ip_block:
+             _no_ip_block():
             await verify_telegram_webhook_token(_make_mock_request(), "my-secret")
 
 
@@ -96,7 +101,7 @@ class TestWebhookAuthIntegration:
     async def test_webhook_rejects_missing_token_when_configured(self, test_client) -> None:
         """כותרת חסרה + טוקן מוגדר → 403."""
         with patch.object(settings, "TELEGRAM_WEBHOOK_SECRET_TOKEN", "test-secret-abc"), \
-             _no_ip_block, _no_record_attempt:
+             _no_ip_block(), _no_record_attempt():
             resp = await test_client.post("/api/telegram/webhook", json=_VALID_UPDATE)
             assert resp.status_code == 403
 
@@ -104,7 +109,7 @@ class TestWebhookAuthIntegration:
     async def test_webhook_rejects_wrong_token(self, test_client) -> None:
         """כותרת שגויה + טוקן מוגדר → 403."""
         with patch.object(settings, "TELEGRAM_WEBHOOK_SECRET_TOKEN", "test-secret-abc"), \
-             _no_ip_block, _no_record_attempt:
+             _no_ip_block(), _no_record_attempt():
             resp = await test_client.post(
                 "/api/telegram/webhook",
                 json=_VALID_UPDATE,
@@ -116,7 +121,7 @@ class TestWebhookAuthIntegration:
     async def test_webhook_accepts_valid_token(self, test_client) -> None:
         """כותרת תואמת → 200."""
         with patch.object(settings, "TELEGRAM_WEBHOOK_SECRET_TOKEN", "test-secret-abc"), \
-             _no_ip_block:
+             _no_ip_block():
             resp = await test_client.post(
                 "/api/telegram/webhook",
                 json=_VALID_UPDATE,
