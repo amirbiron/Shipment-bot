@@ -20,6 +20,7 @@ from app.db.models.station_owner import StationOwner
 from app.db.models.station_wallet import StationWallet
 from app.db.models.audit_log import AuditLog, AuditActionType
 from app.domain.services.station_service import StationService
+from app.domain.services.audit_service import AuditService
 
 
 # ============================================================================
@@ -138,7 +139,7 @@ class TestAuditTrailRecording(TestAuditTrailBase):
         )
         assert success is True
 
-        entries, total = await service.get_audit_logs(station.id)
+        entries, total = await AuditService(db_session).get_audit_logs(station.id)
         assert total == 1
         assert entries[0].action == AuditActionType.OWNER_ADDED
         assert entries[0].actor_user_id == owner.id
@@ -157,7 +158,7 @@ class TestAuditTrailRecording(TestAuditTrailBase):
         )
         assert success is True
 
-        entries, total = await service.get_audit_logs(station.id)
+        entries, total = await AuditService(db_session).get_audit_logs(station.id)
         assert total == 1
         assert entries[0].action == AuditActionType.OWNER_REMOVED
         assert entries[0].target_user_id == second.id
@@ -178,7 +179,7 @@ class TestAuditTrailRecording(TestAuditTrailBase):
         )
         assert success is True
 
-        entries, total = await service.get_audit_logs(station.id)
+        entries, total = await AuditService(db_session).get_audit_logs(station.id)
         assert total == 1
         assert entries[0].action == AuditActionType.DISPATCHER_ADDED
         assert entries[0].details["target_name"] == "סדרן חדש"
@@ -202,7 +203,7 @@ class TestAuditTrailRecording(TestAuditTrailBase):
         )
         assert success is True
 
-        entries, _ = await service.get_audit_logs(
+        entries, _ = await AuditService(db_session).get_audit_logs(
             station.id, action=AuditActionType.DISPATCHER_REMOVED,
         )
         assert len(entries) == 1
@@ -226,7 +227,7 @@ class TestAuditTrailRecording(TestAuditTrailBase):
         )
         assert success is True
 
-        entries, total = await service.get_audit_logs(station.id)
+        entries, total = await AuditService(db_session).get_audit_logs(station.id)
         assert total == 1
         assert entries[0].action == AuditActionType.BLACKLIST_ADDED
         assert entries[0].target_user_id == courier.id
@@ -253,7 +254,7 @@ class TestAuditTrailRecording(TestAuditTrailBase):
         )
         assert success is True
 
-        entries, _ = await service.get_audit_logs(
+        entries, _ = await AuditService(db_session).get_audit_logs(
             station.id, action=AuditActionType.BLACKLIST_REMOVED,
         )
         assert len(entries) == 1
@@ -270,7 +271,7 @@ class TestAuditTrailRecording(TestAuditTrailBase):
         )
         assert success is True
 
-        entries, total = await service.get_audit_logs(station.id)
+        entries, total = await AuditService(db_session).get_audit_logs(station.id)
         assert total == 1
         assert entries[0].action == AuditActionType.COMMISSION_RATE_UPDATED
         assert entries[0].details["changes"]["commission_rate"]["new_value"] == "8%"
@@ -288,7 +289,7 @@ class TestAuditTrailRecording(TestAuditTrailBase):
         )
         assert success is True
 
-        entries, total = await service.get_audit_logs(station.id)
+        entries, total = await AuditService(db_session).get_audit_logs(station.id)
         assert total == 1
         assert entries[0].action == AuditActionType.STATION_SETTINGS_UPDATED
         assert "name" in entries[0].details["changes"]
@@ -307,7 +308,7 @@ class TestAuditTrailRecording(TestAuditTrailBase):
         )
         assert success is True
 
-        entries, total = await service.get_audit_logs(station.id)
+        entries, total = await AuditService(db_session).get_audit_logs(station.id)
         assert total == 0
         assert entries == []
 
@@ -329,7 +330,7 @@ class TestAuditTrailRecording(TestAuditTrailBase):
         assert success is False
         assert "אין הרשאה" in msg
 
-        entries, total = await service.get_audit_logs(station.id)
+        entries, total = await AuditService(db_session).get_audit_logs(station.id)
         assert total == 0
 
         wallet = await service.get_station_wallet(station.id)
@@ -348,7 +349,7 @@ class TestAuditTrailRecording(TestAuditTrailBase):
         )
         assert success is True
 
-        entries, total = await service.get_audit_logs(station.id)
+        entries, total = await AuditService(db_session).get_audit_logs(station.id)
         assert total == 1
         assert entries[0].action == AuditActionType.GROUP_SETTINGS_UPDATED
         assert entries[0].details["changes"]["public_group_chat_id"]["new_value"] == "-100123456"
@@ -369,7 +370,7 @@ class TestAuditTrailRecording(TestAuditTrailBase):
         )
         assert success is True
 
-        entries, total = await service.get_audit_logs(station.id)
+        entries, total = await AuditService(db_session).get_audit_logs(station.id)
         assert total == 1
         assert entries[0].action == AuditActionType.AUTO_BLOCK_SETTINGS_UPDATED
         assert entries[0].details["changes"]["auto_block_enabled"]["new_value"] is False
@@ -390,7 +391,7 @@ class TestAuditTrailRecording(TestAuditTrailBase):
             description="חיוב בדיקה",
         )
 
-        entries, total = await service.get_audit_logs(station.id)
+        entries, total = await AuditService(db_session).get_audit_logs(station.id)
         assert total == 1
         assert entries[0].action == AuditActionType.MANUAL_CHARGE_CREATED
         assert entries[0].actor_user_id == owner.id
@@ -414,7 +415,7 @@ class TestAuditTrailRecording(TestAuditTrailBase):
         )
         assert success is True
 
-        entries, total = await service.get_audit_logs(station.id)
+        entries, total = await AuditService(db_session).get_audit_logs(station.id)
         assert total == 0
 
 
@@ -440,7 +441,7 @@ class TestAuditTrailQuery(TestAuditTrailBase):
         await service.add_dispatcher(station.id, "+972507777777", actor_user_id=owner.id)
 
         # סינון רק הוספת סדרנים
-        entries, total = await service.get_audit_logs(
+        entries, total = await AuditService(db_session).get_audit_logs(
             station.id, action=AuditActionType.DISPATCHER_ADDED,
         )
         assert total == 1
@@ -460,7 +461,7 @@ class TestAuditTrailQuery(TestAuditTrailBase):
         await service.add_dispatcher(station.id, "+972502222222", actor_user_id=second.id)
 
         # סינון לפי בעלים שני
-        entries, total = await service.get_audit_logs(
+        entries, total = await AuditService(db_session).get_audit_logs(
             station.id, actor_user_id=second.id,
         )
         assert total == 1
@@ -479,14 +480,14 @@ class TestAuditTrailQuery(TestAuditTrailBase):
             await service.add_dispatcher(station.id, phone, actor_user_id=owner.id)
 
         # עמוד 1 — 3 רשומות
-        entries, total = await service.get_audit_logs(
+        entries, total = await AuditService(db_session).get_audit_logs(
             station.id, page=1, page_size=3,
         )
         assert total == 5
         assert len(entries) == 3
 
         # עמוד 2 — 2 רשומות
-        entries, total = await service.get_audit_logs(
+        entries, total = await AuditService(db_session).get_audit_logs(
             station.id, page=2, page_size=3,
         )
         assert total == 5
@@ -504,7 +505,7 @@ class TestAuditTrailQuery(TestAuditTrailBase):
         await user_factory(phone_number="+972507777777", name="שני")
         await service.add_dispatcher(station.id, "+972507777777", actor_user_id=owner.id)
 
-        entries, _ = await service.get_audit_logs(station.id)
+        entries, _ = await AuditService(db_session).get_audit_logs(station.id)
         # הרשומה השנייה (אחרונה ב-created_at) צריכה להיות ראשונה
         assert entries[0].created_at >= entries[1].created_at
 
@@ -514,7 +515,7 @@ class TestAuditTrailQuery(TestAuditTrailBase):
         owner, station = await self._create_station_with_owner(user_factory, db_session)
         service = StationService(db_session)
 
-        entries, total = await service.get_audit_logs(station.id)
+        entries, total = await AuditService(db_session).get_audit_logs(station.id)
         assert total == 0
         assert entries == []
 
@@ -539,7 +540,7 @@ class TestAuditTrailAtomicity(TestAuditTrailBase):
         )
         assert success is False
 
-        entries, total = await service.get_audit_logs(station.id)
+        entries, total = await AuditService(db_session).get_audit_logs(station.id)
         assert total == 0
 
     @pytest.mark.asyncio
@@ -554,7 +555,7 @@ class TestAuditTrailAtomicity(TestAuditTrailBase):
         )
         assert success is False
 
-        entries, total = await service.get_audit_logs(station.id)
+        entries, total = await AuditService(db_session).get_audit_logs(station.id)
         assert total == 0
 
     @pytest.mark.asyncio
@@ -570,7 +571,7 @@ class TestAuditTrailAtomicity(TestAuditTrailBase):
         )
         assert success is True
 
-        entries, total = await service.get_audit_logs(station.id)
+        entries, total = await AuditService(db_session).get_audit_logs(station.id)
         assert total == 0
 
     @pytest.mark.asyncio
@@ -586,7 +587,7 @@ class TestAuditTrailAtomicity(TestAuditTrailBase):
         )
         assert success is True
 
-        entries, total = await service.get_audit_logs(station.id)
+        entries, total = await AuditService(db_session).get_audit_logs(station.id)
         assert total == 0
 
     @pytest.mark.asyncio
@@ -611,7 +612,7 @@ class TestAuditTrailAtomicity(TestAuditTrailBase):
             actor_user_id=owner.id,
         )
 
-        entries, total = await service.get_audit_logs(
+        entries, total = await AuditService(db_session).get_audit_logs(
             station.id, action=AuditActionType.AUTO_BLOCK_SETTINGS_UPDATED,
         )
         # רק רשומה אחת מהעדכון הראשון

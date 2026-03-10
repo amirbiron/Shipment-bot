@@ -29,6 +29,14 @@ def upgrade() -> None:
     op.add_column("audit_logs", sa.Column("old_value", JSONB(), nullable=True))
     op.add_column("audit_logs", sa.Column("new_value", JSONB(), nullable=True))
 
+    # המרת details מ-JSON ל-JSONB לעקביות עם שאר העמודות
+    op.alter_column(
+        "audit_logs",
+        "details",
+        type_=JSONB(),
+        postgresql_using="details::jsonb",
+    )
+
     # אינדקסים
     op.create_index("ix_audit_logs_entity_type", "audit_logs", ["entity_type"])
     op.create_index(
@@ -42,6 +50,14 @@ def downgrade() -> None:
     """שחזור — הסרת שדות חדשים והחזרת station_id ל-NOT NULL"""
     op.drop_index("ix_audit_logs_entity", table_name="audit_logs")
     op.drop_index("ix_audit_logs_entity_type", table_name="audit_logs")
+
+    # החזרת details ל-JSON
+    op.alter_column(
+        "audit_logs",
+        "details",
+        type_=sa.JSON(),
+        postgresql_using="details::json",
+    )
 
     op.drop_column("audit_logs", "new_value")
     op.drop_column("audit_logs", "old_value")

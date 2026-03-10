@@ -20,7 +20,7 @@ from app.db.models.manual_charge import ManualCharge
 from app.db.models.delivery import Delivery, DeliveryStatus, ACTIVE_DELIVERY_STATUSES
 from app.db.models.user import User, UserRole
 from app.db.models.courier_wallet import CourierWallet
-from app.db.models.audit_log import AuditLog, AuditActionType
+from app.db.models.audit_log import AuditActionType
 from app.domain.services.audit_service import AuditService
 from app.core.logging import get_logger
 from app.core.validation import PhoneNumberValidator, TextSanitizer, OperatingHoursValidator, ServiceAreasValidator
@@ -55,27 +55,6 @@ class StationService:
         if not await self.is_owner_of_station(actor_user_id, station_id):
             return False, "אין הרשאה לבצע פעולה זו — רק בעלים פעיל בתחנה."
         return True, ""
-
-    async def get_audit_logs(
-        self,
-        station_id: int,
-        action: AuditActionType | None = None,
-        actor_user_id: int | None = None,
-        date_from: datetime | None = None,
-        date_to: datetime | None = None,
-        page: int = 1,
-        page_size: int = 20,
-    ) -> tuple[list[AuditLog], int]:
-        """קבלת לוג ביקורת עם סינון ו-pagination — מאציל ל-AuditService."""
-        return await self.audit_service.get_audit_logs(
-            station_id=station_id,
-            action=action,
-            actor_user_id=actor_user_id,
-            date_from=date_from,
-            date_to=date_to,
-            page=page,
-            page_size=page_size,
-        )
 
     async def get_or_create_user_by_phone(
         self,

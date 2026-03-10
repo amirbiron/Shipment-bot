@@ -11,6 +11,9 @@ ALTER TABLE audit_logs
     ADD COLUMN IF NOT EXISTS old_value JSONB,
     ADD COLUMN IF NOT EXISTS new_value JSONB;
 
+-- המרת details מ-JSON ל-JSONB לעקביות עם שאר העמודות
+ALTER TABLE audit_logs ALTER COLUMN details TYPE JSONB USING details::jsonb;
+
 -- אינדקסים לחיפוש לפי ישות
 CREATE INDEX IF NOT EXISTS ix_audit_logs_entity_type ON audit_logs(entity_type);
 CREATE INDEX IF NOT EXISTS ix_audit_logs_entity ON audit_logs(entity_type, entity_id, created_at DESC);
