@@ -588,6 +588,40 @@ async def run_migration_013(conn: AsyncConnection) -> None:
     """))
 
 
+async def run_migration_014(conn: AsyncConnection) -> None:
+    """מיגרציה 014 — הרחבת טבלת audit_logs למערכת audit מקיפה.
+
+    שינויים:
+    - station_id הופך ל-nullable (פעולות שלא קשורות לתחנה: אישור שליח, ארנק)
+    - הוספת שדות entity_type, entity_id לזיהוי הישות שהשתנתה
+    - הוספת שדות old_value, new_value למעקב שינויים מפורט
+    - אינדקס מורכב על (entity_type, entity_id, created_at)
+    """
+    # הפיכת station_id ל-nullable — פעולות כמו אישור שליח לא קשורות לתחנה
+    await conn.execute(text("""
+        ALTER TABLE audit_logs ALTER COLUMN station_id DROP NOT NULL;
+    """))
+
+    # הוספת עמודות חדשות
+    await conn.execute(text("""
+        ALTER TABLE audit_logs
+            ADD COLUMN IF NOT EXISTS entity_type VARCHAR(50),
+            ADD COLUMN IF NOT EXISTS entity_id INTEGER,
+            ADD COLUMN IF NOT EXISTS old_value JSONB,
+            ADD COLUMN IF NOT EXISTS new_value JSONB;
+    """))
+
+    # אינדקס לחיפוש לפי ישות
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS ix_audit_logs_entity_type
+        ON audit_logs(entity_type);
+    """))
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS ix_audit_logs_entity
+        ON audit_logs(entity_type, entity_id, created_at DESC);
+    """))
+
+
 async def run_all_migrations(conn: AsyncConnection) -> None:
     """הרצת כל המיגרציות ברצף (ללא ALTER TYPE — ראה add_enum_values)."""
     logger.info("Running migration 001...")
@@ -616,3 +650,5 @@ async def run_all_migrations(conn: AsyncConnection) -> None:
     await run_migration_012(conn)
     logger.info("Running migration 013...")
     await run_migration_013(conn)
+    logger.info("Running migration 014...")
+    await run_migration_014(conn)

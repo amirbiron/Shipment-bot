@@ -9,6 +9,8 @@ from sqlalchemy import select
 
 from app.db.models.courier_wallet import CourierWallet
 from app.db.models.wallet_ledger import WalletLedger, LedgerEntryType
+from app.db.models.audit_log import AuditActionType
+from app.domain.services.audit_service import AuditService
 from app.core.config import settings
 from app.core.logging import get_logger
 
@@ -20,6 +22,7 @@ class WalletService:
 
     def __init__(self, db: AsyncSession):
         self.db = db
+        self.audit_service = AuditService(db)
 
     async def get_or_create_wallet(
         self, courier_id: int, for_update: bool = False
@@ -121,6 +124,16 @@ class WalletService:
         )
         self.db.add(ledger_entry)
 
+        # רישום חיוב ארנק בלוג ביקורת
+        await self.audit_service.record_wallet_operation(
+            actor_user_id=courier_id,
+            courier_id=courier_id,
+            action=AuditActionType.WALLET_DEBIT,
+            amount=str(-fee_decimal),
+            balance_after=str(new_balance),
+            delivery_id=delivery_id,
+        )
+
         return ledger_entry
 
     async def credit_for_delivery(
@@ -149,6 +162,16 @@ class WalletService:
             description=f"תשלום עבור משלוח #{delivery_id}"
         )
         self.db.add(ledger_entry)
+
+        # רישום זיכוי ארנק בלוג ביקורת
+        await self.audit_service.record_wallet_operation(
+            actor_user_id=courier_id,
+            courier_id=courier_id,
+            action=AuditActionType.WALLET_CREDIT,
+            amount=str(amount_decimal),
+            balance_after=str(new_balance),
+            delivery_id=delivery_id,
+        )
 
         if auto_commit:
             await self.db.commit()

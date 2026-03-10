@@ -10,6 +10,8 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.db.models.delivery import Delivery, DeliveryStatus
 from app.domain.services.outbox_service import OutboxService
+from app.domain.services.audit_service import AuditService
+from app.db.models.audit_log import AuditActionType
 from app.domain.services.alert_service import (
     publish_delivery_created,
     publish_delivery_delivered,
@@ -27,6 +29,7 @@ class DeliveryService:
     def __init__(self, db: AsyncSession):
         self.db = db
         self.outbox_service = OutboxService(db)
+        self.audit_service = AuditService(db)
 
     async def create_delivery(
         self,
@@ -174,6 +177,7 @@ class DeliveryService:
             return None
 
         try:
+            old_status = delivery.status.value
             delivery.status = DeliveryStatus.DELIVERED
             delivery.delivered_at = datetime.utcnow()
 
@@ -195,6 +199,16 @@ class DeliveryService:
                         "fee": delivery.fee,
                     }
                 )
+
+            # רישום שינוי סטטוס בלוג ביקורת
+            actor_id = delivery.courier_id or delivery.sender_id
+            await self.audit_service.record_delivery_status_change(
+                actor_user_id=actor_id,
+                delivery_id=delivery.id,
+                old_status=old_status,
+                new_status=DeliveryStatus.DELIVERED.value,
+                station_id=delivery.station_id,
+            )
 
             await self.db.commit()
             await self.db.refresh(delivery)
@@ -239,7 +253,19 @@ class DeliveryService:
         """Cancel a delivery"""
         delivery = await self.get_delivery(delivery_id)
         if delivery and delivery.status == DeliveryStatus.OPEN:
+            old_status = delivery.status.value
             delivery.status = DeliveryStatus.CANCELLED
+
+            # רישום ביטול בלוג ביקורת
+            await self.audit_service.record_delivery_status_change(
+                actor_user_id=delivery.sender_id,
+                delivery_id=delivery.id,
+                old_status=old_status,
+                new_status=DeliveryStatus.CANCELLED.value,
+                station_id=delivery.station_id,
+                details={"reason": "ביטול ידני"},
+            )
+
             await self.db.commit()
             await self.db.refresh(delivery)
 
@@ -321,6 +347,7 @@ class DeliveryService:
         if delivery.status not in valid_statuses:
             return None
 
+        old_status = delivery.status.value
         delivery.status = DeliveryStatus.CANCELLED
         delivery.updated_at = datetime.utcnow()
 
@@ -329,6 +356,16 @@ class DeliveryService:
 
         # הודעה לשולח דרך outbox
         await self.outbox_service.queue_auto_cancel_notification(delivery)
+
+        # רישום ביטול אוטומטי בלוג ביקורת
+        await self.audit_service.record_delivery_status_change(
+            actor_user_id=delivery.sender_id,
+            delivery_id=delivery.id,
+            old_status=old_status,
+            new_status=DeliveryStatus.CANCELLED.value,
+            station_id=delivery.station_id,
+            details={"reason": "ביטול אוטומטי — פג תוקף"},
+        )
 
         await self.db.commit()
         await self.db.refresh(delivery, attribute_names=["id", "status", "station_id"])
