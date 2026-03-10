@@ -96,7 +96,7 @@ class AuditService:
             action=action,
             target_user_id=target_user_id,
             entity_type="user",
-            entity_id=int(target_user_id),
+            entity_id=target_user_id,
             old_value={"approval_status": old_status} if old_status else None,
             new_value={"approval_status": new_status} if new_status else None,
             details=details,
@@ -120,7 +120,7 @@ class AuditService:
             station_id=station_id,
             target_user_id=courier_id,
             entity_type="wallet",
-            entity_id=int(courier_id),
+            entity_id=courier_id,
             new_value={"amount": amount, "balance_after": balance_after},
             details={
                 **(details or {}),

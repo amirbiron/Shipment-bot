@@ -24,7 +24,7 @@ def upgrade() -> None:
 
     # שדות חדשים
     op.add_column("audit_logs", sa.Column("entity_type", sa.String(50), nullable=True))
-    op.add_column("audit_logs", sa.Column("entity_id", sa.Integer(), nullable=True))
+    op.add_column("audit_logs", sa.Column("entity_id", sa.BigInteger(), nullable=True))
     op.add_column("audit_logs", sa.Column("old_value", sa.JSON(), nullable=True))
     op.add_column("audit_logs", sa.Column("new_value", sa.JSON(), nullable=True))
 

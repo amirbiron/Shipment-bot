@@ -7,7 +7,7 @@ ALTER TABLE audit_logs ALTER COLUMN station_id DROP NOT NULL;
 -- שדות חדשים לזיהוי ישות ומעקב שינויים
 ALTER TABLE audit_logs
     ADD COLUMN IF NOT EXISTS entity_type VARCHAR(50),
-    ADD COLUMN IF NOT EXISTS entity_id INTEGER,
+    ADD COLUMN IF NOT EXISTS entity_id BIGINT,
     ADD COLUMN IF NOT EXISTS old_value JSONB,
     ADD COLUMN IF NOT EXISTS new_value JSONB;
 

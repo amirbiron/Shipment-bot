@@ -57,7 +57,8 @@ class AuditLog(Base):
     # סוג הישות שהפעולה בוצעה עליה (delivery, wallet, user, station)
     entity_type = Column(String(50), nullable=True, index=True)
     # מזהה הישות (delivery_id, wallet_id, user_id, station_id)
-    entity_id = Column(Integer, nullable=True)
+    # BigInteger כי עשוי לאחסן Telegram user IDs שחורגים מטווח int32
+    entity_id = Column(BigInteger, nullable=True)
 
     # ערכים לפני ואחרי השינוי — לשחזור ומעקב
     old_value = Column(JSON, nullable=True)

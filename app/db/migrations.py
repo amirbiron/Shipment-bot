@@ -606,7 +606,7 @@ async def run_migration_014(conn: AsyncConnection) -> None:
     await conn.execute(text("""
         ALTER TABLE audit_logs
             ADD COLUMN IF NOT EXISTS entity_type VARCHAR(50),
-            ADD COLUMN IF NOT EXISTS entity_id INTEGER,
+            ADD COLUMN IF NOT EXISTS entity_id BIGINT,
             ADD COLUMN IF NOT EXISTS old_value JSONB,
             ADD COLUMN IF NOT EXISTS new_value JSONB;
     """))
