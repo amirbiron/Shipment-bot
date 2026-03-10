@@ -1,7 +1,8 @@
 """
-לוג ביקורת — צפייה בפעולות מנהלתיות שבוצעו בתחנה
+לוג ביקורת — צפייה בפעולות רגישות שבוצעו במערכת
 
 מאפשר לבעלי תחנה לצפות ב"מי שינה מה מ-X ל-Y" — חיוני לתחנות עם מספר בעלים.
+תומך בסינון לפי סוג פעולה, ישות, משתמש מבצע, וטווח תאריכים.
 """
 from typing import Optional
 
@@ -17,7 +18,7 @@ from app.api.routes.panel.schemas import parse_date_param
 from app.db.database import get_db
 from app.db.models.audit_log import AuditActionType
 from app.db.models.user import User
-from app.domain.services.station_service import StationService
+from app.domain.services.audit_service import AuditService
 
 logger = get_logger(__name__)
 
@@ -40,6 +41,12 @@ ACTION_LABELS: dict[str, str] = {
     AuditActionType.GROUP_SETTINGS_UPDATED.value: "עדכון הגדרות קבוצות",
     AuditActionType.AUTO_BLOCK_SETTINGS_UPDATED.value: "עדכון חסימה אוטומטית",
     AuditActionType.MANUAL_CHARGE_CREATED.value: "יצירת חיוב ידני",
+    AuditActionType.COURIER_APPROVED.value: "אישור שליח",
+    AuditActionType.COURIER_REJECTED.value: "דחיית שליח",
+    AuditActionType.COURIER_BLOCKED.value: "חסימת שליח",
+    AuditActionType.DELIVERY_STATUS_CHANGED.value: "שינוי סטטוס משלוח",
+    AuditActionType.WALLET_DEBIT.value: "חיוב ארנק",
+    AuditActionType.WALLET_CREDIT.value: "זיכוי ארנק",
 }
 
 
@@ -52,6 +59,10 @@ class AuditLogItemResponse(BaseModel):
     actor_name: str
     target_user_id: Optional[int] = None
     target_name: Optional[str] = None
+    entity_type: Optional[str] = None
+    entity_id: Optional[int] = None
+    old_value: Optional[dict] = None
+    new_value: Optional[dict] = None
     details: Optional[dict] = None
     created_at: str
 
@@ -79,9 +90,9 @@ class AuditActionTypeResponse(BaseModel):
     response_model=PaginatedAuditLogResponse,
     summary="לוג ביקורת",
     description=(
-        "מחזיר את לוג הביקורת של התחנה — רשימת פעולות מנהלתיות עם פרטי "
+        "מחזיר את לוג הביקורת של התחנה — רשימת פעולות רגישות עם פרטי "
         "השינוי: מי ביצע, מה שונה, מ-X ל-Y. "
-        "תומך בסינון לפי סוג פעולה, משתמש מבצע, וטווח תאריכים."
+        "תומך בסינון לפי סוג פעולה, ישות, משתמש מבצע, וטווח תאריכים."
     ),
     responses={
         200: {"description": "לוג ביקורת"},
@@ -92,6 +103,7 @@ class AuditActionTypeResponse(BaseModel):
 async def get_audit_log(
     action: Optional[str] = Query(None, description="סוג פעולה לסינון"),
     actor_user_id: Optional[int] = Query(None, description="מזהה משתמש מבצע"),
+    entity_type: Optional[str] = Query(None, description="סוג ישות (delivery, wallet, user, station)"),
     date_from: Optional[str] = Query(None, description="מתאריך (YYYY-MM-DD)"),
     date_to: Optional[str] = Query(None, description="עד תאריך (YYYY-MM-DD)"),
     page: int = Query(1, ge=1, description="מספר עמוד"),
@@ -100,7 +112,7 @@ async def get_audit_log(
     db: AsyncSession = Depends(get_db),
 ) -> PaginatedAuditLogResponse:
     """שליפת לוג ביקורת עם סינון ו-pagination"""
-    station_service = StationService(db)
+    audit_service = AuditService(db)
 
     # ולידציית סוג פעולה
     action_filter: AuditActionType | None = None
@@ -117,10 +129,11 @@ async def get_audit_log(
     dt_from = parse_date_param(date_from, "date_from")
     dt_to = parse_date_param(date_to, "date_to", end_of_day=True)
 
-    entries, total = await station_service.get_audit_logs(
+    entries, total = await audit_service.get_audit_logs(
         station_id=auth.station_id,
         action=action_filter,
         actor_user_id=actor_user_id,
+        entity_type=entity_type,
         date_from=dt_from,
         date_to=dt_to,
         page=page,
@@ -173,6 +186,10 @@ async def get_audit_log(
             actor_name=actor_name,
             target_user_id=entry.target_user_id,
             target_name=target_name,
+            entity_type=entry.entity_type,
+            entity_id=entry.entity_id,
+            old_value=entry.old_value,
+            new_value=entry.new_value,
             details=entry.details,
             created_at=entry.created_at.isoformat() if entry.created_at else "",
         ))
