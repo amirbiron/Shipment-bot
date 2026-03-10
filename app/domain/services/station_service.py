@@ -66,51 +66,16 @@ class StationService:
         page: int = 1,
         page_size: int = 20,
     ) -> tuple[list[AuditLog], int]:
-        """קבלת לוג ביקורת עם סינון ו-pagination.
-
-        Args:
-            station_id: מזהה התחנה
-            action: סינון לפי סוג פעולה
-            actor_user_id: סינון לפי משתמש מבצע
-            date_from: מתאריך
-            date_to: עד תאריך
-            page: עמוד (1-based)
-            page_size: גודל עמוד
-
-        Returns:
-            (רשימת רשומות, סה"כ רשומות)
-        """
-        from sqlalchemy import func
-
-        base_where = [AuditLog.station_id == station_id]
-
-        if action is not None:
-            base_where.append(AuditLog.action == action)
-        if actor_user_id is not None:
-            base_where.append(AuditLog.actor_user_id == actor_user_id)
-        if date_from is not None:
-            base_where.append(AuditLog.created_at >= date_from)
-        if date_to is not None:
-            base_where.append(AuditLog.created_at <= date_to)
-
-        # ספירה
-        count_result = await self.db.execute(
-            select(func.count(AuditLog.id)).where(*base_where)
+        """קבלת לוג ביקורת עם סינון ו-pagination — מאציל ל-AuditService."""
+        return await self.audit_service.get_audit_logs(
+            station_id=station_id,
+            action=action,
+            actor_user_id=actor_user_id,
+            date_from=date_from,
+            date_to=date_to,
+            page=page,
+            page_size=page_size,
         )
-        total = count_result.scalar() or 0
-
-        # שליפה
-        offset = (page - 1) * page_size
-        result = await self.db.execute(
-            select(AuditLog)
-            .where(*base_where)
-            .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
-            .offset(offset)
-            .limit(page_size)
-        )
-        entries = list(result.scalars().all())
-
-        return entries, total
 
     async def get_or_create_user_by_phone(
         self,

@@ -7,6 +7,7 @@ Audit Log Model — לוג ביקורת לפעולות רגישות במערכת
 import enum
 from datetime import datetime
 from sqlalchemy import BigInteger, Column, DateTime, Enum as SQLEnum, ForeignKey, Index, Integer, String
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.types import JSON
 
 from app.db.database import Base
@@ -61,11 +62,12 @@ class AuditLog(Base):
     entity_id = Column(BigInteger, nullable=True)
 
     # ערכים לפני ואחרי השינוי — לשחזור ומעקב
-    old_value = Column(JSON, nullable=True)
-    new_value = Column(JSON, nullable=True)
+    # JSONB בפוסטגרס (אינדוקס + השוואות), JSON ב-SQLite לבדיקות
+    old_value = Column(JSON().with_variant(JSONB(), "postgresql"), nullable=True)
+    new_value = Column(JSON().with_variant(JSONB(), "postgresql"), nullable=True)
 
     # פרטי השינוי בפורמט JSON — "מה שונה מ-X ל-Y" (תואמות לאחור)
-    details = Column(JSON, nullable=True)
+    details = Column(JSON().with_variant(JSONB(), "postgresql"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
 
     __table_args__ = (

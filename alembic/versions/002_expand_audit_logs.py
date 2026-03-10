@@ -8,6 +8,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import JSONB
 
 
 # revision identifiers, used by Alembic.
@@ -25,8 +26,8 @@ def upgrade() -> None:
     # שדות חדשים
     op.add_column("audit_logs", sa.Column("entity_type", sa.String(50), nullable=True))
     op.add_column("audit_logs", sa.Column("entity_id", sa.BigInteger(), nullable=True))
-    op.add_column("audit_logs", sa.Column("old_value", sa.JSON(), nullable=True))
-    op.add_column("audit_logs", sa.Column("new_value", sa.JSON(), nullable=True))
+    op.add_column("audit_logs", sa.Column("old_value", JSONB(), nullable=True))
+    op.add_column("audit_logs", sa.Column("new_value", JSONB(), nullable=True))
 
     # אינדקסים
     op.create_index("ix_audit_logs_entity_type", "audit_logs", ["entity_type"])
