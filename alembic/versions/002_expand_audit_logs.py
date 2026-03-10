@@ -47,4 +47,7 @@ def downgrade() -> None:
     op.drop_column("audit_logs", "entity_id")
     op.drop_column("audit_logs", "entity_type")
 
+    # מחיקת רשומות ללא station_id לפני החזרת NOT NULL — רשומות אלה נוצרו
+    # רק אחרי ה-upgrade (אישור שליח, ארנק) ואין להן משמעות בסכמה הישנה
+    op.execute("DELETE FROM audit_logs WHERE station_id IS NULL")
     op.alter_column("audit_logs", "station_id", nullable=False)
