@@ -141,7 +141,7 @@ class AuditService:
                 AuditLog.entity_type == entity_type,
                 AuditLog.entity_id == entity_id,
             )
-            .order_by(AuditLog.created_at.desc())
+            .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
             .limit(limit)
         )
         return list(result.scalars().all())
@@ -181,7 +181,7 @@ class AuditService:
         # שליפה עם pagination
         query = (
             select(AuditLog)
-            .order_by(AuditLog.created_at.desc())
+            .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
             .offset((page - 1) * page_size)
             .limit(page_size)
         )
