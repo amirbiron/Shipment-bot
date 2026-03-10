@@ -621,6 +621,12 @@ async def run_migration_014(conn: AsyncConnection) -> None:
         ON audit_logs(entity_type, entity_id, created_at DESC);
     """))
 
+    # המרת details מ-JSON ל-JSONB לעקביות עם שאר העמודות
+    await conn.execute(text("""
+        ALTER TABLE audit_logs
+            ALTER COLUMN details TYPE JSONB USING details::jsonb;
+    """))
+
 
 async def run_all_migrations(conn: AsyncConnection) -> None:
     """הרצת כל המיגרציות ברצף (ללא ALTER TYPE — ראה add_enum_values)."""
