@@ -1,21 +1,21 @@
-# איך לבנות בוט WhatsApp לשליחויות — ארכיטקטורה שעובדת בפרודקשן
+# איך לבנות בוט WhatsApp שעובד כמו מוצר אמיתי
 
-> פוסט טכני מבוסס על מערכת שליחויות אמיתית שרצה בפרודקשן עם FastAPI, PostgreSQL, Celery ו-Redis.
-
----
-
-## למה בוט WhatsApp ולא אפליקציה?
-
-כשבונים מערכת שליחויות, האתגר הראשון הוא אימוץ משתמשים. אפליקציה דורשת הורדה, הרשמה, ולמידה של ממשק חדש. בוט WhatsApp? המשתמש כבר שם. הוא שולח הודעה ומתחיל לעבוד.
-
-המערכת שלנו מנהלת את כל מחזור החיים של משלוח — משולח שיוצר הזמנה, דרך סדרן שמאשר, ועד שליח שאוסף ומוסר. הכל דרך שיחת WhatsApp.
+> הלקחים, הדפוסים והמלכודות מבניית בוט WhatsApp שרץ בפרודקשן — עם דוגמאות קוד ב-Python ו-FastAPI.
 
 ---
 
-## ארכיטקטורה כללית
+## למה בוט WhatsApp?
+
+אפליקציה דורשת הורדה, הרשמה, ולמידה של ממשק חדש. בוט WhatsApp? המשתמש כבר שם. הוא שולח הודעה ומתחיל לעבוד. אין חיכוך, אין התקנה, אין onboarding.
+
+אבל "בוט פשוט שמגיב להודעות" ו"מוצר שרץ בפרודקשן" הם שני דברים שונים לגמרי. הפוסט הזה מכסה את הפער ביניהם.
+
+---
+
+## הארכיטקטורה — מבט על
 
 ```
-WhatsApp Cloud API / WPPConnect
+WhatsApp API (Cloud / Gateway)
          │
          ▼
    Webhook Handler (FastAPI)
@@ -31,19 +31,17 @@ WhatsApp Cloud API / WPPConnect
    (נתונים)        (משימות רקע)
 ```
 
-הרעיון המרכזי: ה-webhook מקבל הודעה, ה-State Machine מחליט מה לעשות איתה, השירותים מבצעים את הלוגיקה, וההודעות החוזרות נשלחות באופן אסינכרוני דרך Celery.
+ה-webhook מקבל הודעה, ה-State Machine מחליט באיזה שלב של השיחה נמצא המשתמש, השירותים מבצעים את הלוגיקה, וההודעות החוזרות נשלחות אסינכרונית. פשוט ברעיון, מורכב בביצוע.
 
 ---
 
-## שכבה 1: קבלת הודעות — Webhook Handler
+## 1. קבלת הודעות — Webhook Handler
 
-### מבנה הנתיב
+### הבעיה הראשונה: WhatsApp לא מחכה
+
+WhatsApp מצפה לתגובת 200 תוך 15 שניות. אם לא — הוא שולח שוב. ושוב. לכן הכלל הראשון:
 
 ```python
-from fastapi import APIRouter, Depends, BackgroundTasks, Request
-
-router = APIRouter()
-
 @router.post("/webhook")
 async def whatsapp_webhook(
     request: Request,
@@ -51,295 +49,237 @@ async def whatsapp_webhook(
     db: AsyncSession = Depends(get_db),
 ):
     payload = await request.json()
-    message = parse_whatsapp_payload(payload)
+    message = parse_payload(payload)
 
-    # עיבוד ב-background — מחזירים 200 מיד
+    # מחזירים 200 מיד, מעבדים ברקע
     background_tasks.add_task(process_message, db, message)
     return {"status": "ok"}
 ```
 
-**למה `background_tasks`?** WhatsApp דורש תגובה מהירה (תוך 15 שניות). אם העיבוד ארוך — ה-webhook ייכשל ו-WhatsApp ישלח שוב. לכן מחזירים 200 מיד ומעבדים ברקע.
+> **מלכודת:** לעולם לא `asyncio.create_task()` בתוך webhook. הוא בולע exceptions בשקט ואי אפשר לדעת שמשהו נכשל. תמיד `background_tasks.add_task()` של FastAPI.
 
-> **חשוב:** לעולם לא `asyncio.create_task()` — הוא בולע exceptions בשקט. תמיד `background_tasks.add_task()` של FastAPI.
+### מניעת כפילויות — Idempotency
 
-### Idempotency — מניעת כפילויות
-
-WhatsApp שולח את אותה הודעה כמה פעמים (retry). בלי הגנה, המשתמש יראה תגובה כפולה.
+WhatsApp שולח retries. בלי הגנה, המשתמש יקבל תגובה כפולה. הפתרון: טבלת `webhook_events` ב-DB עם INSERT אופטימיסטי:
 
 ```python
-async def _try_acquire_message(db: AsyncSession, message_id: str, platform: str) -> bool:
-    """
-    ניסיון אופטימיסטי לרכוש הודעה לעיבוד.
-    מחזיר True אם ההודעה חדשה, False אם כפולה.
-    """
+async def _try_acquire_message(db: AsyncSession, message_id: str) -> bool:
+    """מחזיר True אם ההודעה חדשה, False אם כפולה"""
     try:
-        async with db.begin_nested():  # savepoint
+        async with db.begin_nested():
             db.add(WebhookEvent(
                 message_id=message_id,
-                platform=platform,
                 status="processing",
             ))
         await db.commit()
-        return True
+        return True  # הודעה חדשה — מעבדים
     except IntegrityError:
         pass  # הודעה כבר קיימת
 
-    # בדיקה: אם ההודעה תקועה ב-processing יותר מ-2 דקות — מאפשרים retry
+    # בדיקה: אולי ההודעה תקועה ב-processing (הסשן קרס)?
     row = await db.execute(
-        select(WebhookEvent.status, WebhookEvent.created_at)
-        .where(WebhookEvent.message_id == message_id)
+        select(WebhookEvent).where(WebhookEvent.message_id == message_id)
     )
-    # ...
+    event = row.scalar_one_or_none()
+    if event and event.status == "completed":
+        return False  # כבר טופלה — דילוג
+
+    # תקועה יותר מ-2 דקות? מאפשרים retry
+    if (now() - event.created_at).seconds > 120:
+        return True
+    return False
 ```
 
-**הדפוס:** INSERT אופטימיסטי → IntegrityError = כפילות → בדיקת staleness.
-אם ההודעה תקועה ב-"processing" יותר מ-120 שניות, מאפשרים retry (הסשן הקודם כנראה קרס).
+**למה DB ולא cache?** כי cache נעלם בריסטארט, לא משותף בין workers, ולא שורד כשלונות. DB נותן idempotency אמיתי.
+
+### אימות חתימה — לוודא שההודעה מ-WhatsApp
+
+```python
+def verify_signature(request: Request, body: bytes) -> bool:
+    """HMAC-SHA256 — מוודא שה-webhook הגיע מ-Meta"""
+    signature = request.headers.get("X-Hub-Signature-256", "")
+    expected = hmac.new(
+        settings.APP_SECRET.encode(),
+        body,
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(f"sha256={expected}", signature)
+```
+
+בלי אימות, כל אחד יכול לשלוח בקשות ל-webhook שלכם ולגרום לבוט לבצע פעולות.
 
 ---
 
-## שכבה 2: מנוע שיחה — State Machine
+## 2. מנוע השיחה — State Machine
 
-הלב של הבוט. כל משתמש נמצא ב-**state** מסוים, וכל הודעה שהוא שולח גורמת ל-**מעבר** ל-state הבא.
+הלב של כל בוט שעושה יותר מלענות על שאלות. כל משתמש נמצא ב-**state** — ה-state קובע מה קורה עם ההודעה הבאה.
 
-### הגדרת States כ-Enum
+### הגדרת States
 
 ```python
-class SenderState(str, Enum):
+class UserState(str, Enum):
     INITIAL = "INITIAL"
-    NEW = "SENDER.NEW"
-    REGISTER_COLLECT_NAME = "SENDER.REGISTER.COLLECT_NAME"
-    REGISTER_COLLECT_PHONE = "SENDER.REGISTER.COLLECT_PHONE"
-    MENU = "SENDER.MENU"
-    PICKUP_CITY = "SENDER.DELIVERY.PICKUP_CITY"
-    PICKUP_STREET = "SENDER.DELIVERY.PICKUP_STREET"
-    # ... המשך הזרימה
-    DELIVERY_CONFIRM = "SENDER.DELIVERY.CONFIRM"
+    NEW = "USER.NEW"
+
+    # רישום
+    REGISTER_NAME = "USER.REGISTER.NAME"
+    REGISTER_PHONE = "USER.REGISTER.PHONE"
+
+    # תפריט ראשי
+    MENU = "USER.MENU"
+
+    # טופס מרובה שלבים
+    FORM_STEP_1 = "USER.FORM.STEP_1"
+    FORM_STEP_2 = "USER.FORM.STEP_2"
+    FORM_STEP_3 = "USER.FORM.STEP_3"
+    FORM_CONFIRM = "USER.FORM.CONFIRM"
 ```
 
-**למה `str, Enum`?** כי ה-state נשמר ב-DB כמחרוזת. `str, Enum` מאפשר השוואה ישירה: `state == "SENDER.MENU"`.
+**למה `str, Enum`?** ה-state נשמר ב-DB כמחרוזת. `str, Enum` מאפשר השוואה ישירה (`state == "USER.MENU"`) וגם type safety.
 
-**קונבנציית שמות:** prefix לפי תפקיד (`SENDER.`, `COURIER.`, `DISPATCHER.`), ואז הזרימה (`DELIVERY.`, `REGISTER.`). זה מאפשר guard functions שבודקות `state.startswith("DISPATCHER.")`.
+**קונבנציית שמות:** prefix לפי תפקיד (`USER.`, `ADMIN.`), ואז הזרימה (`REGISTER.`, `FORM.`). זה מאפשר guard functions שבודקות `state.startswith("USER.FORM.")` — לדעת בקלות אם המשתמש באמצע טופס.
 
-### מפת מעברים
+### מפת מעברים — מה מותר
 
 ```python
-SENDER_TRANSITIONS = {
-    SenderState.INITIAL: [
-        SenderState.NEW,
-        SenderState.REGISTER_COLLECT_NAME,
-        SenderState.MENU,
-    ],
-    SenderState.MENU: [
-        SenderState.PICKUP_CITY,
-        SenderState.VIEW_DELIVERIES,
-    ],
-    SenderState.PICKUP_CITY: [SenderState.PICKUP_STREET],
-    SenderState.PICKUP_STREET: [SenderState.PICKUP_NUMBER],
-    # ...
+TRANSITIONS = {
+    UserState.INITIAL: [UserState.NEW, UserState.REGISTER_NAME, UserState.MENU],
+    UserState.REGISTER_NAME: [UserState.REGISTER_PHONE, UserState.MENU],
+    UserState.REGISTER_PHONE: [UserState.MENU],
+    UserState.MENU: [UserState.FORM_STEP_1],
+    UserState.FORM_STEP_1: [UserState.FORM_STEP_2],
+    UserState.FORM_STEP_2: [UserState.FORM_STEP_3],
+    UserState.FORM_STEP_3: [UserState.FORM_CONFIRM],
+    UserState.FORM_CONFIRM: [UserState.MENU],
 }
 ```
 
-**הכלל:** כל מעבר state חייב להיות מוגדר כאן. אם handler מחזיר state שלא מופיע ברשימה — `transition_to` ייכשל ויפעיל `force_state` עם warning. זה שומר על הזרימה מבוקרת.
+כל מעבר state **חייב** להיות מוגדר מראש. אם handler מנסה לעבור ל-state שלא ברשימה — `transition_to` מחזיר `False`. זה מונע באגים שקטים שבהם המשתמש מגיע למצב בלתי אפשרי.
 
-### StateManager — ניהול מצב השיחה
+### StateManager — שמירת המצב
 
 ```python
 class StateManager:
-    def __init__(self, db: AsyncSession):
-        self.db = db
-
     async def get_or_create_session(self, user_id: int, platform: str):
-        """מביא סשן קיים או יוצר חדש"""
-        session = await self.db.execute(
+        """מחזיר סשן קיים או יוצר חדש"""
+        result = await self.db.execute(
             select(ConversationSession).where(
                 ConversationSession.user_id == user_id,
                 ConversationSession.platform == platform,
             )
         )
-        result = session.scalar_one_or_none()
-        if not result:
-            result = ConversationSession(
+        session = result.scalar_one_or_none()
+        if not session:
+            session = ConversationSession(
                 user_id=user_id,
                 platform=platform,
-                current_state=SenderState.INITIAL.value,
+                current_state=UserState.INITIAL.value,
             )
-            self.db.add(result)
+            self.db.add(session)
             await self.db.commit()
-        return result
+        return session
 
     async def transition_to(self, user_id, platform, new_state, context_update=None):
-        """מעבר state עם ולידציה"""
+        """מעבר state — רק אם מותר"""
         session = await self.get_or_create_session(user_id, platform)
-        if self._is_valid_transition(session.current_state, new_state):
-            session.current_state = new_state
-            if context_update:
-                session.context = {**session.context, **context_update}
-            await self.db.commit()
-            return True
-        return False
+        if not self._is_valid_transition(session.current_state, new_state):
+            return False
+        session.current_state = new_state
+        if context_update:
+            context = copy.deepcopy(session.context_data or {})
+            context.update(context_update)
+            session.context_data = context
+        await self.db.commit()
+        return True
 ```
 
-**Context** — כל סשן מחזיק dict של context. למשל, כשהמשתמש מזין כתובת איסוף, היא נשמרת ב-context ומוצמדת למשלוח רק בשלב האישור. זה מאפשר חזרה אחורה בלי אובדן מידע.
+**Context** — כל סשן מחזיק `dict` של context. כשמשתמש ממלא טופס בשלושה שלבים, כל שלב שומר את הנתונים ב-context, ורק בשלב האישור הכל נכתב ל-DB. זה מאפשר ביטול באמצע בלי שנשאר זבל ב-DB.
 
-### Handler Pattern — טיפול בהודעות
+> **טיפ:** SQLAlchemy לא מזהה שינויים בעמודות JSON. חובה `copy.deepcopy` לפני update, אחרת השינוי לא יישמר.
+
+### Handler — הדפוס המרכזי
 
 ```python
-class DispatcherStateHandler:
-    async def handle_message(self, user, message, photo_file_id=None):
-        current_state = await self.state_manager.get_current_state(user.id, platform)
-        context = await self.state_manager.get_context(user.id, platform)
+async def handle_message(self, user, message, context):
+    handler = self._get_handler(current_state)  # dispatch לפי state
+    response, new_state, context_update = await handler(user, message, context)
 
-        # שליחה ל-handler הספציפי לפי state
-        handler = self._get_handler(current_state)
-        response, new_state, context_update = await handler(user, message, context)
+    # ניקוי context ביציאה מזרימה
+    if new_state == UserState.MENU.value and self._is_form_flow(current_state):
+        context_update = {
+            "form_field_1": None,
+            "form_field_2": None,
+            "form_field_3": None,
+        }
 
-        # ניקוי context ביציאה מזרימה
-        if new_state == DispatcherState.MENU.value:
-            keys_to_clean = self._SHIPMENT_CONTEXT_KEYS | self._MANUAL_CHARGE_CONTEXT_KEYS
-            # ...
-
-        # מעבר state עם ולידציה
-        if new_state != current_state:
-            await self.state_manager.transition_to(user.id, platform, new_state, context_update)
-
-        return response, new_state
+    await self.state_manager.transition_to(user.id, platform, new_state, context_update)
+    return response
 ```
 
 **שלוש הפלטים של כל handler:**
-1. `response` — ההודעה שתישלח למשתמש
-2. `new_state` — ה-state הבא
-3. `context_update` — מה לעדכן ב-context (למשל `{"pickup_city": "תל אביב"}`)
+1. `response` — מה לשלוח למשתמש
+2. `new_state` — לאיזה state לעבור
+3. `context_update` — מה לשמור ב-context
 
-### Guard Functions — הגנה על זרימות רב-שלביות
+**ניקוי context** — כשמשתמש חוזר לתפריט הראשי, חובה לנקות את ה-context של הזרימה הקודמת. בלי ניקוי, context ישן עלול לגרום לפעולה על נתונים מיושנים בפעם הבאה.
+
+### Guard Functions — הגנה על טפסים רב-שלביים
 
 ```python
 def _is_in_multi_step_flow(state: str) -> bool:
-    """בדיקה אם המשתמש באמצע זרימה — מונע keyword hijacking"""
+    """האם המשתמש באמצע טופס?"""
     return (
-        state.startswith("DISPATCHER.ADD_SHIPMENT")
-        or state.startswith("STATION.")
-        or state.startswith("COURIER.REGISTER")
+        state.startswith("USER.FORM.")
+        or state.startswith("USER.REGISTER.")
     )
 ```
 
-**למה?** בלי guard, אם משתמש מזין כתובת כמו "תחנה מרכזית" באמצע יצירת משלוח — המילה "תחנה" עלולה להפעיל תגובת שיווק במקום להתקבל ככתובת. ה-guard מוודא שבזמן זרימה רב-שלבית, רק ה-handler הרלוונטי מטפל בהודעה.
+**למה?** נניח שיש לכם keyword trigger: כשמשתמש כותב "עזרה" — הבוט מציג הוראות. אבל מה אם המשתמש באמצע טופס ושם שדה הוא "מרכז עזרה"? בלי guard, המילה "עזרה" תפעיל את ה-trigger במקום להתקבל כקלט. Guard functions מוודאות שבזמן זרימה רב-שלבית, רק ה-handler של אותה זרימה מטפל בהודעה.
+
+```python
+# ❌ לא נכון — תופס מילות מפתח גם באמצע טופס
+if "עזרה" in text:
+    return help_response()
+
+# ✅ נכון — בודקים קודם אם באמצע זרימה
+if not _is_in_multi_step_flow(current_state):
+    if "עזרה" in text:
+        return help_response()
+```
 
 ---
 
-## שכבה 3: לוגיקה עסקית — Service Layer
+## 3. שליחת הודעות — Provider Pattern
 
-### Transactional Outbox — הודעות אמינות
+### ממשק אחיד
 
-הבעיה: מה קורה כשעדכנת את ה-DB בהצלחה אבל שליחת ההודעה ל-WhatsApp נכשלה? המשתמש לא יודע שהפעולה הצליחה.
-
-הפתרון: **Transactional Outbox Pattern** — ההודעה נשמרת בטבלת outbox **באותה טרנזקציה** עם הפעולה העסקית.
-
-```python
-class OutboxService:
-    async def queue_message(self, platform, recipient_id, message_type, content):
-        """שומר הודעה בטבלת outbox — באותה טרנזקציה עם הפעולה העסקית"""
-        outbox_msg = OutboxMessage(
-            platform=platform,
-            recipient_id=recipient_id,
-            message_type=message_type,
-            content=content,
-            status=MessageStatus.PENDING,
-        )
-        self.db.add(outbox_msg)
-        # לא עושים commit כאן — ה-commit קורה עם הפעולה העסקית
-```
-
-**הזרימה:**
-1. פעולה עסקית (למשל: תפיסת משלוח) + הכנסת הודעה ל-outbox → **commit אטומי**
-2. Celery worker שולף הודעות pending → שולח ל-WhatsApp
-3. הצלחה → סימון sent / כישלון → retry עם exponential backoff
-
-```python
-def _calculate_backoff_seconds(retry_count, base_seconds, max_backoff_seconds):
-    """Exponential backoff: 2s, 4s, 8s, 16s... עד שעה"""
-    backoff = base_seconds * (2 ** retry_count)
-    return min(backoff, max_backoff_seconds)
-```
-
-### Atomic Capture — תפיסת משלוח בטוחה
-
-כשעשרות שליחים רואים אותו משלוח ולוחצים "תפוס" בו-זמנית, רק אחד צריך להצליח. בלי נעילה — race condition, חיובים כפולים, כאוס.
-
-```python
-class CaptureService:
-    async def capture_delivery(self, courier_id: int, delivery_id: int):
-        # 1. נעילת שורת המשלוח
-        delivery = await self.db.execute(
-            select(Delivery)
-            .where(Delivery.id == delivery_id)
-            .with_for_update()  # FOR UPDATE — נעילת שורה
-        )
-
-        # 2. בדיקת סטטוס
-        if delivery.status != DeliveryStatus.OPEN:
-            raise DeliveryAlreadyCapturedError(delivery_id)
-
-        # 3. נעילת ארנק השליח
-        wallet = await self.db.execute(
-            select(CourierWallet)
-            .where(CourierWallet.courier_id == courier_id)
-            .with_for_update()
-        )
-
-        # 4. בדיקת יתרה
-        if wallet.balance - delivery.fee < wallet.credit_limit:
-            raise InsufficientCreditError()
-
-        # 5. עדכון אטומי
-        delivery.status = DeliveryStatus.CAPTURED
-        delivery.courier_id = courier_id
-        wallet.balance -= delivery.fee
-
-        # 6. הודעה ל-outbox (אותה טרנזקציה!)
-        await self.outbox.queue_capture_notification(delivery)
-
-        await self.db.commit()
-```
-
-> **מלכודת:** אסור `joinedload` עם `with_for_update()` — PostgreSQL דוחה `FOR UPDATE` על `LEFT OUTER JOIN`. צריך לפצל לשתי שאילתות.
-
----
-
-## שכבה 4: תקשורת עם WhatsApp — Provider Pattern
-
-### ממשק אחיד — Dependency Inversion
-
-במקום להיות תלויים ב-API ספציפי, הגדרנו ממשק בסיסי:
+יום אחד אתם משתמשים ב-Cloud API של Meta, למחרת אתם רוצים WPPConnect, ואולי מחר ספק אחר. אם הקוד שלכם קשור לספק ספציפי — אתם בבעיה.
 
 ```python
 class BaseWhatsAppProvider(ABC):
     @abstractmethod
     async def send_text(self, to: str, text: str, keyboard=None) -> None:
-        """שליחת הודעת טקסט עם כפתורים אופציונליים"""
+        """שליחת טקסט עם כפתורים אופציונליים"""
 
     @abstractmethod
-    async def send_media(self, to: str, media_url: str, media_type: str) -> None:
-        """שליחת תמונה/מסמך"""
+    async def send_media(self, to: str, media_url: str, media_type: str = "image") -> None:
+        """שליחת תמונה/מסמך/וידאו"""
 
     @abstractmethod
     def format_text(self, html_text: str) -> str:
-        """המרת HTML → פורמט WhatsApp (*bold*, _italic_)"""
+        """המרת HTML → פורמט הספק (*bold*, _italic_)"""
 
     @abstractmethod
     def normalize_phone(self, phone: str) -> str:
-        """נרמול טלפון לפורמט E.164"""
+        """נרמול לפורמט E.164: 0501234567 → +972501234567"""
 ```
 
-**שני מימושים:**
-- **WPPConnectProvider** — gateway מבוסס Node.js (WPPConnect)
-- **PywaProvider** — Meta Cloud API (הרשמי)
+השירותים העסקיים תלויים רק בממשק. החלפת ספק = מימוש חדש של הממשק, אפס שינויים בלוגיקה.
 
-**Hybrid Mode** — שילוב של שניהם: Cloud API לצ'אטים פרטיים, WPPConnect לקבוצות (Cloud API לא תומך בקבוצות לא-רשמיות).
-
-### Retry עם Exponential Backoff
+### Retry — לא כל כשלון הוא סופי
 
 ```python
-async def _request_with_retry(self, endpoint, payload, operation_name):
+async def _send_with_retry(self, endpoint: str, payload: dict):
     for attempt in range(self._max_retries):
         response = await client.post(
             f"{self._gateway_url}/{endpoint}",
@@ -349,66 +289,164 @@ async def _request_with_retry(self, endpoint, payload, operation_name):
         if response.status_code == 200:
             return
 
-        # שגיאות זמניות — retry
-        if response.status_code in (502, 503, 504, 429):
-            backoff = 2 ** attempt
-            logger.warning("שגיאה זמנית, ממתין...", extra_data={
-                "phone": PhoneNumberValidator.mask(payload.get("phone")),
+        # שגיאות זמניות — שווה לנסות שוב
+        if response.status_code in (429, 502, 503, 504):
+            backoff = 2 ** attempt  # 1s, 2s, 4s
+            logger.warning("שגיאה זמנית, ממתין", extra_data={
                 "status_code": response.status_code,
-                "backoff_seconds": backoff,
+                "retry_in": backoff,
             })
             await asyncio.sleep(backoff)
             continue
 
-        raise WhatsAppError(...)
+        # שגיאה קבועה — אין טעם לנסות שוב
+        raise WhatsAppError(f"Failed: {response.status_code}")
 ```
+
+**429 (Rate Limit)** — WhatsApp מגביל כמות הודעות. Exponential backoff נותן ל-API לנשום.
 
 ### Circuit Breaker — הגנה מפני כשלון מדורג
 
-כש-WhatsApp API נופל, אנחנו לא רוצים לשלוח אלפי בקשות שנידונו לכישלון. Circuit Breaker חוסם קריאות כשהשירות למטה.
+כש-WhatsApp API למטה, אלפי הודעות ממתינות לשליחה. בלי הגנה, כולן ינסו, ייכשלו, ינסו שוב — ויציפו את השרת.
 
 ```python
 class CircuitBreaker:
     """
-    CLOSED → שגיאות מצטברות → OPEN (חוסם הכל)
-    OPEN → timeout עבר → HALF_OPEN (מנסה בזהירות)
-    HALF_OPEN → הצלחות → CLOSED (חזרה לנורמלי)
+    שלושה מצבים:
+    CLOSED  → עובד רגיל, סופר כשלונות
+    OPEN    → API למטה, חוסם הכל (מונע הצפה)
+    HALF_OPEN → מנסה בקשה אחת לבדוק אם השירות חזר
     """
-    _instances: dict[str, "CircuitBreaker"] = {}  # singleton לכל שירות
-
     @classmethod
     def get_instance(cls, service_name: str) -> "CircuitBreaker":
+        """Singleton לכל שירות — Telegram ו-WhatsApp נפרדים"""
         if service_name not in cls._instances:
             cls._instances[service_name] = cls(
                 name=service_name,
                 config=CircuitBreakerConfig(
-                    failure_threshold=5,    # 5 כשלונות → OPEN
-                    timeout_seconds=30.0,   # ניסיון אחרי 30 שניות
-                    success_threshold=2,    # 2 הצלחות → CLOSED
+                    failure_threshold=5,     # 5 כשלונות רצופים → OPEN
+                    timeout_seconds=30.0,    # אחרי 30 שניות → HALF_OPEN
+                    success_threshold=2,     # 2 הצלחות → CLOSED
                 ),
             )
         return cls._instances[service_name]
+
+    async def execute(self, func, *args, **kwargs):
+        if self._state == CircuitState.OPEN:
+            if self._should_try_half_open():
+                self._state = CircuitState.HALF_OPEN
+            else:
+                raise CircuitBreakerOpenError(self._name)
+
+        try:
+            result = await func(*args, **kwargs)
+            self._record_success()
+            return result
+        except Exception as e:
+            self._record_failure()
+            raise
 ```
 
 ---
 
-## אבטחה ו-ולידציה
+## 4. Transactional Outbox — הודעות שלא הולכות לאיבוד
 
-### ולידציית קלט — כל הודעה עוברת סניטציה
+### הבעיה
+
+מה קורה כשפעולה עסקית הצליחה (נשמרה ב-DB) אבל שליחת ההודעה ל-WhatsApp נכשלה? המשתמש לא יודע שהפעולה בוצעה.
+
+### הפתרון
+
+ההודעה נשמרת בטבלת outbox **באותה טרנזקציה** עם הפעולה העסקית:
+
+```python
+class OutboxService:
+    async def queue_message(self, recipient_id, content, platform="whatsapp"):
+        """ההודעה נכנסת ל-outbox באותה טרנזקציה עם הפעולה העסקית"""
+        self.db.add(OutboxMessage(
+            platform=platform,
+            recipient_id=recipient_id,
+            content=content,
+            status=MessageStatus.PENDING,
+        ))
+        # אין commit כאן — ה-commit קורה יחד עם הפעולה העסקית
+```
+
+**הזרימה:**
+```
+1. פעולה עסקית + הכנסת הודעה ל-outbox → commit אטומי
+2. Celery worker שולף הודעות pending
+3. שולח ל-WhatsApp
+4. הצלחה → סימון sent
+5. כישלון → retry עם exponential backoff (2s, 4s, 8s... עד שעה)
+6. מיצוי retries → Dead Letter Queue (לטיפול ידני)
+```
+
+```python
+def _calculate_backoff(retry_count: int, base: int = 2, max_seconds: int = 3600) -> int:
+    """Exponential backoff עם תקרה"""
+    return min(base * (2 ** retry_count), max_seconds)
+```
+
+**למה לא לשלוח ישירות?** כי זה מעכב את התגובה למשתמש, ואם השליחה נכשלת אחרי שה-DB כבר עודכן — אין דרך לדעת. Outbox מבטיח: אם הפעולה נשמרה, ההודעה **תישלח** — גם אם לוקח כמה ניסיונות.
+
+---
+
+## 5. פעולות מקביליות — Row-Level Locking
+
+כשכמה משתמשים מנסים לבצע את אותה פעולה בו-זמנית (למשל: תפיסת פריט, עדכון יתרה), צריך נעילה:
+
+```python
+async def claim_item(self, user_id: int, item_id: int):
+    # 1. נעילת שורה — רק אחד יכול לגעת בה
+    item = await self.db.execute(
+        select(Item)
+        .where(Item.id == item_id)
+        .with_for_update()  # FOR UPDATE
+    )
+
+    # 2. בדיקת סטטוס
+    if item.status != "available":
+        raise AlreadyClaimedError(item_id)
+
+    # 3. עדכון אטומי
+    item.status = "claimed"
+    item.claimed_by = user_id
+
+    # 4. הודעה ב-outbox (אותה טרנזקציה!)
+    await self.outbox.queue_message(
+        recipient_id=user_id,
+        content={"text": "הפריט שלך!"},
+    )
+
+    await self.db.commit()  # הכל ביחד, או כלום
+```
+
+> **מלכודת PostgreSQL:** אסור `joinedload()` עם `with_for_update()`. PostgreSQL דוחה `FOR UPDATE` על `LEFT OUTER JOIN` שנוצר מ-joinedload. הפתרון: שאילתה ראשונה עם נעילה, שאילתה שנייה לטעינת קשרים.
+
+---
+
+## 6. אבטחה — הדברים שמחכים לכם בפרודקשן
+
+### ולידציית קלט
+
+משתמשים שולחים הכל. SQL injection, XSS, טקסט עם null bytes. כל קלט חייב לעבור סניטציה:
 
 ```python
 class TextSanitizer:
     @staticmethod
     def sanitize(text: str, max_length: int = 1000) -> str:
-        """strip, truncate, הסרת null bytes, כיווץ רווחים"""
+        """strip, חיתוך, הסרת null bytes, כיווץ רווחים"""
 
     @staticmethod
     def check_for_injection(text: str) -> tuple[bool, str | None]:
-        """בדיקת SQL injection, XSS, command injection"""
-        # דפוסים: OR 1=1, UNION SELECT, <script>, javascript:, onclick=
+        """סריקת SQL injection, XSS, command injection"""
+        # OR 1=1, UNION SELECT, <script>, javascript:, onclick=
 ```
 
-### מיסוך מספרי טלפון בלוגים
+### מיסוך PII בלוגים
+
+מספרי טלפון הם PII (Personally Identifiable Information). אסור שיופיעו בלוגים:
 
 ```python
 class PhoneNumberValidator:
@@ -416,60 +454,91 @@ class PhoneNumberValidator:
     def mask(phone: str) -> str:
         """'+972501234567' → '+97250123****'"""
 
-# שימוש בכל הלוגים
+# ❌ לעולם לא
+logger.info(f"הודעה נשלחה ל-{phone}")
+
+# ✅ תמיד
 logger.info("הודעה נשלחה", extra_data={
-    "phone": PhoneNumberValidator.mask(phone)  # לעולם לא המספר המלא
+    "phone": PhoneNumberValidator.mask(phone)
 })
 ```
 
-### אימות Webhook — חתימת HMAC
+### Rate Limiting על Webhooks
 
 ```python
-def verify_cloud_api_signature(request: Request, body: bytes) -> bool:
-    """אימות שההודעה באמת הגיעה מ-Meta"""
-    signature = request.headers.get("X-Hub-Signature-256", "")
-    expected = hmac.new(
-        settings.WHATSAPP_CLOUD_API_APP_SECRET.encode(),
-        body,
-        hashlib.sha256,
-    ).hexdigest()
-    return hmac.compare_digest(f"sha256={expected}", signature)
+class WebhookRateLimitMiddleware:
+    """Sliding window: 100 בקשות ל-60 שניות, לפי IP"""
+    # מחזיר 429 + Retry-After header + correlation ID
+```
+
+בלי rate limiting, תוקף יכול להציף את ה-webhook שלכם ולגרום ל-DoS.
+
+---
+
+## 7. Middleware Stack
+
+```python
+app.add_middleware(SecurityHeadersMiddleware)     # HSTS, CSP
+app.add_middleware(CorrelationIdMiddleware)        # מזהה ייחודי לכל בקשה
+app.add_middleware(RequestLoggingMiddleware)       # לוגים עם מיסוך PII
+app.add_middleware(WebhookRateLimitMiddleware)     # הגנה מפני הצפה
+```
+
+**Correlation ID** — כל בקשה מקבלת מזהה ייחודי שעובר דרך כל השכבות. כשיש באג בפרודקשן ומשתמש מדווח "ההודעה לא הגיעה", אתם מחפשים את ה-correlation ID בלוגים ורואים בדיוק מה קרה — מה-webhook, דרך ה-state machine, ועד לניסיון השליחה.
+
+```python
+# אוטומטי בכל log
+{
+    "timestamp": "2026-03-14T10:30:00Z",
+    "level": "ERROR",
+    "correlation_id": "a1b2c3d4",
+    "message": "שליחה נכשלה",
+    "extra": {"phone": "+97250123****", "retry": 3}
+}
 ```
 
 ---
 
-## Middleware Stack — שכבות הגנה
+## 8. כפתורים ותצוגה — המלכודות
 
-```python
-# סדר חשוב — חיצוני לפנימי:
-app.add_middleware(SecurityHeadersMiddleware)      # HSTS, CSP
-app.add_middleware(CorrelationIdMiddleware)         # מזהה ייחודי לכל בקשה
-app.add_middleware(RequestLoggingMiddleware)        # לוגים עם מיסוך PII
-app.add_middleware(WebhookRateLimitMiddleware)      # 100 req/60s per IP
-```
-
-**Correlation ID** — כל בקשה מקבלת מזהה ייחודי שעובר דרך כל השכבות. כשיש באג בפרודקשן, אפשר לעקוב אחרי בקשה אחת מה-webhook ועד ל-DB.
-
----
-
-## ניהול כפתורים ותצוגה
-
-### כפתורי מקלדת
+### כפתורים הם plain text
 
 ```python
 class MessageResponse:
     def __init__(self, text: str, keyboard: list[list[str]] | None = None):
         self.text = text
-        self.keyboard = keyboard  # [["כן", "לא"], ["ביטול"]]
+        self.keyboard = keyboard  # [["אישור", "ביטול"], ["חזור"]]
 ```
 
-**מלכודת קלאסית:** כפתורים הם plain text. אם תעשה `html.escape()` על טקסט כפתור, המשתמש יראה `&amp;` במקום `&`. ה-escape נדרש רק בגוף ההודעה עם `parse_mode=HTML`.
+**מלכודת:** כפתורי WhatsApp/Telegram הם plain text. אם תעשו `html.escape()` על טקסט כפתור, המשתמש יראה `&amp;` במקום `&`. ה-escape נדרש רק בגוף ההודעה.
 
-### התאמת פורמט בין פלטפורמות
+```python
+# ❌ html entities בכפתור
+keyboard.append([f"📦 {html.escape(item_name)}"])  # מציג: Ben &amp; Jerry's
+
+# ✅ טקסט רגיל בכפתור
+keyboard.append([f"📦 {item_name}"])  # מציג: Ben & Jerry's
+```
+
+### חילוץ בחירה מכפתור — עיגון regex
+
+כשמשתמש לוחץ כפתור, הטקסט של הכפתור חוזר כהודעה. צריך לחלץ ממנו את הבחירה:
+
+```python
+# ❌ תופס כל מספר — גם בטקסט חופשי
+match = re.search(r"(\d+)", text)
+
+# ✅ מעוגן לפורמט הכפתור
+match = re.match(r"📦\s*(\d+)\.", text)
+```
+
+### המרת פורמט בין פלטפורמות
+
+אם הבוט תומך גם ב-Telegram — הפורמט שונה:
 
 ```python
 def convert_html_to_whatsapp(text: str) -> str:
-    """HTML → WhatsApp Markdown"""
+    """Telegram HTML → WhatsApp Markdown"""
     # <b>bold</b>     → *bold*
     # <i>italic</i>   → _italic_
     # <s>strike</s>   → ~strike~
@@ -478,99 +547,94 @@ def convert_html_to_whatsapp(text: str) -> str:
 
 ---
 
-## תבניות נוספות שכדאי לדעת
+## 9. ניתוב לפי תפקידים
 
-### ניתוב לפי תפקיד — כיסוי מלא
+כשיש כמה סוגי משתמשים (לקוח, מנהל, ספק), הניתוב חייב להיות מפורש:
 
 ```python
-# ❌ לא נכון — else תופס תפקידים לא צפויים
-if user.role == UserRole.COURIER:
-    handler = CourierStateHandler(db)
+# ❌ else גנרי — מה קורה עם תפקיד חדש?
+if user.role == "admin":
+    handler = AdminHandler(db)
 else:
-    handler = SenderStateHandler(db)  # ADMIN? STATION_OWNER? 🤷
+    handler = UserHandler(db)  # גם manager? גם support?
 
-# ✅ נכון — מפורש לכל תפקיד
-if user.role == UserRole.COURIER:
-    handler = CourierStateHandler(db)
-elif user.role == UserRole.SENDER:
-    handler = SenderStateHandler(db)
-elif user.role == UserRole.DISPATCHER:
-    handler = DispatcherStateHandler(db)
-elif user.role == UserRole.STATION_OWNER:
-    handler = StationOwnerStateHandler(db)
+# ✅ מפורש — כל תפקיד מטופל
+if user.role == "admin":
+    handler = AdminHandler(db)
+elif user.role == "user":
+    handler = UserHandler(db)
+elif user.role == "manager":
+    handler = ManagerHandler(db)
 else:
-    logger.warning("תפקיד לא מוכר", extra_data={"role": str(user.role)})
+    logger.warning("תפקיד לא מוכר", extra_data={"role": user.role})
+    return unknown_role_response()
 ```
 
-### ניקוי Context ביציאה מזרימה
-
-```python
-# ❌ context ישן נשאר — עלול לגרום לפעולה על נתונים מיושנים
-return response, State.MENU.value, {}
-
-# ✅ ניקוי מפורש
-return response, State.MENU.value, {
-    "pickup_city": None,
-    "pickup_street": None,
-    "selected_delivery": None,
-}
-```
-
-### בדיקת None מפורשת
-
-```python
-# ❌ 0 הוא falsy — קואורדינטה 0 תיעלם
-if validated.latitude:
-    latitude = Decimal(str(validated.latitude))
-
-# ✅ בדיקת None מפורשת
-if validated.latitude is not None:
-    latitude = Decimal(str(validated.latitude))
-```
+כשמוסיפים תפקיד חדש ושוכחים לעדכן `else` — הבאג שקט ומתגלה רק כשמשתמש עם התפקיד החדש מדווח שמשהו לא עובד.
 
 ---
 
-## מבנה הפרויקט
+## 10. בדיקת None — המלכודת הכי שקטה
+
+```python
+# ❌ 0 הוא falsy — ערכים לגיטימיים נעלמים
+if user.latitude:
+    save_location(user.latitude)  # קואורדינטה 0 = לא נשמר!
+
+if price:
+    apply_discount(price)  # מחיר 0 = לא מופעל!
+
+# ✅ בדיקת None מפורשת
+if user.latitude is not None:
+    save_location(user.latitude)
+
+if price is not None:
+    apply_discount(price)
+```
+
+כלל: בכל ערך מספרי שאפס הוא ערך תקין — `is not None`, לא `if value`.
+
+---
+
+## מבנה פרויקט מומלץ
 
 ```
 app/
-├── api/webhooks/           # Webhook handlers (WhatsApp, Telegram)
+├── api/webhooks/            # קבלת הודעות
 ├── core/
-│   ├── config.py           # הגדרות (Pydantic Settings)
-│   ├── validation.py       # ולידטורים + סניטציה
-│   ├── exceptions.py       # שגיאות מותאמות עם קודים
-│   ├── circuit_breaker.py  # הגנה על שירותים חיצוניים
-│   └── middleware.py       # Correlation ID, Rate Limit, Logging
-├── db/models/              # SQLAlchemy models
+│   ├── config.py            # הגדרות (Pydantic Settings)
+│   ├── validation.py        # ולידציה + סניטציה
+│   ├── exceptions.py        # שגיאות מותאמות עם קודים
+│   ├── circuit_breaker.py   # הגנה על APIs חיצוניים
+│   └── middleware.py        # Correlation ID, Rate Limit, Logging
+├── db/models/               # מודלים (SQLAlchemy)
 ├── domain/services/
-│   ├── whatsapp/           # Provider pattern (base + implementations)
-│   ├── outbox_service.py   # Transactional Outbox
-│   ├── capture_service.py  # תפיסת משלוח אטומית
-│   └── wallet_service.py   # ארנק עם נעילת שורה
+│   ├── messaging/           # Provider pattern לשליחת הודעות
+│   └── outbox_service.py    # Transactional Outbox
 ├── state_machine/
-│   ├── states.py           # State enums + מפת מעברים
-│   ├── manager.py          # ניהול state ו-context
-│   └── handlers.py         # Handler לכל תפקיד
-└── workers/tasks.py        # Celery workers
+│   ├── states.py            # State enums + מפת מעברים
+│   ├── manager.py           # ניהול state ו-context
+│   └── handlers.py          # Handler לכל זרימה
+└── workers/tasks.py         # Celery workers לעיבוד רקע
 ```
 
 ---
 
-## סיכום — עקרונות מנחים
+## סיכום — 10 עקרונות לבוט WhatsApp שעובד
 
-1. **State Machine עם מעברים מוגדרים** — שומר על הזרימה מבוקרת ומונע מצבים בלתי אפשריים
-2. **Transactional Outbox** — מבטיח שהודעות לא יאבדו גם אם WhatsApp API נופל
-3. **Idempotency** — מונע עיבוד כפול של הודעות (WhatsApp שולח retries)
-4. **Circuit Breaker** — מגן מפני כשלון מדורג כש-API חיצוני למטה
-5. **Provider Pattern** — מאפשר החלפת ספק WhatsApp בלי לשנות לוגיקה עסקית
-6. **Row-level Locking** — מונע race conditions בפעולות פיננסיות
-7. **Context Cleanup** — מנקה state ישן כשיוצאים מזרימה
-8. **Guard Functions** — מגן על זרימות רב-שלביות מפני keyword hijacking
-9. **PII Masking** — לעולם לא מספר טלפון מלא בלוגים
-10. **Correlation IDs** — מעקב אחרי בקשה מקצה לקצה
+1. **תחזיר 200 מיד** — WhatsApp לא מחכה. עבד ברקע
+2. **Idempotency** — WhatsApp שולח retries. מנע כפילויות ב-DB
+3. **State Machine** — כל שיחה היא רצף מצבים. הגדר מעברים מותרים
+4. **Guard Functions** — הגן על טפסים רב-שלביים מפני keyword hijacking
+5. **ניקוי Context** — כשחוזרים לתפריט, נקו את ה-context של הזרימה הקודמת
+6. **Transactional Outbox** — הודעות לא הולכות לאיבוד, גם כשה-API למטה
+7. **Circuit Breaker** — כשספק למטה, הפסיקו לנסות. נסו שוב אחרי timeout
+8. **Provider Pattern** — אל תהיו תלויים בספק ספציפי. ממשק + מימושים
+9. **Row Locking** — פעולות מקביליות חייבות נעילת שורה, לא תקוות
+10. **PII Masking** — לעולם לא מספר טלפון בלוגים
 
-הבוט הזה רץ בפרודקשן, מטפל במאות משלוחים ביום, ותומך בו-זמנית ב-WhatsApp ו-Telegram. הארכיטקטורה הזו עובדת — ועכשיו אתם יודעים איך לבנות אחת כזו.
+הדפוסים האלה לא ייחודיים ל-WhatsApp — הם רלוונטיים לכל בוט שרץ בפרודקשן, בכל פלטפורמה. אבל ב-WhatsApp, בגלל ה-retries, ה-rate limits וההגבלות של ה-API — הם הופכים מ-nice to have ל-must have.
 
 ---
 
-*נכתב על בסיס מערכת שליחויות אמיתית. קוד מפושט לצורך הדגמה.*
+*מבוסס על לקחים ממערכת פרודקשן אמיתית. קוד מפושט לצורך הדגמה.*
