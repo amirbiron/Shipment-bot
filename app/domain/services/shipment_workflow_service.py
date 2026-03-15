@@ -16,9 +16,11 @@ from sqlalchemy import select
 from app.db.models.delivery import Delivery, DeliveryStatus
 from app.db.models.user import User, UserRole, ApprovalStatus
 from app.db.models.station import Station
+from app.db.models.audit_log import AuditActionType
 from app.domain.services.station_service import StationService
 from app.domain.services.capture_service import CaptureService
 from app.domain.services.outbox_service import OutboxService
+from app.domain.services.audit_service import AuditService
 from app.domain.services.alert_service import publish_delivery_captured
 from app.core.logging import get_logger
 from app.core.validation import PhoneNumberValidator
@@ -34,6 +36,7 @@ class ShipmentWorkflowService:
         self.station_service = StationService(db)
         self.capture_service = CaptureService(db)
         self.outbox_service = OutboxService(db)
+        self.audit_service = AuditService(db)
 
     async def request_delivery(
         self, delivery_id: int, courier_id: int
@@ -112,6 +115,18 @@ class ShipmentWorkflowService:
             await self.outbox_service.queue_delivery_request_to_dispatchers(
                 delivery, courier, delivery.station_id
             )
+
+        # רישום בקשת משלוח בלוג ביקורת
+        await self.audit_service.record(
+            actor_user_id=courier_id,
+            action=AuditActionType.DELIVERY_REQUESTED,
+            station_id=delivery.station_id,
+            entity_type="delivery",
+            entity_id=delivery_id,
+            old_value={"status": DeliveryStatus.OPEN.value},
+            new_value={"status": DeliveryStatus.PENDING_APPROVAL.value},
+            details={"courier_id": courier_id},
+        )
 
         await self.db.commit()
         await self.db.refresh(delivery)
@@ -220,6 +235,22 @@ class ShipmentWorkflowService:
                 delivery, courier, "approved", dispatcher
             )
 
+        # רישום אישור משלוח בלוג ביקורת
+        await self.audit_service.record(
+            actor_user_id=dispatcher_id,
+            action=AuditActionType.DELIVERY_APPROVED,
+            station_id=delivery.station_id,
+            target_user_id=courier_id,
+            entity_type="delivery",
+            entity_id=delivery_id,
+            old_value={"status": DeliveryStatus.PENDING_APPROVAL.value},
+            new_value={"status": DeliveryStatus.CAPTURED.value},
+            details={
+                "dispatcher_id": dispatcher_id,
+                "courier_id": courier_id,
+            },
+        )
+
         # commit אחד אטומי: תפיסה + חיוב + אישור + הודעות outbox
         await self.db.commit()
         await self.db.refresh(delivery)
@@ -307,6 +338,22 @@ class ShipmentWorkflowService:
             await self._send_closed_card(
                 delivery, courier, "rejected", dispatcher
             )
+
+        # רישום דחיית משלוח בלוג ביקורת
+        await self.audit_service.record(
+            actor_user_id=dispatcher_id,
+            action=AuditActionType.DELIVERY_REJECTED,
+            station_id=delivery.station_id,
+            target_user_id=courier_id,
+            entity_type="delivery",
+            entity_id=delivery_id,
+            old_value={"status": DeliveryStatus.PENDING_APPROVAL.value},
+            new_value={"status": DeliveryStatus.OPEN.value},
+            details={
+                "dispatcher_id": dispatcher_id,
+                "courier_id": courier_id,
+            },
+        )
 
         # commit אחד אטומי: שינוי מצב + הודעות outbox
         await self.db.commit()

@@ -1484,6 +1484,24 @@ class StationService:
                 )
                 continue
 
+            # רישום חסימה אוטומטית בלוג ביקורת
+            # actor_user_id=0 — פעולת מערכת אוטומטית ללא משתמש יוזם
+            await self.audit_service.record(
+                actor_user_id=station.owner_id,
+                action=AuditActionType.AUTO_BLACKLIST_ADDED,
+                station_id=station_id,
+                target_user_id=courier_id,
+                entity_type="user",
+                entity_id=courier_id,
+                details={
+                    "reason": f"חסימה אוטומטית - אי תשלום {grace_months} חודשים רצופים",
+                    "grace_months": grace_months,
+                    "total_debt": str(courier_debts[courier_id]),
+                    "driver_name": courier_names.get(courier_id, "לא ידוע"),
+                    "auto": True,
+                },
+            )
+
             blocked_drivers.append({
                 "courier_id": courier_id,
                 "driver_name": courier_names.get(courier_id, "לא ידוע"),

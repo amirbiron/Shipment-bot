@@ -292,6 +292,22 @@ async def add_enum_values(engine: AsyncEngine) -> None:
         ))
         logger.info("Ensured 'PENDING_APPROVAL' exists in deliverystatus enum")
 
+        # הוספת ערכי AuditActionType חדשים — פיצ'ר audit מקיף
+        new_audit_actions = [
+            "DELIVERY_CAPTURED",
+            "DELIVERY_RELEASED",
+            "DELIVERY_REQUESTED",
+            "DELIVERY_APPROVED",
+            "DELIVERY_REJECTED",
+            "WALLET_REFUND",
+            "AUTO_BLACKLIST_ADDED",
+        ]
+        for action_name in new_audit_actions:
+            await conn.execute(text(
+                f"ALTER TYPE auditactiontype ADD VALUE IF NOT EXISTS '{action_name}'"
+            ))
+        logger.info("Ensured new AuditActionType values exist in auditactiontype enum")
+
 
 async def run_migration_007(conn: AsyncConnection) -> None:
     """מיגרציה 007 - שלב 5: מדיניות פיננסית וחסימה אוטומטית.

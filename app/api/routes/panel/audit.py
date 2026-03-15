@@ -45,8 +45,15 @@ ACTION_LABELS: dict[str, str] = {
     AuditActionType.COURIER_REJECTED.value: "דחיית שליח",
     AuditActionType.COURIER_BLOCKED.value: "חסימת שליח",
     AuditActionType.DELIVERY_STATUS_CHANGED.value: "שינוי סטטוס משלוח",
+    AuditActionType.DELIVERY_CAPTURED.value: "תפיסת משלוח",
+    AuditActionType.DELIVERY_RELEASED.value: "שחרור משלוח",
+    AuditActionType.DELIVERY_REQUESTED.value: "בקשת משלוח",
+    AuditActionType.DELIVERY_APPROVED.value: "אישור משלוח ע״י סדרן",
+    AuditActionType.DELIVERY_REJECTED.value: "דחיית משלוח ע״י סדרן",
     AuditActionType.WALLET_DEBIT.value: "חיוב ארנק",
     AuditActionType.WALLET_CREDIT.value: "זיכוי ארנק",
+    AuditActionType.WALLET_REFUND.value: "החזר ארנק",
+    AuditActionType.AUTO_BLACKLIST_ADDED.value: "חסימה אוטומטית",
 }
 
 
