@@ -19,11 +19,11 @@ T = TypeVar("T")
 class ValidationPatterns:
     """Regex patterns for validation"""
 
-    # Israeli phone numbers: 05X-XXXXXXX or +972-5X-XXXXXXX
+    # מספרי טלפון ישראליים: נייד (05[0-8]), קווי ([23489]), VoIP (07[2-7])
     PHONE_ISRAEL = re.compile(
         r"^(?:"
-        r"(?:\+972|972)[-\s]?(?:[23489]|5[0-9])[-\s]?\d{3}[-\s]?\d{4}|"  # +972/972 format
-        r"0(?:[23489]|5[0-9])[-\s]?\d{3}[-\s]?\d{4}"  # 05X format
+        r"(?:\+972|972)[-\s]?(?:[23489]|5[0-8]|7[2-7])[-\s]?\d{3}[-\s]?\d{4}|"  # +972/972 format
+        r"0(?:[23489]|5[0-8]|7[2-7])[-\s]?\d{3}[-\s]?\d{4}"  # פורמט מקומי
         r")$"
     )
 

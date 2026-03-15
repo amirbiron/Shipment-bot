@@ -27,6 +27,13 @@ class TestPhoneNumberValidator:
         # Valid landline numbers
         ("031234567", True),
         ("03-123-4567", True),
+        # מספרי VoIP תקינים
+        ("0721234567", True),
+        ("072-123-4567", True),
+        ("0771234567", True),
+        ("+972771234567", True),
+        # קידומת 059 לא מוקצית
+        ("0591234567", False),
         # Valid international numbers with formatting
         ("+1 (555) 170-8949", True),  # US format with parentheses (Meta test number)
         ("+1(555)1708949", True),  # US format without spaces
@@ -54,6 +61,10 @@ class TestPhoneNumberValidator:
 
         # Already international
         assert PhoneNumberValidator.normalize("+972501234567") == "+972501234567"
+
+        # מספרי VoIP
+        assert PhoneNumberValidator.normalize("0721234567") == "+972721234567"
+        assert PhoneNumberValidator.normalize("077-123-4567") == "+972771234567"
 
         # International with parentheses (Meta test number)
         assert PhoneNumberValidator.normalize("+1 (555) 170-8949") == "+15551708949"
