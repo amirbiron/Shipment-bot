@@ -36,10 +36,19 @@ class AuditActionType(str, enum.Enum):
 
     # שינויי סטטוס משלוח
     DELIVERY_STATUS_CHANGED = "delivery_status_changed"
+    DELIVERY_CAPTURED = "delivery_captured"
+    DELIVERY_RELEASED = "delivery_released"
+    DELIVERY_REQUESTED = "delivery_requested"
+    DELIVERY_APPROVED = "delivery_approved"
+    DELIVERY_REJECTED = "delivery_rejected"
 
     # פעולות ארנק
     WALLET_DEBIT = "wallet_debit"
     WALLET_CREDIT = "wallet_credit"
+    WALLET_REFUND = "wallet_refund"
+
+    # חסימה אוטומטית
+    AUTO_BLACKLIST_ADDED = "auto_blacklist_added"
 
 
 class AuditLog(Base):

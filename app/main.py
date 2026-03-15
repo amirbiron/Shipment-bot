@@ -192,6 +192,10 @@ async def startup() -> None:
             await run_all_migrations(conn)
         logger.info("Auto-migrations completed")
 
+    # רישום audit watchdog — מתריע על שינויים רגישים ללא audit
+    from app.db.audit_events import register_audit_listeners
+    register_audit_listeners(engine.sync_engine)
+
     # רישום webhook של טלגרם — מבטיח שהטוקן הנוכחי מצביע ל-URL הנכון
     await _register_telegram_webhook()
 

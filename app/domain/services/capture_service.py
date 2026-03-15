@@ -14,7 +14,9 @@ from app.db.models.delivery import Delivery, DeliveryStatus
 from app.db.models.courier_wallet import CourierWallet
 from app.db.models.wallet_ledger import WalletLedger, LedgerEntryType
 from app.db.models.user import User
+from app.db.models.audit_log import AuditActionType
 from app.domain.services.outbox_service import OutboxService
+from app.domain.services.audit_service import AuditService
 from app.domain.services.alert_service import publish_delivery_captured
 from app.core.logging import get_logger
 
@@ -43,6 +45,7 @@ class CaptureService:
     def __init__(self, db: AsyncSession):
         self.db = db
         self.outbox_service = OutboxService(db)
+        self.audit_service = AuditService(db)
 
     async def capture_delivery_by_token(
         self,
@@ -162,6 +165,22 @@ class CaptureService:
             )
             self.db.add(ledger_entry)
 
+            # רישום תפיסת משלוח בלוג ביקורת
+            await self.audit_service.record(
+                actor_user_id=courier_id,
+                action=AuditActionType.DELIVERY_CAPTURED,
+                station_id=delivery.station_id,
+                entity_type="delivery",
+                entity_id=delivery_id,
+                old_value={"status": DeliveryStatus.OPEN.value},
+                new_value={"status": DeliveryStatus.CAPTURED.value},
+                details={
+                    "courier_id": courier_id,
+                    "fee": str(fee),
+                    "balance_after": str(future_balance),
+                },
+            )
+
             # Queue notification messages via outbox
             await self.outbox_service.queue_capture_notification(
                 delivery, courier_id
@@ -266,6 +285,30 @@ class CaptureService:
             delivery.status = DeliveryStatus.OPEN
             delivery.courier_id = None
             delivery.captured_at = None
+
+            # רישום שחרור משלוח בלוג ביקורת
+            await self.audit_service.record(
+                actor_user_id=courier_id,
+                action=AuditActionType.DELIVERY_RELEASED,
+                station_id=delivery.station_id,
+                entity_type="delivery",
+                entity_id=delivery_id,
+                old_value={"status": DeliveryStatus.CAPTURED.value},
+                new_value={"status": DeliveryStatus.OPEN.value},
+                details={"courier_id": courier_id},
+            )
+
+            # רישום החזר ארנק בלוג ביקורת
+            if wallet:
+                await self.audit_service.record_wallet_operation(
+                    actor_user_id=courier_id,
+                    courier_id=courier_id,
+                    action=AuditActionType.WALLET_REFUND,
+                    amount=str(fee),
+                    balance_after=str(wallet.balance),
+                    delivery_id=delivery_id,
+                    station_id=delivery.station_id,
+                )
 
             await self.db.commit()
 

@@ -54,8 +54,8 @@ class TestExpandedAuditLogModel:
 
     @pytest.mark.unit
     def test_all_action_types_count(self) -> None:
-        """סה״כ 17 סוגי פעולות (11 מקוריים + 6 חדשים)"""
-        assert len(AuditActionType) == 17
+        """סה״כ 24 סוגי פעולות (11 מקוריים + 6 הרחבה + 7 audit מקיף)"""
+        assert len(AuditActionType) == 24
 
     @pytest.mark.asyncio
     async def test_audit_log_nullable_station_id(self, user_factory, db_session) -> None:

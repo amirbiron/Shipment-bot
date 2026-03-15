@@ -1,5 +1,5 @@
 """
-בדיקות לוג ביקורת (Audit Trail) — סעיף 5 מתוך Issue #210
+בדיקות לוג ביקורת (Audit Trail)
 
 בדיקות שכבת השירות (StationService):
 - רישום פעולות מנהלתיות בלוג ביקורת
@@ -9,17 +9,27 @@
 בדיקות מודל:
 - AuditLog נוצר עם כל השדות הנדרשים
 - AuditActionType מכיל את כל סוגי הפעולות
+
+בדיקות פעולות חסרות (capture, workflow, auto-block):
+- תפיסת משלוח, שחרור משלוח
+- בקשת/אישור/דחיית משלוח
+- חסימה אוטומטית
 """
 import pytest
 from datetime import datetime, timedelta
 from decimal import Decimal
+from unittest.mock import AsyncMock, patch
 
-from app.db.models.user import User, UserRole
+from app.db.models.user import User, UserRole, ApprovalStatus
+from app.db.models.delivery import Delivery, DeliveryStatus
+from app.db.models.courier_wallet import CourierWallet
 from app.db.models.station import Station
 from app.db.models.station_owner import StationOwner
 from app.db.models.station_wallet import StationWallet
 from app.db.models.audit_log import AuditLog, AuditActionType
 from app.domain.services.station_service import StationService
+from app.domain.services.capture_service import CaptureService
+from app.domain.services.shipment_workflow_service import ShipmentWorkflowService
 from app.domain.services.audit_service import AuditService
 
 
@@ -617,3 +627,375 @@ class TestAuditTrailAtomicity(TestAuditTrailBase):
         )
         # רק רשומה אחת מהעדכון הראשון
         assert total == 1
+
+
+# ============================================================================
+# בדיקות audit לפעולות תפיסה ושחרור משלוח
+# ============================================================================
+
+
+def _mock_outbox():
+    """יוצר mock ל-OutboxService — מונע שליחת הודעות בבדיקות"""
+    return patch(
+        "app.domain.services.capture_service.OutboxService",
+        return_value=AsyncMock(),
+    )
+
+
+def _mock_workflow_outbox():
+    """יוצר mock ל-OutboxService בשירות workflow"""
+    return patch(
+        "app.domain.services.shipment_workflow_service.OutboxService",
+        return_value=AsyncMock(),
+    )
+
+
+def _mock_alert():
+    """יוצר mock ל-publish_delivery_captured"""
+    return patch(
+        "app.domain.services.capture_service.publish_delivery_captured",
+        new_callable=AsyncMock,
+    )
+
+
+class TestCaptureAudit:
+    """בדיקות audit לתפיסת ושחרור משלוח"""
+
+    @pytest.mark.asyncio
+    async def test_capture_delivery_creates_audit(
+        self, user_factory, db_session
+    ):
+        """תפיסת משלוח — נרשמת בלוג ביקורת עם DELIVERY_CAPTURED"""
+        sender = await user_factory(
+            phone_number="+972501111111", name="שולח", role=UserRole.SENDER
+        )
+        courier = await user_factory(
+            phone_number="+972502222222",
+            name="שליח",
+            role=UserRole.COURIER,
+            approval_status=ApprovalStatus.APPROVED,
+        )
+
+        delivery = Delivery(
+            sender_id=sender.id,
+            pickup_address="רחוב הרצל 1",
+            dropoff_address="רחוב בן יהודה 50",
+            status=DeliveryStatus.OPEN,
+            fee=Decimal("25.00"),
+        )
+        db_session.add(delivery)
+        await db_session.commit()
+        await db_session.refresh(delivery)
+
+        wallet = CourierWallet(
+            courier_id=courier.id,
+            balance=Decimal("100.00"),
+            credit_limit=Decimal("-100.00"),
+        )
+        db_session.add(wallet)
+        await db_session.commit()
+
+        with _mock_outbox(), _mock_alert():
+            service = CaptureService(db_session)
+            success, msg, _ = await service.capture_delivery(
+                delivery.id, courier.id
+            )
+
+        assert success is True
+
+        audit = AuditService(db_session)
+        entries = await audit.get_entity_audit_trail("delivery", delivery.id)
+        captured_entries = [
+            e for e in entries if e.action == AuditActionType.DELIVERY_CAPTURED
+        ]
+        assert len(captured_entries) == 1
+        assert captured_entries[0].actor_user_id == courier.id
+        assert captured_entries[0].new_value["status"] == "captured"
+
+    @pytest.mark.asyncio
+    async def test_release_delivery_creates_audit(
+        self, user_factory, db_session
+    ):
+        """שחרור משלוח — נרשם בלוג ביקורת עם DELIVERY_RELEASED + WALLET_REFUND"""
+        sender = await user_factory(
+            phone_number="+972501111111", name="שולח", role=UserRole.SENDER
+        )
+        courier = await user_factory(
+            phone_number="+972502222222",
+            name="שליח",
+            role=UserRole.COURIER,
+        )
+
+        delivery = Delivery(
+            sender_id=sender.id,
+            pickup_address="רחוב הרצל 1",
+            dropoff_address="רחוב בן יהודה 50",
+            status=DeliveryStatus.CAPTURED,
+            courier_id=courier.id,
+            fee=Decimal("25.00"),
+        )
+        db_session.add(delivery)
+        await db_session.commit()
+        await db_session.refresh(delivery)
+
+        wallet = CourierWallet(
+            courier_id=courier.id,
+            balance=Decimal("75.00"),
+            credit_limit=Decimal("-100.00"),
+        )
+        db_session.add(wallet)
+        await db_session.commit()
+
+        with _mock_outbox():
+            service = CaptureService(db_session)
+            success, msg = await service.release_delivery(
+                delivery.id, courier.id
+            )
+
+        assert success is True
+
+        audit = AuditService(db_session)
+        # בדיקת audit שחרור משלוח
+        entries = await audit.get_entity_audit_trail("delivery", delivery.id)
+        released_entries = [
+            e for e in entries if e.action == AuditActionType.DELIVERY_RELEASED
+        ]
+        assert len(released_entries) == 1
+        assert released_entries[0].old_value["status"] == "captured"
+        assert released_entries[0].new_value["status"] == "open"
+
+        # בדיקת audit החזר ארנק
+        wallet_entries = await audit.get_entity_audit_trail("wallet", courier.id)
+        refund_entries = [
+            e for e in wallet_entries if e.action == AuditActionType.WALLET_REFUND
+        ]
+        assert len(refund_entries) == 1
+        assert refund_entries[0].target_user_id == courier.id
+
+    @pytest.mark.asyncio
+    async def test_failed_capture_no_audit(
+        self, user_factory, db_session
+    ):
+        """תפיסה שנכשלת (משלוח כבר נתפס) — לא נוצרת רשומת audit"""
+        sender = await user_factory(
+            phone_number="+972501111111", name="שולח", role=UserRole.SENDER
+        )
+        courier = await user_factory(
+            phone_number="+972502222222",
+            name="שליח",
+            role=UserRole.COURIER,
+        )
+
+        delivery = Delivery(
+            sender_id=sender.id,
+            pickup_address="רחוב הרצל 1",
+            dropoff_address="רחוב בן יהודה 50",
+            status=DeliveryStatus.CAPTURED,
+            courier_id=courier.id,
+            fee=Decimal("25.00"),
+        )
+        db_session.add(delivery)
+        await db_session.commit()
+        await db_session.refresh(delivery)
+
+        with _mock_outbox(), _mock_alert():
+            service = CaptureService(db_session)
+            success, msg, _ = await service.capture_delivery(
+                delivery.id, courier.id
+            )
+
+        assert success is False
+
+        audit = AuditService(db_session)
+        entries = await audit.get_entity_audit_trail("delivery", delivery.id)
+        assert len(entries) == 0
+
+
+# ============================================================================
+# בדיקות audit לזרימת אישור משלוח (workflow)
+# ============================================================================
+
+
+class TestWorkflowAudit(TestAuditTrailBase):
+    """בדיקות audit לבקשת/אישור/דחיית משלוח"""
+
+    async def _create_station_delivery(
+        self, user_factory, db_session, station
+    ):
+        """יצירת משלוח של תחנה"""
+        sender = await user_factory(
+            phone_number="+972503333333", name="שולח", role=UserRole.SENDER
+        )
+        delivery = Delivery(
+            sender_id=sender.id,
+            pickup_address="רחוב הרצל 1",
+            dropoff_address="רחוב בן יהודה 50",
+            status=DeliveryStatus.OPEN,
+            station_id=station.id,
+            fee=Decimal("30.00"),
+        )
+        db_session.add(delivery)
+        await db_session.commit()
+        await db_session.refresh(delivery)
+        return sender, delivery
+
+    @pytest.mark.asyncio
+    async def test_request_delivery_creates_audit(
+        self, user_factory, db_session
+    ):
+        """בקשת משלוח — נרשמת בלוג ביקורת עם DELIVERY_REQUESTED"""
+        owner, station = await self._create_station_with_owner(
+            user_factory, db_session
+        )
+        _, delivery = await self._create_station_delivery(
+            user_factory, db_session, station
+        )
+        courier = await user_factory(
+            phone_number="+972504444444",
+            name="שליח מאושר",
+            role=UserRole.COURIER,
+            approval_status=ApprovalStatus.APPROVED,
+        )
+
+        with _mock_workflow_outbox():
+            service = ShipmentWorkflowService(db_session)
+            success, msg, _ = await service.request_delivery(
+                delivery.id, courier.id
+            )
+
+        assert success is True
+
+        audit = AuditService(db_session)
+        entries = await audit.get_entity_audit_trail("delivery", delivery.id)
+        requested = [
+            e for e in entries if e.action == AuditActionType.DELIVERY_REQUESTED
+        ]
+        assert len(requested) == 1
+        assert requested[0].actor_user_id == courier.id
+        assert requested[0].new_value["status"] == "pending_approval"
+
+    @pytest.mark.asyncio
+    async def test_reject_delivery_creates_audit(
+        self, user_factory, db_session
+    ):
+        """דחיית משלוח — נרשמת בלוג ביקורת עם DELIVERY_REJECTED"""
+        owner, station = await self._create_station_with_owner(
+            user_factory, db_session
+        )
+        _, delivery = await self._create_station_delivery(
+            user_factory, db_session, station
+        )
+        courier = await user_factory(
+            phone_number="+972504444444",
+            name="שליח",
+            role=UserRole.COURIER,
+            approval_status=ApprovalStatus.APPROVED,
+        )
+
+        # הוספת סדרן לתחנה
+        from app.db.models.station_dispatcher import StationDispatcher
+
+        dispatcher = await user_factory(
+            phone_number="+972505555555",
+            name="סדרן",
+            role=UserRole.STATION_OWNER,
+        )
+        db_session.add(
+            StationDispatcher(station_id=station.id, user_id=dispatcher.id)
+        )
+        await db_session.commit()
+
+        # בקשה + דחייה
+        with _mock_workflow_outbox():
+            service = ShipmentWorkflowService(db_session)
+            await service.request_delivery(delivery.id, courier.id)
+            success, msg, _ = await service.reject_delivery(
+                delivery.id, dispatcher.id
+            )
+
+        assert success is True
+
+        audit = AuditService(db_session)
+        entries = await audit.get_entity_audit_trail("delivery", delivery.id)
+        rejected = [
+            e for e in entries if e.action == AuditActionType.DELIVERY_REJECTED
+        ]
+        assert len(rejected) == 1
+        assert rejected[0].actor_user_id == dispatcher.id
+        assert rejected[0].target_user_id == courier.id
+        assert rejected[0].new_value["status"] == "open"
+
+
+# ============================================================================
+# בדיקות audit ל-enum חדש
+# ============================================================================
+
+
+class TestNewAuditActionTypes:
+    """בדיקות שכל ערכי ה-enum החדשים קיימים"""
+
+    @pytest.mark.unit
+    def test_new_action_types_exist(self):
+        """כל סוגי הפעולות החדשים קיימים ב-enum"""
+        new_actions = [
+            "delivery_captured",
+            "delivery_released",
+            "delivery_requested",
+            "delivery_approved",
+            "delivery_rejected",
+            "wallet_refund",
+            "auto_blacklist_added",
+        ]
+        actual_actions = [a.value for a in AuditActionType]
+        for expected in new_actions:
+            assert expected in actual_actions, f"חסר סוג פעולה: {expected}"
+
+
+# ============================================================================
+# בדיקות audit watchdog event listener
+# ============================================================================
+
+
+class TestAuditWatchdog:
+    """בדיקות שה-watchdog מתריע על שינויים רגישים ללא audit"""
+
+    @pytest.mark.asyncio
+    async def test_watchdog_warns_on_unaudited_status_change(
+        self, user_factory, db_session, caplog
+    ):
+        """שינוי סטטוס משלוח ללא audit — watchdog כותב warning"""
+        import logging
+        from app.db.audit_events import _on_after_flush
+        from sqlalchemy import event
+        from sqlalchemy.orm import Session
+
+        # רישום ה-listener לטסט
+        event.listen(Session, "after_flush", _on_after_flush)
+
+        try:
+            sender = await user_factory(
+                phone_number="+972501111111",
+                name="שולח",
+                role=UserRole.SENDER,
+            )
+            delivery = Delivery(
+                sender_id=sender.id,
+                pickup_address="רחוב הרצל 1",
+                dropoff_address="רחוב בן יהודה 50",
+                status=DeliveryStatus.OPEN,
+                fee=Decimal("10.00"),
+            )
+            db_session.add(delivery)
+            await db_session.commit()
+
+            # שינוי סטטוס ישיר ללא audit
+            delivery.status = DeliveryStatus.CAPTURED
+            with caplog.at_level(logging.WARNING):
+                await db_session.commit()
+
+            assert any(
+                "שינוי רגיש ללא רשומת audit" in record.message
+                for record in caplog.records
+            )
+        finally:
+            event.remove(Session, "after_flush", _on_after_flush)
