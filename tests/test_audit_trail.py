@@ -999,3 +999,115 @@ class TestAuditWatchdog:
             )
         finally:
             event.remove(Session, "after_flush", _on_after_flush)
+
+    @pytest.mark.asyncio
+    async def test_watchdog_silent_when_entity_covered(
+        self, user_factory, db_session, caplog
+    ):
+        """שינוי סטטוס עם audit מלווה לאותה ישות — watchdog שותק"""
+        import logging
+        from app.db.audit_events import _on_after_flush
+        from sqlalchemy import event
+        from sqlalchemy.orm import Session
+
+        event.listen(Session, "after_flush", _on_after_flush)
+
+        try:
+            sender = await user_factory(
+                phone_number="+972501111111",
+                name="שולח",
+                role=UserRole.SENDER,
+            )
+            delivery = Delivery(
+                sender_id=sender.id,
+                pickup_address="רחוב הרצל 1",
+                dropoff_address="רחוב בן יהודה 50",
+                status=DeliveryStatus.OPEN,
+                fee=Decimal("10.00"),
+            )
+            db_session.add(delivery)
+            await db_session.commit()
+
+            # שינוי סטטוס עם audit מלווה
+            delivery.status = DeliveryStatus.CAPTURED
+            audit_entry = AuditLog(
+                actor_user_id=sender.id,
+                action=AuditActionType.DELIVERY_CAPTURED,
+                entity_type="delivery",
+                entity_id=delivery.id,
+            )
+            db_session.add(audit_entry)
+
+            caplog.clear()
+            with caplog.at_level(logging.WARNING):
+                await db_session.commit()
+
+            assert not any(
+                "שינוי רגיש ללא רשומת audit" in record.message
+                for record in caplog.records
+            )
+        finally:
+            event.remove(Session, "after_flush", _on_after_flush)
+
+    @pytest.mark.asyncio
+    async def test_watchdog_warns_uncovered_entity_in_mixed_flush(
+        self, user_factory, db_session, caplog
+    ):
+        """flush מעורב — ישות אחת מכוסה ואחרת לא — watchdog מתריע רק על החסרה"""
+        import logging
+        from app.db.audit_events import _on_after_flush
+        from sqlalchemy import event
+        from sqlalchemy.orm import Session
+
+        event.listen(Session, "after_flush", _on_after_flush)
+
+        try:
+            sender = await user_factory(
+                phone_number="+972501111111",
+                name="שולח",
+                role=UserRole.SENDER,
+            )
+            delivery1 = Delivery(
+                sender_id=sender.id,
+                pickup_address="רחוב הרצל 1",
+                dropoff_address="רחוב בן יהודה 50",
+                status=DeliveryStatus.OPEN,
+                fee=Decimal("10.00"),
+            )
+            delivery2 = Delivery(
+                sender_id=sender.id,
+                pickup_address="רחוב הרצל 2",
+                dropoff_address="רחוב בן יהודה 51",
+                status=DeliveryStatus.OPEN,
+                fee=Decimal("20.00"),
+            )
+            db_session.add_all([delivery1, delivery2])
+            await db_session.commit()
+
+            # שינוי שתי משלוחים — audit רק לראשון
+            delivery1.status = DeliveryStatus.CAPTURED
+            delivery2.status = DeliveryStatus.CANCELLED
+            audit_entry = AuditLog(
+                actor_user_id=sender.id,
+                action=AuditActionType.DELIVERY_CAPTURED,
+                entity_type="delivery",
+                entity_id=delivery1.id,
+            )
+            db_session.add(audit_entry)
+
+            caplog.clear()
+            with caplog.at_level(logging.WARNING):
+                await db_session.commit()
+
+            # צריך להתריע רק על delivery2
+            warnings = [
+                r for r in caplog.records
+                if "שינוי רגיש ללא רשומת audit" in r.message
+            ]
+            assert len(warnings) == 1
+            # extra_data נמצא ב-__dict__ של ה-LogRecord
+            extra = getattr(warnings[0], "extra_data", None)
+            assert extra is not None
+            assert extra["object_id"] == delivery2.id
+        finally:
+            event.remove(Session, "after_flush", _on_after_flush)

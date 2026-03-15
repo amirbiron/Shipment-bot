@@ -32,24 +32,43 @@ _WATCHED_FIELDS: dict[str, dict[str, str]] = {
 def _on_after_flush(session: Session, flush_context: object) -> None:
     """בודק אחרי flush אם יש שינויים רגישים ללא audit מלווה.
 
-    הבדיקה: אם יש dirty object עם שדה רגיש שהשתנה,
-    ואין AuditLog חדש באותו flush — מדפיס warning.
+    לכל אובייקט שהשתנה, בודק האם יש רשומת AuditLog חדשה באותו flush
+    שמכסה את entity_id שלו. אם לא — מתריע ב-warning log.
     """
-    # בדיקה אם נוצרו רשומות AuditLog באותו flush
     from app.db.models.audit_log import AuditLog
-    has_audit = any(
-        isinstance(obj, AuditLog) for obj in session.new
-    )
 
-    if has_audit:
-        # יש audit — סביר שהשינויים מכוסים
-        return
+    # איסוף entity_ids שמכוסים ב-audit — בודקים per-object
+    audited_entities: set[tuple[str, int | None]] = set()
+    for obj in session.new:
+        if isinstance(obj, AuditLog):
+            audited_entities.add((obj.entity_type or "", obj.entity_id))
 
     # בדיקת אובייקטים שהשתנו (dirty)
     for obj in list(session.dirty):
         model_name = type(obj).__name__
         watched = _WATCHED_FIELDS.get(model_name)
         if not watched:
+            continue
+
+        obj_id = getattr(obj, "id", None)
+
+        # מיפוי שם מודל ל-entity_type שמשמש ב-AuditLog
+        entity_type_map = {
+            "Delivery": "delivery",
+            "User": "user",
+            "CourierWallet": "wallet",
+        }
+        entity_type = entity_type_map.get(model_name, model_name.lower())
+
+        # עבור CourierWallet, ה-entity_id הוא courier_id
+        entity_id = obj_id
+        if model_name == "CourierWallet":
+            entity_id = getattr(obj, "courier_id", obj_id)
+
+        # בדיקה אם האובייקט הספציפי הזה מכוסה ב-audit
+        is_covered = (entity_type, entity_id) in audited_entities
+
+        if is_covered:
             continue
 
         insp = inspect(obj)
@@ -75,16 +94,16 @@ def _on_after_flush(session: Session, flush_context: object) -> None:
                     "field_desc": field_desc,
                     "old_value": str(old_val),
                     "new_value": str(new_val),
-                    "object_id": getattr(obj, "id", None),
+                    "object_id": obj_id,
                 },
             )
 
 
-def register_audit_listeners(sync_engine: object) -> None:
-    """רישום event listeners על sync engine.
+def register_audit_listeners() -> None:
+    """רישום event listeners ברמת Session (גלובלי).
 
-    נקרא מ-main.py עם engine.sync_engine (כי SQLAlchemy async
-    מריץ events דרך ה-sync engine הפנימי).
+    SQLAlchemy async מריץ events דרך ה-sync session הפנימי,
+    לכן ה-listener נרשם על Session class ולא על engine ספציפי.
     """
     event.listen(Session, "after_flush", _on_after_flush)
     logger.info("Audit watchdog event listeners רשומים")

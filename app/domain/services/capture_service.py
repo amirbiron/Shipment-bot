@@ -147,6 +147,7 @@ class CaptureService:
                 return False, f"יתרה לא מספיקה. יתרה נוכחית: {wallet.balance}₪, עמלה: {fee}₪, מגבלת אשראי: {wallet.credit_limit}₪", None
 
             # 5. Update delivery to CAPTURED
+            old_status = delivery.status
             delivery.status = DeliveryStatus.CAPTURED
             delivery.courier_id = courier_id
             delivery.captured_at = datetime.utcnow()
@@ -172,7 +173,7 @@ class CaptureService:
                 station_id=delivery.station_id,
                 entity_type="delivery",
                 entity_id=delivery_id,
-                old_value={"status": DeliveryStatus.OPEN.value},
+                old_value={"status": old_status.value},
                 new_value={"status": DeliveryStatus.CAPTURED.value},
                 details={
                     "courier_id": courier_id,
