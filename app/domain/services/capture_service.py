@@ -182,6 +182,17 @@ class CaptureService:
                 },
             )
 
+            # רישום חיוב ארנק בלוג ביקורת — מכסה את שינוי CourierWallet.balance
+            await self.audit_service.record_wallet_operation(
+                actor_user_id=courier_id,
+                courier_id=courier_id,
+                action=AuditActionType.WALLET_DEBIT,
+                amount=str(-fee),
+                balance_after=str(future_balance),
+                delivery_id=delivery_id,
+                station_id=delivery.station_id,
+            )
+
             # Queue notification messages via outbox
             await self.outbox_service.queue_capture_notification(
                 delivery, courier_id
