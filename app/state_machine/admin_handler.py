@@ -175,10 +175,16 @@ class AdminStateHandler:
             elif role_key == "station_owner":
                 await self._ensure_owner_association(user.id, station.id)
 
-        # ניקוי שיוך סדרן קיים כשעוברים לתפקיד שאינו סדרן
+        # ניקוי שיוך סדרן שנוצר בהחלפה קודמת לתפקיד סדרן
         # אחרת _get_dispatcher_station ימצא את השיוך וינתב לתפריט סדרן
+        # חשוב: מנטרלים רק את השיוך לתחנה שנוצרה בהחלפת תפקיד (admin_station_id),
+        # כדי לא לפגוע בשיוכי סדרן אמיתיים שהיו קיימים לפני השימוש בהחלפת תפקידים
         if role_key != "dispatcher":
-            await self._deactivate_dispatcher_associations(user.id)
+            prev_station_id = context.get("admin_station_id")
+            if prev_station_id is not None:
+                await self._deactivate_dispatcher_association(
+                    user.id, prev_station_id
+                )
 
         # שינוי תפקיד ב-DB
         role_map = {
@@ -260,16 +266,17 @@ class AdminStateHandler:
             )
         await self.db.flush()
 
-    async def _deactivate_dispatcher_associations(
-        self, user_id: int
+    async def _deactivate_dispatcher_association(
+        self, user_id: int, station_id: int
     ) -> None:
-        """ניטרול כל שיוכי הסדרן של המשתמש — למניעת ניתוב שגוי לתפריט סדרן"""
+        """ניטרול שיוך סדרן לתחנה ספציפית — רק השיוך שנוצר בהחלפת תפקיד אדמין"""
         from sqlalchemy import update
 
         await self.db.execute(
             update(StationDispatcher)
             .where(
                 StationDispatcher.user_id == user_id,
+                StationDispatcher.station_id == station_id,
                 StationDispatcher.is_active.is_(True),
             )
             .values(is_active=False)

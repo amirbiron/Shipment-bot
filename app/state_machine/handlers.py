@@ -1282,11 +1282,12 @@ class CourierStateHandler:
 
         # Default menu display
         safe_name = escape(user.full_name or user.name or "שליח")
+        safe_area = escape(user.service_area) if user.service_area else "לא הוגדר"
         response = MessageResponse(
             f"📋 <b>תפריט שליח</b>\n\n"
             f"שלום {safe_name}! 👋\n\n"
             f"💰 <b>מצב הארנק:</b> 0.00 ₪\n"
-            f"📍 <b>האזור שלך:</b> {user.service_area or 'לא הוגדר'}\n\n"
+            f"📍 <b>האזור שלך:</b> {safe_area}\n\n"
             "בחר פעולה:",
             keyboard=keyboard,
         )
