@@ -714,7 +714,7 @@ class SenderStateHandler:
         )
 
         if urgency == "later" and customer_price != "לא הוגדר":
-            summary += f"💰 מחיר מוצע: {customer_price} ₪\n"
+            summary += f"💰 מחיר מוצע: {escape(str(customer_price))} ₪\n"
 
         summary += f"📦 תיאור: {safe_description}\n\n"
         summary += "לאשר את המשלוח?"
@@ -753,7 +753,7 @@ class SenderStateHandler:
             if description:
                 success_msg += f"📦 תיאור: {safe_description}\n"
             if customer_price:
-                success_msg += f"💰 מחיר: {customer_price} ₪\n"
+                success_msg += f"💰 מחיר: {escape(str(customer_price))} ₪\n"
 
             success_msg += "\nהשליחים יקבלו התראה בקרוב.\n" "מה תרצו לעשות עכשיו?"
 
@@ -1281,11 +1281,13 @@ class CourierStateHandler:
             keyboard.insert(0, ["🏪 תפריט סדרן"])
 
         # Default menu display
+        safe_name = escape(user.full_name or user.name or "שליח")
+        safe_area = escape(user.service_area) if user.service_area else "לא הוגדר"
         response = MessageResponse(
             f"📋 <b>תפריט שליח</b>\n\n"
-            f"שלום {user.name}! 👋\n\n"
+            f"שלום {safe_name}! 👋\n\n"
             f"💰 <b>מצב הארנק:</b> 0.00 ₪\n"
-            f"📍 <b>האזור שלך:</b> {user.service_area or 'לא הוגדר'}\n\n"
+            f"📍 <b>האזור שלך:</b> {safe_area}\n\n"
             "בחר פעולה:",
             keyboard=keyboard,
         )
