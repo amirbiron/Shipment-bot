@@ -63,6 +63,25 @@ async def restore_admin_context(
     await state_manager.force_state(user_id, platform, new_state, context=ctx)
 
 
+async def _deactivate_admin_dispatcher(
+    db: object, user_id: int, station_id: int
+) -> None:
+    """ניטרול שיוך סדרן שנוצר בהחלפת תפקיד אדמין בלבד."""
+    from sqlalchemy import update
+    from app.db.models.station_dispatcher import StationDispatcher
+
+    await db.execute(
+        update(StationDispatcher)
+        .where(
+            StationDispatcher.user_id == user_id,
+            StationDispatcher.station_id == station_id,
+            StationDispatcher.is_active.is_(True),
+        )
+        .values(is_active=False)
+    )
+    await db.flush()
+
+
 async def restore_admin_role_and_route(
     user: object,
     db: object,
@@ -79,6 +98,14 @@ async def restore_admin_role_and_route(
 
     ctx = await state_manager.get_context(user.id, platform)
     original_approval = ctx.get("original_approval_status")
+
+    # ניטרול שיוך סדרן שנוצר בהחלפת תפקיד — לפני ניקוי ה-context
+    # בלי זה, השיוך נשאר פעיל ו-_get_dispatcher_station() מנתב לתפריט סדרן
+    admin_station_id = ctx.get("admin_station_id")
+    admin_target_role = ctx.get("admin_target_role")
+    if admin_station_id is not None and admin_target_role == "dispatcher":
+        await _deactivate_admin_dispatcher(db, user.id, admin_station_id)
+
     user.role = UserRole.ADMIN
     if original_approval is not None:
         user.approval_status = (
