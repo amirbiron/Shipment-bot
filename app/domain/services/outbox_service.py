@@ -111,20 +111,18 @@ class OutboxService:
         else:
             capture_instruction = f"לתפיסת המשלוח הקלידו: /capture {delivery.token}"
 
-        from app.core.message_design import shipment_card
-
         content = {
             "delivery_id": delivery.id,
             "token": delivery.token,
             "pickup_address": delivery.pickup_address,
             "dropoff_address": delivery.dropoff_address,
             "fee": delivery.fee,
-            "message_text": shipment_card(
-                pickup=delivery.pickup_address,
-                dropoff=delivery.dropoff_address,
-                fee=delivery.fee,
-                token=delivery.token,
-                capture_instruction=capture_instruction,
+            "message_text": (
+                f"🚚 משלוח חדש זמין!\n\n"
+                f"📍 איסוף: {escape(delivery.pickup_address)}\n"
+                f"🎯 יעד: {escape(delivery.dropoff_address)}\n"
+                f"💰 עמלה: {delivery.fee}₪\n\n"
+                f"{capture_instruction}"
             )
         }
 
@@ -188,15 +186,13 @@ class OutboxService:
         if not recipient:
             return messages
 
-        from app.core.message_design import capture_notification_card
-
         content = {
             "delivery_id": delivery.id,
             "courier_id": courier_id,
-            "message_text": capture_notification_card(
-                delivery_id=delivery.id,
-                pickup=delivery.pickup_address,
-                dropoff=delivery.dropoff_address,
+            "message_text": (
+                f"✅ המשלוח #{delivery.id} נתפס!\n\n"
+                f"📍 איסוף: {delivery.pickup_address}\n"
+                f"🎯 יעד: {delivery.dropoff_address}"
             )
         }
 
