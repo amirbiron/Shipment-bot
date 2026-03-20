@@ -927,3 +927,8 @@ async def _handle_initial(self, user, message, context):
 26. **אסור `joinedload` עם `with_for_update()`** - PostgreSQL דוחה FOR UPDATE על LEFT OUTER JOIN. לפצל לשתי שאילתות נפרדות
 27. **אסור `patch(..., new=AsyncMock())` ברמת מודול בטסטים** - אותו mock משותף בין טסטים וגורם לדליפת state. להשתמש בפונקציה שמחזירה patch חדש
 28. **אסור `isinstance(r, Exception)` לסינון תוצאות `asyncio.gather(return_exceptions=True)`** - `CancelledError` הוא `BaseException` ולא `Exception`; להשתמש ב-`isinstance(r, BaseException)`
+29. **אסור לקרוא לפונקציה async ללא await** — לפני push, חפש בכל הקבצים שהשתנו קריאות לפונקציות async. ודא שכל קריאה עטופה ב-`await`. coroutine object ללא await הוא תמיד truthy — זה באג שקט שיכול לשבור הכול
+30. **אסור check-then-act לא אטומי** — אל תפריד בין בדיקת תנאי לביצוע פעולה. אם יש lock/mutex, הבדיקה חייבת להיות בתוכו. במיוחד: daily limits, dedup checks, state transitions. השתמש ב-`UPDATE ... WHERE status = 'X'` + `rowcount` במקום SELECT+UPDATE
+31. **אסור לחשוף מידע פנימי ב-API responses** — ודא ש-`to_dict()` / response body לא מכילים: internal IDs, password hashes, stack traces, מזהי DB, או הודעות שגיאה באנגלית טכנית. החזר הודעה גנרית בעברית למשתמש
+32. **אסור קלט מספרי ללא בדיקת NaN/Inf** — בכל validator מספרי, בדוק קודם `math.isnan()` ו-`math.isinf()`. NaN comparisons תמיד מחזירות False — ה-NaN יעבור כל בדיקת טווח
+33. **אסור לגשת ל-attributes של SQLAlchemy model אחרי commit/close** — אחרי `db.commit()`, כל ה-attributes דורשים re-fetch. חלץ ערכים פרימיטיביים (IDs, strings) לפני ה-commit, ואז בצע `db.execute(select(...))` מחדש. זה מונע MissingGreenlet errors

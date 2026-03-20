@@ -191,8 +191,8 @@ class OutboxService:
             "courier_id": courier_id,
             "message_text": (
                 f"✅ המשלוח #{delivery.id} נתפס!\n\n"
-                f"📍 איסוף: {delivery.pickup_address}\n"
-                f"🎯 יעד: {delivery.dropoff_address}"
+                f"📍 איסוף: {escape(delivery.pickup_address)}\n"
+                f"🎯 יעד: {escape(delivery.dropoff_address)}"
             )
         }
 
