@@ -150,7 +150,7 @@ def shipment_card(
         lines.append(f"📦 תיאור: {escape(description)}")
     if customer_price:
         lines.append(f"💰 מחיר מוצע: {escape(str(customer_price))} ₪")
-    if fee:
+    if fee is not None and fee != "":
         lines.append(f"💰 עמלה: {escape(str(fee))} ₪")
 
     if capture_instruction:
