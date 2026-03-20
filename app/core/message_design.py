@@ -27,17 +27,20 @@ def _line(length: int = _LINE_LEN) -> str:
 def card_header(emoji: str, title: str, subtitle: str = "", wide: bool = False) -> str:
     """
     כותרת כרטיס עם מסגרת.
+    רוחב המסגרת נגזר מאורך התוכן (מינימום _LINE_LEN/_LINE_LEN_WIDE).
 
     >>> card_header("🚚", "משלוח חדש", "#S-00891")
     ╔══════════════════════════╗
     🚚 משלוח חדש | #S-00891
     ╚══════════════════════════╝
     """
-    length = _LINE_LEN_WIDE if wide else _LINE_LEN
-    line = _line(length)
+    min_length = _LINE_LEN_WIDE if wide else _LINE_LEN
     title_part = f"{emoji} {title}"
     if subtitle:
         title_part += f" | {subtitle}"
+    # רוחב מסגרת מותאם לתוכן — לפחות המינימום
+    length = max(min_length, len(title_part) + 2)
+    line = _line(length)
     return f"╔{line}╗\n{title_part}\n╚{line}╝"
 
 
@@ -64,46 +67,21 @@ def separator(wide: bool = False) -> str:
 # ==================== שדות עץ ====================
 
 
-def tree_field(label: str, value: str, last: bool = False) -> str:
-    """
-    שדה בתבנית עץ.
-
-    last=False: ├ שם: אמיר חיים
-    last=True:  └ אזור: תל אביב
-    """
-    branch = "└" if last else "├"
-    safe_value = escape(str(value))
-    return f"{branch} {label}: {safe_value}"
-
-
 def tree_field_icon(icon: str, label: str, value: str, last: bool = False) -> str:
     """
     שדה בתבנית עץ עם אייקון.
 
     last=False: ├ 📌 איסוף: בלקינד 1, ת״א
     last=True:  └ 🎯 יעד: בלקינד 2, ת״א
+
+    אם label ריק, מוצג ללא נקודתיים:
+    └ 💰 20 ₪
     """
     branch = "└" if last else "├"
     safe_value = escape(str(value))
-    return f"{branch} {icon} {label}: {safe_value}"
-
-
-def tree_fields(fields: list[tuple[str, str]]) -> str:
-    """
-    רשימת שדות בתבנית עץ (האחרון מקבל └ אוטומטית).
-
-    >>> tree_fields([("שם", "אמיר"), ("גיל", "39"), ("אזור", "ת״א")])
-    ├ שם: אמיר
-    ├ גיל: 39
-    └ אזור: ת״א
-    """
-    if not fields:
-        return ""
-    lines = []
-    for i, (label, value) in enumerate(fields):
-        is_last = i == len(fields) - 1
-        lines.append(tree_field(label, value, last=is_last))
-    return "\n".join(lines)
+    if label:
+        return f"{branch} {icon} {label}: {safe_value}"
+    return f"{branch} {icon} {safe_value}"
 
 
 def tree_fields_icon(fields: list[tuple[str, str, str]]) -> str:
