@@ -701,23 +701,20 @@ class SenderStateHandler:
         delivery_time = context.get("delivery_time", "מיידי")
         customer_price = context.get("customer_price", "לא הוגדר")
 
-        safe_pickup = escape(pickup)
-        safe_dropoff = escape(dropoff)
-        safe_description = escape(description)
-        safe_delivery_time = escape(str(delivery_time))
-        summary = (
-            f"📋 <b>סיכום המשלוח:</b>\n\n"
-            f"📍 איסוף: {safe_pickup}\n"
-            f"🎯 יעד: {safe_dropoff}\n"
-            f"🗺️ סוג: {location_text}\n"
-            f"⏰ זמן: {safe_delivery_time}\n"
-        )
+        from app.core.message_design import shipment_summary_card
 
+        price_display = ""
         if urgency == "later" and customer_price != "לא הוגדר":
-            summary += f"💰 מחיר מוצע: {customer_price} ₪\n"
+            price_display = str(customer_price)
 
-        summary += f"📦 תיאור: {safe_description}\n\n"
-        summary += "לאשר את המשלוח?"
+        summary = shipment_summary_card(
+            pickup=pickup,
+            dropoff=dropoff,
+            description=description,
+            delivery_time=str(delivery_time),
+            location_type=location_text,
+            customer_price=price_display,
+        )
 
         response = MessageResponse(
             summary, keyboard=[["✅ אישור ושליחה", "❌ ביטול"]]
@@ -740,22 +737,15 @@ class SenderStateHandler:
             delivery_time = context.get("delivery_time", "מיידי")
             customer_price = context.get("customer_price")
 
-            safe_pickup = escape(pickup)
-            safe_dropoff = escape(dropoff)
-            safe_delivery_time = escape(str(delivery_time))
-            safe_description = escape(description) if description else ""
-            success_msg = (
-                "המשלוח נוצר בהצלחה! 🎉\n\n"
-                f"📍 מ: {safe_pickup}\n"
-                f"🎯 אל: {safe_dropoff}\n"
-                f"⏰ זמן: {safe_delivery_time}\n"
-            )
-            if description:
-                success_msg += f"📦 תיאור: {safe_description}\n"
-            if customer_price:
-                success_msg += f"💰 מחיר: {customer_price} ₪\n"
+            from app.core.message_design import success_delivery_card
 
-            success_msg += "\nהשליחים יקבלו התראה בקרוב.\n" "מה תרצו לעשות עכשיו?"
+            success_msg = success_delivery_card(
+                pickup=pickup,
+                dropoff=dropoff,
+                delivery_time=str(delivery_time),
+                description=description or "",
+                customer_price=str(customer_price) if customer_price else "",
+            )
 
             response = MessageResponse(
                 success_msg,
@@ -1281,12 +1271,14 @@ class CourierStateHandler:
             keyboard.insert(0, ["🏪 תפריט סדרן"])
 
         # Default menu display
+        from app.core.message_design import courier_menu_card
+
         response = MessageResponse(
-            f"📋 <b>תפריט שליח</b>\n\n"
-            f"שלום {user.name}! 👋\n\n"
-            f"💰 <b>מצב הארנק:</b> 0.00 ₪\n"
-            f"📍 <b>האזור שלך:</b> {user.service_area or 'לא הוגדר'}\n\n"
-            "בחר פעולה:",
+            courier_menu_card(
+                name=user.name or "שליח",
+                balance="0.00",
+                service_area=user.service_area or "לא הוגדר",
+            ),
             keyboard=keyboard,
         )
         return response, CourierState.MENU.value, {}
@@ -1303,13 +1295,14 @@ class CourierStateHandler:
 
         from app.core.config import settings
 
+        from app.core.message_design import courier_wallet_card
+
         response = MessageResponse(
-            "💰 <b>פרטי הארנק</b>\n\n"
-            "🟢 סטטוס: פעיל\n\n"
-            "💵 יתרה נוכחית: <b>0.00 ₪</b>\n"
-            f"📊 מסגרת אשראי: {settings.DEFAULT_CREDIT_LIMIT:.2f} ₪\n"
-            f"🎯 נותר עד לחסימה: {-settings.DEFAULT_CREDIT_LIMIT:.2f} ₪\n\n"
-            "לטעינת הארנק, לחץ על 'הפקדה'.",
+            courier_wallet_card(
+                balance="0.00",
+                credit_limit=f"{settings.DEFAULT_CREDIT_LIMIT:.2f}",
+                remaining=f"{-settings.DEFAULT_CREDIT_LIMIT:.2f}",
+            ),
             keyboard=[["💳 הפקדה"], ["🔙 חזרה לתפריט"]],
         )
         return response, CourierState.VIEW_WALLET.value, {}

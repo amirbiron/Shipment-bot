@@ -190,8 +190,10 @@ class DispatcherStateHandler:
         station = await self.station_service.get_station(self.station_id)
         station_name = station.name if station else "תחנה"
 
+        from app.core.message_design import dispatcher_menu_card
+
         response = MessageResponse(
-            f"🏪 <b>תפריט סדרן - {escape(station_name)}</b>\n\n" "בחר פעולה:",
+            dispatcher_menu_card(station_name=station_name),
             keyboard=[
                 ["➕ הוספת משלוח", "📦 משלוחים פעילים"],
                 ["🚗 פרסום נסיעה", "🛣 נסיעות פעילות"],
@@ -425,13 +427,13 @@ class DispatcherStateHandler:
         dropoff = context.get("dropoff_address", "לא צוין")
         description = context.get("description", "")
 
-        summary = (
-            "📋 <b>סיכום המשלוח:</b>\n\n"
-            f"📍 איסוף: {escape(pickup)}\n"
-            f"🎯 יעד: {escape(dropoff)}\n"
-            f"📦 תיאור: {escape(description)}\n"
-            f"💰 מחיר: {fee:.2f} ₪\n\n"
-            "לאשר את המשלוח?"
+        from app.core.message_design import shipment_summary_card
+
+        summary = shipment_summary_card(
+            pickup=pickup,
+            dropoff=dropoff,
+            description=description,
+            fee=f"{fee:.2f}",
         )
 
         response = MessageResponse(
@@ -502,8 +504,10 @@ class DispatcherStateHandler:
         )
 
         if not deliveries:
+            from app.core.message_design import card_header
+
             response = MessageResponse(
-                "📦 <b>משלוחים פעילים</b>\n\n" "אין משלוחים פעילים כרגע.",
+                card_header("📦", "משלוחים פעילים") + "\n\nאין משלוחים פעילים כרגע.",
                 keyboard=[["🔙 חזרה לתפריט סדרן"]],
             )
             return response, DispatcherState.VIEW_ACTIVE_SHIPMENTS.value, {}
@@ -514,15 +518,20 @@ class DispatcherStateHandler:
             DeliveryStatus.IN_PROGRESS: "🔵 בדרך",
         }
 
-        text = "📦 <b>משלוחים פעילים</b>\n\n"
+        from app.core.message_design import active_deliveries_card, delivery_list_item
+
+        items = []
         for d in deliveries[:10]:
             status_text = status_map.get(d.status, d.status.value)
-            text += (
-                f"#{d.id} | {status_text}\n"
-                f"  📍 {escape(d.pickup_address[:30])}\n"
-                f"  🎯 {escape(d.dropoff_address[:30])}\n"
-                f"  💰 {d.fee:.0f} ₪\n\n"
-            )
+            items.append(delivery_list_item(
+                delivery_id=d.id,
+                status_text=status_text,
+                pickup=d.pickup_address,
+                dropoff=d.dropoff_address,
+                fee=d.fee,
+            ))
+
+        text = active_deliveries_card("\n\n".join(items))
 
         response = MessageResponse(text, keyboard=[["🔙 חזרה לתפריט סדרן"]])
         return response, DispatcherState.VIEW_ACTIVE_SHIPMENTS.value, {}
@@ -541,8 +550,10 @@ class DispatcherStateHandler:
         )
 
         if not deliveries:
+            from app.core.message_design import card_header
+
             response = MessageResponse(
-                "📋 <b>היסטוריית משלוחים</b>\n\n" "אין משלוחים בהיסטוריה עדיין.",
+                card_header("📋", "היסטוריית משלוחים") + "\n\nאין משלוחים בהיסטוריה עדיין.",
                 keyboard=[["🔙 חזרה לתפריט סדרן"]],
             )
             return response, DispatcherState.VIEW_SHIPMENT_HISTORY.value, {}
@@ -552,15 +563,24 @@ class DispatcherStateHandler:
             DeliveryStatus.CANCELLED: "❌ בוטל",
         }
 
-        text = "📋 <b>היסטוריית משלוחים</b>\n\n"
+        from app.core.message_design import active_deliveries_card, delivery_list_item
+
+        items = []
         for d in deliveries[:10]:
             status_text = status_map.get(d.status, d.status.value)
-            text += (
-                f"#{d.id} | {status_text}\n"
-                f"  📍 {escape(d.pickup_address[:30])}\n"
-                f"  🎯 {escape(d.dropoff_address[:30])}\n"
-                f"  💰 {d.fee:.0f} ₪\n\n"
-            )
+            items.append(delivery_list_item(
+                delivery_id=d.id,
+                status_text=status_text,
+                pickup=d.pickup_address,
+                dropoff=d.dropoff_address,
+                fee=d.fee,
+            ))
+
+        text = active_deliveries_card(
+            "\n\n".join(items),
+            title="היסטוריית משלוחים",
+            emoji="📋",
+        )
 
         response = MessageResponse(text, keyboard=[["🔙 חזרה לתפריט סדרן"]])
         return response, DispatcherState.VIEW_SHIPMENT_HISTORY.value, {}
@@ -944,8 +964,10 @@ class DispatcherStateHandler:
         rides = await self.station_service.get_station_active_rides(self.station_id)
 
         if not rides:
+            from app.core.message_design import card_header
+
             response = MessageResponse(
-                "🛣 <b>נסיעות פעילות</b>\n\n" "אין נסיעות פעילות כרגע.",
+                card_header("🛣", "נסיעות פעילות") + "\n\nאין נסיעות פעילות כרגע.",
                 keyboard=[["🔙 חזרה לתפריט סדרן"]],
             )
             return response, DispatcherState.VIEW_POSTED_RIDES.value, {}
@@ -955,14 +977,22 @@ class DispatcherStateHandler:
             DispatcherRideStatus.TAKEN.value: "🟠 נתפסה",
         }
 
-        text = "🛣 <b>נסיעות פעילות</b>\n\n"
+        from app.core.message_design import active_deliveries_card
+
+        items = []
         for ride in rides[:10]:
             status_text = status_map.get(ride.status, ride.status)
-            text += (
+            items.append(
                 f"#{ride.id} | {status_text}\n"
-                f"  📍 {escape(ride.origin_city)} → {escape(ride.destination_city)}\n"
-                f"  👥 {ride.seats} מק' | 💰 {ride.price:.0f} ₪\n\n"
+                f"├ 📍 {escape(ride.origin_city)} → {escape(ride.destination_city)}\n"
+                f"└ 👥 {ride.seats} מק' | 💰 {ride.price:.0f} ₪"
             )
+
+        text = active_deliveries_card(
+            "\n\n".join(items),
+            title="נסיעות פעילות",
+            emoji="🛣",
+        )
 
         response = MessageResponse(text, keyboard=[["🔙 חזרה לתפריט סדרן"]])
         return response, DispatcherState.VIEW_POSTED_RIDES.value, {}

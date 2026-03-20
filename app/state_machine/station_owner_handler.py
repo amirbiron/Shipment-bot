@@ -167,10 +167,13 @@ class StationOwnerStateHandler:
         wallet = await self.station_service.get_station_wallet(self.station_id)
         balance = wallet.balance if wallet else 0.0
 
+        from app.core.message_design import station_panel_card
+
         response = MessageResponse(
-            f"🏢 <b>פאנל ניהול - {escape(station_name)}</b>\n\n"
-            f"💰 יתרת ארנק: {balance:.2f} ₪\n\n"
-            "בחר פעולה:",
+            station_panel_card(
+                station_name=station_name,
+                balance=f"{balance:.2f}",
+            ),
             keyboard=[
                 ["👤 ניהול בעלים", "👥 ניהול סדרנים"],
                 ["💰 ארנק תחנה", "📊 דוח גבייה"],
@@ -559,19 +562,22 @@ class StationOwnerStateHandler:
         wallet = await self.station_service.get_station_wallet(self.station_id)
         ledger = await self.station_service.get_station_ledger(self.station_id)
 
-        text = (
-            "💰 <b>ארנק תחנה</b>\n\n"
-            f"💵 יתרה: <b>{wallet.balance:.2f} ₪</b>\n"
-            f"📊 שיעור עמלה: {wallet.commission_rate * 100:.0f}%\n\n"
-        )
+        from app.core.message_design import station_wallet_card
 
+        ledger_lines = None
         if ledger:
-            text += "<b>תנועות אחרונות:</b>\n"
+            ledger_lines = []
             for entry in ledger[:5]:
                 sign = "+" if entry.amount > 0 else ""
-                text += f"  {sign}{entry.amount:.2f} ₪ | {escape(entry.description or '')}\n"
-        else:
-            text += "אין תנועות עדיין.\n"
+                ledger_lines.append(
+                    f"{sign}{entry.amount:.2f} ₪ | {escape(entry.description or '')}"
+                )
+
+        text = station_wallet_card(
+            balance=f"{wallet.balance:.2f}",
+            commission_rate=f"{wallet.commission_rate * 100:.0f}",
+            ledger_lines=ledger_lines,
+        )
 
         response = MessageResponse(
             text,
