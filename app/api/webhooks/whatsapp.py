@@ -856,11 +856,20 @@ async def _route_to_role_menu_wa(
     """
     # שמירת admin context לפני ניתוב
     admin_keys = await _save_admin_context_wa(user.id, state_manager, "whatsapp")
+    is_admin_impersonating = bool(
+        admin_keys and admin_keys.get("original_role") == "admin"
+    )
+    # כשאדמין מחליף תפקיד, דילוג על בדיקת סדרן אלא אם ביקש תפקיד סדרן
+    skip_dispatcher = is_admin_impersonating and admin_keys.get(
+        "admin_target_role"
+    ) != "dispatcher"
 
-    response, new_state = await _route_to_role_menu_wa_inner(user, db, state_manager)
+    response, new_state = await _route_to_role_menu_wa_inner(
+        user, db, state_manager, skip_dispatcher_check=skip_dispatcher
+    )
 
     # שחזור admin context והוספת כפתור חזרה
-    if admin_keys and admin_keys.get("original_role") == "admin":
+    if is_admin_impersonating:
         await _restore_admin_context_wa(
             user.id, state_manager, new_state, admin_keys, "whatsapp"
         )
@@ -873,6 +882,8 @@ async def _route_to_role_menu_wa_inner(
     user: User,
     db: AsyncSession,
     state_manager: StateManager,
+    *,
+    skip_dispatcher_check: bool = False,
 ) -> tuple:
     """ניתוב פנימי לתפריט לפי תפקיד — ללא טיפול ב-admin context (WhatsApp)"""
     if user.role == UserRole.COURIER:
@@ -912,16 +923,17 @@ async def _route_to_role_menu_wa_inner(
         await session_service.touch_session(user.id)
 
         # סשן 9: בדיקה אם הנהג הוא גם סדרן פעיל בתחנה
-        from app.domain.services.station_service import StationService
+        if not skip_dispatcher_check:
+            from app.domain.services.station_service import StationService
 
-        station_service = StationService(db)
-        dispatcher_station = await station_service.get_dispatcher_station(user.id)
-        if dispatcher_station:
-            await state_manager.force_state(
-                user.id, "whatsapp", DispatcherState.MENU.value, context={}
-            )
-            handler = DispatcherStateHandler(db, dispatcher_station.id, platform="whatsapp")
-            return await handler.handle_message(user, "תפריט", None)
+            station_service = StationService(db)
+            dispatcher_station = await station_service.get_dispatcher_station(user.id)
+            if dispatcher_station:
+                await state_manager.force_state(
+                    user.id, "whatsapp", DispatcherState.MENU.value, context={}
+                )
+                handler = DispatcherStateHandler(db, dispatcher_station.id, platform="whatsapp")
+                return await handler.handle_message(user, "תפריט", None)
 
         await state_manager.force_state(
             user.id, "whatsapp", DriverState.INITIAL.value, context={}
@@ -945,16 +957,17 @@ async def _route_to_role_menu_wa_inner(
 
     if user.role == UserRole.SENDER:
         # בדיקה אם המשתמש הוא סדרן פעיל — סדרנים שאינם שליחים נכנסים ישירות לתפריט סדרן
-        from app.domain.services.station_service import StationService
+        if not skip_dispatcher_check:
+            from app.domain.services.station_service import StationService
 
-        station_service = StationService(db)
-        dispatcher_station = await station_service.get_dispatcher_station(user.id)
-        if dispatcher_station:
-            await state_manager.force_state(
-                user.id, "whatsapp", DispatcherState.MENU.value, context={}
-            )
-            handler = DispatcherStateHandler(db, dispatcher_station.id, platform="whatsapp")
-            return await handler.handle_message(user, "תפריט", None)
+            station_service = StationService(db)
+            dispatcher_station = await station_service.get_dispatcher_station(user.id)
+            if dispatcher_station:
+                await state_manager.force_state(
+                    user.id, "whatsapp", DispatcherState.MENU.value, context={}
+                )
+                handler = DispatcherStateHandler(db, dispatcher_station.id, platform="whatsapp")
+                return await handler.handle_message(user, "תפריט", None)
 
         return await _sender_fallback_wa(user, db, state_manager)
 

@@ -1184,11 +1184,21 @@ async def _route_to_role_menu(
     """
     # שמירת admin context לפני ניתוב (force_state מוחק context)
     admin_keys = await _save_admin_context(user.id, state_manager, "telegram")
+    is_admin_impersonating = bool(
+        admin_keys and admin_keys.get("original_role") == "admin"
+    )
+    # כשאדמין מחליף תפקיד, דילוג על בדיקת סדרן אלא אם ביקש תפקיד סדרן —
+    # אחרת שיוך סדרן אמיתי ב-DB ינתב תמיד לתפריט סדרן במקום לתפקיד המבוקש
+    skip_dispatcher = is_admin_impersonating and admin_keys.get(
+        "admin_target_role"
+    ) != "dispatcher"
 
-    response, new_state = await _route_to_role_menu_inner(user, db, state_manager)
+    response, new_state = await _route_to_role_menu_inner(
+        user, db, state_manager, skip_dispatcher_check=skip_dispatcher
+    )
 
     # שחזור admin context והוספת כפתור חזרה
-    if admin_keys and admin_keys.get("original_role") == "admin":
+    if is_admin_impersonating:
         await _restore_admin_context(
             user.id, state_manager, new_state, admin_keys, "telegram"
         )
@@ -1201,6 +1211,8 @@ async def _route_to_role_menu_inner(
     user: User,
     db: AsyncSession,
     state_manager: StateManager,
+    *,
+    skip_dispatcher_check: bool = False,
 ) -> tuple[MessageResponse, str]:
     """ניתוב פנימי לתפריט לפי תפקיד — ללא טיפול ב-admin context"""
     if user.role == UserRole.COURIER:
@@ -1229,13 +1241,14 @@ async def _route_to_role_menu_inner(
         await session_service.touch_session(user.id)
 
         # סשן 9: בדיקה אם הנהג הוא גם סדרן פעיל בתחנה
-        dispatcher_station = await _get_dispatcher_station(user, db)
-        if dispatcher_station is not None:
-            await state_manager.force_state(
-                user.id, "telegram", DispatcherState.MENU.value, context={}
-            )
-            handler = DispatcherStateHandler(db, dispatcher_station.id)
-            return await handler.handle_message(user, "תפריט", None)
+        if not skip_dispatcher_check:
+            dispatcher_station = await _get_dispatcher_station(user, db)
+            if dispatcher_station is not None:
+                await state_manager.force_state(
+                    user.id, "telegram", DispatcherState.MENU.value, context={}
+                )
+                handler = DispatcherStateHandler(db, dispatcher_station.id)
+                return await handler.handle_message(user, "תפריט", None)
 
         # נהג רשום → ישירות לתפריט; לא רשום → _handle_initial ינתב לרישום
         await state_manager.force_state(
@@ -1258,13 +1271,14 @@ async def _route_to_role_menu_inner(
 
     if user.role == UserRole.SENDER:
         # בדיקה אם המשתמש הוא סדרן פעיל — סדרנים שאינם שליחים נכנסים ישירות לתפריט סדרן
-        dispatcher_station = await _get_dispatcher_station(user, db)
-        if dispatcher_station is not None:
-            await state_manager.force_state(
-                user.id, "telegram", DispatcherState.MENU.value, context={}
-            )
-            handler = DispatcherStateHandler(db, dispatcher_station.id)
-            return await handler.handle_message(user, "תפריט", None)
+        if not skip_dispatcher_check:
+            dispatcher_station = await _get_dispatcher_station(user, db)
+            if dispatcher_station is not None:
+                await state_manager.force_state(
+                    user.id, "telegram", DispatcherState.MENU.value, context={}
+                )
+                handler = DispatcherStateHandler(db, dispatcher_station.id)
+                return await handler.handle_message(user, "תפריט", None)
 
         return await _sender_fallback(user, db, state_manager)
 
