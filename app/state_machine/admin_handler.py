@@ -177,11 +177,14 @@ class AdminStateHandler:
 
         # ניקוי שיוך סדרן שנוצר בהחלפה קודמת לתפקיד סדרן
         # אחרת _get_dispatcher_station ימצא את השיוך וינתב לתפריט סדרן
-        # חשוב: מנטרלים רק את השיוך לתחנה שנוצרה בהחלפת תפקיד (admin_station_id),
-        # כדי לא לפגוע בשיוכי סדרן אמיתיים שהיו קיימים לפני השימוש בהחלפת תפקידים
+        # חשוב: מנטרלים רק את השיוך לתחנה שנוצרה בהחלפת תפקיד לסדרן,
+        # כדי לא לפגוע בשיוכי סדרן אמיתיים שהיו קיימים לפני השימוש בהחלפת תפקידים.
+        # בודקים admin_target_role == "dispatcher" כי admin_station_id נשמר
+        # גם עבור station_owner — אסור לנטרל שיוך סדרן שלא נוצר בהחלפה
         if role_key != "dispatcher":
             prev_station_id = context.get("admin_station_id")
-            if prev_station_id is not None:
+            prev_target_role = context.get("admin_target_role")
+            if prev_station_id is not None and prev_target_role == "dispatcher":
                 await self._deactivate_dispatcher_association(
                     user.id, prev_station_id
                 )
