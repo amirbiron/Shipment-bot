@@ -1189,9 +1189,8 @@ async def _route_to_role_menu(
     )
     # כשאדמין מחליף תפקיד, דילוג על בדיקת סדרן אלא אם ביקש תפקיד סדרן —
     # אחרת שיוך סדרן אמיתי ב-DB ינתב תמיד לתפריט סדרן במקום לתפקיד המבוקש
-    skip_dispatcher = is_admin_impersonating and admin_keys.get(
-        "admin_target_role"
-    ) != "dispatcher"
+    admin_target = admin_keys.get("admin_target_role") if is_admin_impersonating else None
+    skip_dispatcher = admin_target is not None and admin_target != "dispatcher"
 
     response, new_state = await _route_to_role_menu_inner(
         user, db, state_manager, skip_dispatcher_check=skip_dispatcher
