@@ -16,6 +16,7 @@ _ADMIN_CONTEXT_KEYS = (
     "original_approval_status",
     "admin_station_id",
     "admin_target_role",
+    "admin_dispatcher_preexisted",
 )
 
 _ADMIN_RETURN_BUTTON = "🔙 חזרה לאדמין"
@@ -74,11 +75,27 @@ async def restore_admin_role_and_route(
     מחזיר (response, new_state).
     """
     from app.db.models.user import UserRole, ApprovalStatus
-    from app.state_machine.admin_handler import AdminStateHandler
+    from app.state_machine.admin_handler import (
+        AdminStateHandler,
+        deactivate_dispatcher_association,
+    )
     from app.state_machine.states import AdminState
 
     ctx = await state_manager.get_context(user.id, platform)
     original_approval = ctx.get("original_approval_status")
+
+    # ניטרול שיוך סדרן שנוצר בהחלפת תפקיד — לפני ניקוי ה-context
+    # מנטרלים רק אם השיוך לא היה קיים לפני ההחלפה (preexisted=False)
+    admin_station_id = ctx.get("admin_station_id")
+    admin_target_role = ctx.get("admin_target_role")
+    admin_preexisted = ctx.get("admin_dispatcher_preexisted", False)
+    if (
+        admin_station_id is not None
+        and admin_target_role == "dispatcher"
+        and not admin_preexisted
+    ):
+        await deactivate_dispatcher_association(db, user.id, admin_station_id)
+
     user.role = UserRole.ADMIN
     if original_approval is not None:
         user.approval_status = (
@@ -97,6 +114,7 @@ async def restore_admin_role_and_route(
             "original_approval_status": None,
             "admin_station_id": None,
             "admin_target_role": None,
+            "admin_dispatcher_preexisted": False,
         },
     )
     handler = AdminStateHandler(db, platform=platform)
