@@ -139,17 +139,15 @@ class DriverMenuService:
         elif settings.future_only_enabled:
             future_label = "מופעל"
 
-        from app.core.message_design import driver_menu_card
-
-        text = driver_menu_card(
-            greeting=greeting,
-            name=name,
-            subscription_line=subscription_line,
-            vehicle_label=vehicle_label,
-            trip_label=trip_label,
-            deliveries_label=deliveries_label,
-            timeframe_label=timeframe_label,
-            future_label=future_label,
+        text = (
+            f"▪️ {escape(greeting)} {escape(name)} ▪️\n"
+            f"{subscription_line}\n\n"
+            f"🚙 | סוג רכב - {escape(vehicle_label)}\n"
+            f"🛣 | סוג נסיעה - {escape(trip_label)}\n"
+            f"💌 | להציג משלוחים - {escape(deliveries_label)}\n"
+            f"🕐 | עתידיות קרובות - {escape(timeframe_label)}\n"
+            f"📅 | הגדר כחיפוש עתידי - {escape(future_label)}\n\n"
+            "📋 בחר אפשרות מהתפריט:"
         )
 
         keyboard = [
