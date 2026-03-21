@@ -970,7 +970,9 @@ class DispatcherStateHandler:
                     [f"❌ ביטול #{ride.id}"]
                 )
 
-        text += "לביטול נסיעה, לחצו על הכפתור המתאים."
+        # הצגת הנחיית ביטול רק אם יש נסיעות פתוחות עם כפתור ביטול
+        if any(r.status == DispatcherRideStatus.OPEN.value for r in rides[:10]):
+            text += "לביטול נסיעה, לחצו על הכפתור המתאים."
         keyboard.append(["🔙 חזרה לתפריט סדרן"])
 
         response = MessageResponse(text, keyboard=keyboard)

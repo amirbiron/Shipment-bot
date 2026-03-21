@@ -1525,6 +1525,20 @@ class CourierStateHandler:
             sent = await AdminNotificationService._send_whatsapp_admin_message(
                 settings.WHATSAPP_ADMIN_GROUP_ID, forward_text
             )
+        # fallback: שליחה למנהלים פרטיים בוואטסאפ
+        if not sent:
+            wa_admins = (
+                _parse_csv_setting(settings.WHATSAPP_ADMIN_NUMBERS)
+                if settings.WHATSAPP_ADMIN_NUMBERS
+                else []
+            )
+            for admin_phone in wa_admins:
+                sent = (
+                    await AdminNotificationService._send_whatsapp_admin_message(
+                        admin_phone, forward_text
+                    )
+                    or sent
+                )
 
         if sent:
             confirm_text = "✅ ההודעה נשלחה להנהלה. נחזור אליכם בהקדם!"
