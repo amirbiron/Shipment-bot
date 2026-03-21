@@ -47,20 +47,6 @@ class DispatcherStateHandler:
         self.station_service = StationService(db)
         self.delivery_service = DeliveryService(db)
 
-    # מיפוי כפתורי תפריט → (מזהה פעולה, שם בעברית)
-    # משמש לזיהוי לחיצה על כפתור תפריט בזמן זרימה רב-שלבית
-    _MENU_BUTTON_ACTIONS: list[tuple[str, str, str]] = [
-        # (מילת מפתח, מזהה פעולה, שם פעולה בעברית)
-        ("הוספת משלוח", "add_shipment", "הוספת משלוח"),
-        ("משלוח חדש", "add_shipment", "הוספת משלוח"),
-        ("משלוחים פעילים", "view_active", "צפייה במשלוחים פעילים"),
-        ("היסטוריה", "view_history", "צפייה בהיסטוריה"),
-        ("היסטוריית", "view_history", "צפייה בהיסטוריה"),
-        ("חיוב ידני", "manual_charge", "חיוב ידני"),
-        ("פרסום נסיעה", "post_ride", "פרסום נסיעה"),
-        ("נסיעות פעילות", "view_rides", "צפייה בנסיעות פעילות"),
-    ]
-
     # מיפוי prefix של state → שם זרימה בעברית
     _FLOW_NAMES: dict[str, str] = {
         "ADD_SHIPMENT": "הוספת משלוח",
@@ -154,22 +140,27 @@ class DispatcherStateHandler:
                 return name
         return "הפעולה הנוכחית"
 
+    # טקסטים מלאים של כפתורי התפריט — להתאמה מדויקת בלבד
+    _MENU_BUTTON_TEXTS: dict[str, tuple[str, str]] = {
+        "➕ הוספת משלוח": ("add_shipment", "הוספת משלוח"),
+        "📦 משלוחים פעילים": ("view_active", "צפייה במשלוחים פעילים"),
+        "📋 היסטוריית משלוחים": ("view_history", "צפייה בהיסטוריה"),
+        "💳 חיוב ידני": ("manual_charge", "חיוב ידני"),
+        "🚗 פרסום נסיעה": ("post_ride", "פרסום נסיעה"),
+        "🛣 נסיעות פעילות": ("view_rides", "צפייה בנסיעות פעילות"),
+        "🔙 חזרה לתפריט ראשי": ("back_to_main", "חזרה לתפריט ראשי"),
+    }
+
     def _detect_menu_action(self, message: str) -> tuple[str, str] | None:
         """מזהה אם ההודעה תואמת כפתור תפריט.
 
+        משתמש בהתאמה מדויקת לטקסט הכפתור כדי למנוע יירוט של קלט חופשי.
         מחזיר (מזהה_פעולה, שם_פעולה) או None.
         """
         msg = message.strip()
-        for keyword, action_id, action_name in self._MENU_BUTTON_ACTIONS:
-            if keyword in msg:
-                return action_id, action_name
-        # בדיקת אימוג'י בלבד (כפתורים עם אימוג'י בלבד)
-        if "➕" in msg:
-            return "add_shipment", "הוספת משלוח"
-        if "🚗" in msg:
-            return "post_ride", "פרסום נסיעה"
-        if "🛣" in msg:
-            return "view_rides", "צפייה בנסיעות פעילות"
+        result = self._MENU_BUTTON_TEXTS.get(msg)
+        if result is not None:
+            return result
         return None
 
     async def handle_message(
@@ -208,17 +199,19 @@ class DispatcherStateHandler:
                     user, pending_action, photo_file_id
                 )
 
-            # המשתמש בחר להמשיך בזרימה הנוכחית
-            # ניקוי pending_menu_action והחזרת ההנחיה הנוכחית
+            # המשתמש בחר להמשיך בזרימה — ניקוי pending
             await self.state_manager.update_context(
                 user.id, platform, "pending_menu_action", None
             )
-            flow_name = self._get_current_flow_name(current_state)
-            response = MessageResponse(
-                f"👍 ממשיכים ב{flow_name}.\n\n"
-                "אנא הזן את הנתון המבוקש:"
-            )
-            return response, current_state
+            # לחיצה על כפתור "לא, אמשיך" — הודעה ידידותית + הנחיית השלב
+            if msg.startswith("לא,"):
+                flow_name = self._get_current_flow_name(current_state)
+                response = MessageResponse(
+                    f"👍 ממשיכים ב{flow_name}.\n\n"
+                    "אנא הזן את הנתון המבוקש:"
+                )
+                return response, current_state
+            # טקסט חופשי — המשתמש הזין נתון בפועל, ממשיכים ל-handler למטה
 
         # זיהוי לחיצה על כפתור תפריט בזמן זרימה רב-שלבית
         if self._is_known_multi_step_flow_state(current_state):
