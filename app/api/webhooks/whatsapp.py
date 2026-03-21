@@ -3,6 +3,7 @@ WhatsApp Webhook Handler - Bot Gateway Layer
 """
 
 import asyncio
+import html
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -1644,11 +1645,12 @@ async def whatsapp_webhook(
                     continue
 
                 # העברת ההודעה למנהלים
-                user_name = user.full_name or user.name or "לא צוין"
+                # escape תוכן המשתמש — הטקסט עשוי להגיע לטלגרם (parse_mode=HTML) כ-fallback
+                user_name = html.escape(user.full_name or user.name or "לא צוין")
                 forward_text = (
                     f"📨 פנייה מ-{user_name}\n"
                     f"({PhoneNumberValidator.mask(reply_to)})\n\n"
-                    f"{text}"
+                    f"{html.escape(text)}"
                 )
 
                 from app.domain.services.admin_notification_service import (

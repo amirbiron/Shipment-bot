@@ -2,6 +2,7 @@
 Telegram Webhook Handler - Bot Gateway Layer
 """
 
+import html
 import re
 import hashlib
 import secrets
@@ -2202,11 +2203,11 @@ async def telegram_webhook(
             _queue_response_send(background_tasks, send_chat_id, response)
             return {"ok": True, "new_state": new_state}
 
-        user_name = user.full_name or user.name or "לא צוין"
+        user_name = html.escape(user.full_name or user.name or "לא צוין")
         forward_text = (
             f"📨 פנייה מ-{user_name}\n"
             f"(Telegram: {send_chat_id})\n\n"
-            f"{text}"
+            f"{html.escape(text)}"
         )
 
         from app.domain.services.admin_notification_service import (

@@ -1489,21 +1489,24 @@ class CourierStateHandler:
             return response, CourierState.SUPPORT.value, {"support_prompt_shown": True}
 
         # העברת ההודעה להנהלה
+        import html
+
         from app.domain.services.admin_notification_service import (
             AdminNotificationService,
         )
         from app.core.validation import PhoneNumberValidator
 
-        user_name = user.full_name or user.name or "לא צוין"
+        user_name = html.escape(user.full_name or user.name or "לא צוין")
         phone_display = (
             PhoneNumberValidator.mask(user.phone_number)
             if user.phone_number
             else f"Telegram ID: {user.telegram_id or user.id}"
         )
+        # escape תוכן המשתמש — הטקסט נשלח בטלגרם עם parse_mode=HTML
         forward_text = (
             f"📨 פנייה מ-{user_name}\n"
             f"({phone_display})\n\n"
-            f"{message}"
+            f"{html.escape(message)}"
         )
 
         sent = await AdminNotificationService.forward_support_message(

@@ -8,6 +8,7 @@ WhatsApp Cloud API Webhook Handler — Arm A של המצב ההיברידי.
 from __future__ import annotations
 
 import hashlib
+import html
 import hmac
 import json
 
@@ -708,11 +709,12 @@ async def _route_message_to_handler(
             )
             return response.text, new_state
 
-        user_name = user.full_name or user.name or "לא צוין"
+        # escape תוכן המשתמש — הטקסט עשוי להגיע לטלגרם (parse_mode=HTML) כ-fallback
+        user_name = html.escape(user.full_name or user.name or "לא צוין")
         forward_text = (
             f"📨 פנייה מ-{user_name}\n"
             f"({PhoneNumberValidator.mask(reply_to)})\n\n"
-            f"{text or '(הודעה ריקה)'}"
+            f"{html.escape(text) if text else '(הודעה ריקה)'}"
         )
 
         from app.domain.services.admin_notification_service import (
