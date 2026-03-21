@@ -950,8 +950,8 @@ async def get_or_create_user(
         await db.refresh(user)
         return user, True  # New user
 
-    # עדכון username בכל כניסה — המשתמש יכול לשנות username בטלגרם
-    if username and user.telegram_username != username:
+    # עדכון username בכל כניסה — המשתמש יכול לשנות או להסיר username בטלגרם
+    if user.telegram_username != username:
         user.telegram_username = username
         await db.commit()
 
