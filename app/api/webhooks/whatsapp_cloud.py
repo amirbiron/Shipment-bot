@@ -27,6 +27,7 @@ from app.api.webhooks.whatsapp import (
     send_whatsapp_message,
     send_welcome_message,
     _route_to_role_menu_wa,
+    _reset_role_state_wa,
     _sender_fallback_wa,
     handle_admin_private_command,
     _is_whatsapp_admin_any,
@@ -736,10 +737,8 @@ async def _route_message_to_handler(
             send_whatsapp_message, reply_to, confirm_text,
             [["🔙 חזרה לתפריט"]],
         )
-        # חזרה לתפריט המתאים לתפקיד המשתמש
-        _menu_response, _menu_state = await _route_to_role_menu_wa(
-            user, db, state_manager
-        )
+        # חזרה לתפריט המתאים לתפקיד המשתמש — רק איפוס state
+        _menu_state = await _reset_role_state_wa(user, db, state_manager)
         return confirm_text, _menu_state
 
     # בעל תחנה

@@ -1187,6 +1187,109 @@ async def _sender_fallback(
     )
 
 
+async def _reset_role_state(
+    user: User,
+    db: AsyncSession,
+    state_manager: StateManager,
+) -> str:
+    """איפוס state לתפריט לפי תפקיד — ללא בניית תגובת תפריט.
+
+    משמש כשצריך רק לאפס state בלי לשלוח תגובת תפריט (למשל אחרי הודעת תמיכה).
+    חוסך שאילתות DB מיותרות שנדרשות לבניית התגובה.
+
+    Returns: new_state string
+    """
+    admin_keys = await _save_admin_context(user.id, state_manager, "telegram")
+    is_admin_impersonating = bool(
+        admin_keys and admin_keys.get("original_role") == "admin"
+    )
+    admin_target = admin_keys.get("admin_target_role") if is_admin_impersonating else None
+    skip_dispatcher = admin_target is not None and admin_target != "dispatcher"
+
+    new_state = await _reset_role_state_inner(
+        user, db, state_manager, skip_dispatcher_check=skip_dispatcher
+    )
+
+    if is_admin_impersonating:
+        await _restore_admin_context(
+            user.id, state_manager, new_state, admin_keys, "telegram"
+        )
+
+    return new_state
+
+
+async def _reset_role_state_inner(
+    user: User,
+    db: AsyncSession,
+    state_manager: StateManager,
+    *,
+    skip_dispatcher_check: bool = False,
+) -> str:
+    """איפוס state פנימי לפי תפקיד — ללא handle_message."""
+    platform = "telegram"
+
+    if user.role == UserRole.COURIER:
+        target = CourierState.MENU.value
+        await state_manager.force_state(user.id, platform, target, context={})
+        return target
+
+    if user.role == UserRole.STATION_OWNER:
+        station = await _get_station_for_owner_or_downgrade(user, db)
+        if station is not None:
+            target = StationOwnerState.MENU.value
+            await state_manager.force_state(user.id, platform, target, context={})
+            return target
+        target = SenderState.MENU.value
+        await state_manager.force_state(user.id, platform, target, context={})
+        return target
+
+    if user.role == UserRole.DRIVER:
+        from app.domain.services.driver_session_service import DriverSessionService
+
+        session_service = DriverSessionService(db)
+        await session_service.touch_session(user.id)
+
+        if not skip_dispatcher_check:
+            dispatcher_station = await _get_dispatcher_station(user, db)
+            if dispatcher_station is not None:
+                target = DispatcherState.MENU.value
+                await state_manager.force_state(user.id, platform, target, context={})
+                return target
+
+        target = DriverState.INITIAL.value
+        await state_manager.force_state(user.id, platform, target, context={})
+        return target
+
+    if user.role == UserRole.ADMIN:
+        if settings.ADMIN_ROLE_SWITCH_ENABLED:
+            target = AdminState.MENU.value
+            await state_manager.force_state(user.id, platform, target, context={})
+            return target
+        target = SenderState.MENU.value
+        await state_manager.force_state(user.id, platform, target, context={})
+        return target
+
+    if user.role == UserRole.SENDER:
+        if not skip_dispatcher_check:
+            dispatcher_station = await _get_dispatcher_station(user, db)
+            if dispatcher_station is not None:
+                target = DispatcherState.MENU.value
+                await state_manager.force_state(user.id, platform, target, context={})
+                return target
+
+        target = SenderState.MENU.value
+        await state_manager.force_state(user.id, platform, target, context={})
+        return target
+
+    logger.warning(
+        "Unknown user role in state reset, falling back to sender",
+        extra_data={"user_id": user.id, "role": str(user.role)},
+    )
+    target = SenderState.MENU.value
+    await state_manager.force_state(user.id, platform, target, context={})
+    return target
+
+
 async def _route_to_role_menu(
     user: User,
     db: AsyncSession,
@@ -2230,10 +2333,8 @@ async def telegram_webhook(
             confirm_text, keyboard=[["🔙 חזרה לתפריט"]]
         )
         _queue_response_send(background_tasks, send_chat_id, confirm_response)
-        # חזרה לתפריט המתאים לתפקיד המשתמש
-        menu_response, new_state = await _route_to_role_menu(
-            user, db, state_manager
-        )
+        # חזרה לתפריט המתאים לתפקיד המשתמש — רק איפוס state, בלי לבנות תגובת תפריט
+        new_state = await _reset_role_state(user, db, state_manager)
         return {"ok": True, "new_state": new_state}
 
     # ==================== ניתוב לפי תפקיד (handler לכל role) ====================

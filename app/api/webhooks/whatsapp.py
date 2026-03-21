@@ -843,6 +843,130 @@ from app.api.webhooks._admin_context import (
 )
 
 
+async def _reset_role_state_wa(
+    user: User,
+    db: AsyncSession,
+    state_manager: StateManager,
+) -> str:
+    """איפוס state לתפריט לפי תפקיד — ללא בניית תגובת תפריט (WhatsApp).
+
+    משמש כשצריך רק לאפס state בלי לשלוח תגובת תפריט.
+    חוסך שאילתות DB מיותרות שנדרשות לבניית התגובה.
+
+    Returns: new_state string
+    """
+    admin_keys = await _save_admin_context_wa(user.id, state_manager, "whatsapp")
+    is_admin_impersonating = bool(
+        admin_keys and admin_keys.get("original_role") == "admin"
+    )
+    admin_target = admin_keys.get("admin_target_role") if is_admin_impersonating else None
+    skip_dispatcher = admin_target is not None and admin_target != "dispatcher"
+
+    new_state = await _reset_role_state_wa_inner(
+        user, db, state_manager, skip_dispatcher_check=skip_dispatcher
+    )
+
+    if is_admin_impersonating:
+        await _restore_admin_context_wa(
+            user.id, state_manager, new_state, admin_keys, "whatsapp"
+        )
+
+    return new_state
+
+
+async def _reset_role_state_wa_inner(
+    user: User,
+    db: AsyncSession,
+    state_manager: StateManager,
+    *,
+    skip_dispatcher_check: bool = False,
+) -> str:
+    """איפוס state פנימי לפי תפקיד — ללא handle_message (WhatsApp)."""
+    platform = "whatsapp"
+
+    if user.role == UserRole.COURIER:
+        target = CourierState.MENU.value
+        await state_manager.force_state(user.id, platform, target, context={})
+        return target
+
+    if user.role == UserRole.STATION_OWNER:
+        from app.domain.services.station_service import StationService
+
+        station_service = StationService(db)
+        station = await station_service.get_station_by_owner(user.id)
+
+        if station:
+            target = StationOwnerState.MENU.value
+            await state_manager.force_state(user.id, platform, target, context={})
+            return target
+        # בעל תחנה ללא תחנה פעילה - הורדת תפקיד לשולח
+        logger.warning(
+            "Station owner without active station, downgrading to sender",
+            extra_data={"user_id": user.id},
+        )
+        user.role = UserRole.SENDER
+        await db.commit()
+        target = SenderState.MENU.value
+        await state_manager.force_state(user.id, platform, target, context={})
+        return target
+
+    if user.role == UserRole.DRIVER:
+        from app.domain.services.driver_session_service import DriverSessionService
+
+        session_service = DriverSessionService(db)
+        await session_service.touch_session(user.id)
+
+        if not skip_dispatcher_check:
+            from app.domain.services.station_service import StationService
+
+            station_service = StationService(db)
+            dispatcher_station = await station_service.get_dispatcher_station(user.id)
+            if dispatcher_station:
+                target = DispatcherState.MENU.value
+                await state_manager.force_state(user.id, platform, target, context={})
+                return target
+
+        target = DriverState.INITIAL.value
+        await state_manager.force_state(user.id, platform, target, context={})
+        return target
+
+    if user.role == UserRole.ADMIN:
+        from app.core.config import settings as _settings
+
+        if _settings.ADMIN_ROLE_SWITCH_ENABLED:
+            from app.state_machine.states import AdminState
+
+            target = AdminState.MENU.value
+            await state_manager.force_state(user.id, platform, target, context={})
+            return target
+        target = SenderState.MENU.value
+        await state_manager.force_state(user.id, platform, target, context={})
+        return target
+
+    if user.role == UserRole.SENDER:
+        if not skip_dispatcher_check:
+            from app.domain.services.station_service import StationService
+
+            station_service = StationService(db)
+            dispatcher_station = await station_service.get_dispatcher_station(user.id)
+            if dispatcher_station:
+                target = DispatcherState.MENU.value
+                await state_manager.force_state(user.id, platform, target, context={})
+                return target
+
+        target = SenderState.MENU.value
+        await state_manager.force_state(user.id, platform, target, context={})
+        return target
+
+    logger.warning(
+        "Unknown user role in state reset, falling back to sender",
+        extra_data={"user_id": user.id, "role": str(user.role)},
+    )
+    target = SenderState.MENU.value
+    await state_manager.force_state(user.id, platform, target, context={})
+    return target
+
+
 async def _route_to_role_menu_wa(
     user: User,
     db: AsyncSession,
@@ -1672,8 +1796,8 @@ async def whatsapp_webhook(
                     send_whatsapp_message, reply_to, confirm_text,
                     [["🔙 חזרה לתפריט"]],
                 )
-                # חזרה לתפריט המתאים לתפקיד המשתמש
-                _menu_response, _menu_state = await _route_to_role_menu_wa(
+                # חזרה לתפריט המתאים לתפקיד המשתמש — רק איפוס state
+                _menu_state = await _reset_role_state_wa(
                     user, db, state_manager
                 )
                 responses.append(
