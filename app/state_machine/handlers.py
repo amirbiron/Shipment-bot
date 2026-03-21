@@ -31,6 +31,17 @@ class MessageResponse:
 class SenderStateHandler:
     """Handles sender conversation states"""
 
+    # טקסטים של כפתורי תפריט — לחיצה עליהם בזמן זרימת משלוח מבטלת את הזרימה
+    _MENU_BUTTON_TEXTS = {
+        "📦 המשלוחים שלי",
+        "➕ משלוח חדש",
+        "🚚 הצטרפות למנוי וקבלת משלוחים",
+        "🚗 הצטרפות כנהג",
+        "📦 העלאת משלוח מהיר",
+        "🏪 הצטרפות כתחנה",
+        "📞 פנייה לניהול",
+    }
+
     # מפתחות קונטקסט של טיוטת משלוח — מנוקים בחזרה ל-MENU
     _DELIVERY_CONTEXT_KEYS = {
         "pickup_city",
@@ -68,6 +79,30 @@ class SenderStateHandler:
         """
         current_state = await self.state_manager.get_current_state(user_id, platform)
         context = await self.state_manager.get_context(user_id, platform)
+
+        # ביטול זרימת משלוח בלחיצה על כפתור תפריט
+        if (
+            self._is_delivery_flow_state(current_state)
+            and message.strip() in self._MENU_BUTTON_TEXTS
+        ):
+            logger.info(
+                "ביטול זרימת משלוח — המשתמש לחץ כפתור תפריט",
+                extra_data={"user_id": user_id, "state": current_state},
+            )
+            handler = self._get_handler(SenderState.MENU.value)
+            response, new_state, context_update = await handler("תפריט", context, user_id)
+            # ניקוי context של משלוח + מיזוג context_update מה-handler
+            clean_context = {
+                k: v for k, v in context.items() if k not in self._DELIVERY_CONTEXT_KEYS
+            }
+            if context_update:
+                for k, v in context_update.items():
+                    if k not in self._DELIVERY_CONTEXT_KEYS:
+                        clean_context[k] = v
+            await self.state_manager.force_state(
+                user_id, platform, new_state, clean_context
+            )
+            return response, new_state
 
         handler = self._get_handler(current_state)
         response, new_state, context_update = await handler(message, context, user_id)
@@ -473,10 +508,16 @@ class SenderStateHandler:
         """Collect dropoff apartment/floor (optional) and ask about urgency"""
         msg = message.strip()
 
-        city = context.get("dropoff_city", "")
         street = context.get("dropoff_street", "")
         number = context.get("dropoff_number", "")
         pickup_city = context.get("pickup_city", "")
+        delivery_location = context.get("delivery_location", "")
+
+        # אכיפה: משלוח "בתוך העיר" — עיר היעד חייבת להיות עיר האיסוף
+        if delivery_location == "within_city":
+            city = pickup_city
+        else:
+            city = context.get("dropoff_city", "")
 
         # Build full address
         if msg.lower() == "דלג" or msg == "-" or msg == "0":
@@ -486,8 +527,10 @@ class SenderStateHandler:
             full_dropoff = f"{street} {number}, {city} (קומה/דירה: {msg})"
             apartment = msg
 
-        # Check if same city or different city
-        same_city = pickup_city.strip().lower() == city.strip().lower()
+        # same_city נגזר מ-delivery_location — לא מהשוואת מחרוזות
+        same_city = delivery_location == "within_city" or (
+            pickup_city.strip().lower() == city.strip().lower()
+        )
 
         # לאחר כתובת יעד - עוברים לשאלת הדחיפות
         safe_full_dropoff = escape(full_dropoff)
@@ -955,7 +998,7 @@ class CourierStateHandler:
                 "שליח רשום ניגש ל-INITIAL — מנתב לתפריט",
                 extra_data={"user_id": user.id},
             )
-            return await self._handle_menu(user, message, context, photo_file_id)
+            return await self._handle_menu(user, "תפריט", context, photo_file_id)
 
         # שליח שסיים רישום וממתין לאישור (לא נדחה/נחסם) — מנתב להמתנה
         if user.terms_accepted_at is not None and user.approval_status == ApprovalStatus.PENDING:
@@ -1224,7 +1267,7 @@ class CourierStateHandler:
             return await self._handle_initial(user, message, context, photo_file_id)
 
         if user.approval_status == ApprovalStatus.APPROVED:
-            return await self._handle_menu(user, message, context, photo_file_id)
+            return await self._handle_menu(user, "תפריט", context, photo_file_id)
 
         response = MessageResponse(
             "⏳ בקשתך עדיין בבדיקה. תקבל הודעה ברגע שחשבונך יאושר.\n\n"
@@ -1394,16 +1437,18 @@ class CourierStateHandler:
         self, user: User, message: str, context: dict, photo_file_id: str
     ):
         """Handle work history view"""
-        if "חזרה" in message or "תפריט" in message:
-            return await self._handle_menu(user, "תפריט", context, None)
+        # הצגה ראשונית — נקרא ישירות מ-_handle_menu עם טקסט הכפתור
+        if "היסטוריה" in message or "עבודות" in message:
+            response = MessageResponse(
+                "📦 <b>היסטוריית עבודות</b>\n\n"
+                "אין משלוחים בהיסטוריה עדיין.\n"
+                "התחל לקחת משלוחים כדי לראות את ההיסטוריה שלך!",
+                keyboard=[["🔙 חזרה לתפריט"]],
+            )
+            return response, CourierState.VIEW_HISTORY.value, {}
 
-        response = MessageResponse(
-            "📦 <b>היסטוריית עבודות</b>\n\n"
-            "אין משלוחים בהיסטוריה עדיין.\n"
-            "התחל לקחת משלוחים כדי לראות את ההיסטוריה שלך!",
-            keyboard=[["🔙 חזרה לתפריט"]],
-        )
-        return response, CourierState.VIEW_HISTORY.value, {}
+        # כל קלט אחר (כולל כפתורי תפריט) — חזרה לתפריט
+        return await self._handle_menu(user, "תפריט", context, None)
 
     async def _handle_view_active(
         self, user: User, message: str, context: dict, photo_file_id: str

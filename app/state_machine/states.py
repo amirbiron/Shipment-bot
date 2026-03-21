@@ -113,7 +113,8 @@ SENDER_TRANSITIONS = {
     SenderState.PICKUP_APARTMENT: [SenderState.DELIVERY_LOCATION],
 
     # בחירת סוג משלוח (בתוך/מחוץ לעיר) -> כתובת יעד
-    SenderState.DELIVERY_LOCATION: [SenderState.DROPOFF_CITY],
+    # בתוך העיר מדלג על DROPOFF_CITY ועובר ישירות ל-DROPOFF_STREET
+    SenderState.DELIVERY_LOCATION: [SenderState.DROPOFF_CITY, SenderState.DROPOFF_STREET],
 
     # Dropoff address wizard: City -> Street -> Number -> Apartment -> Urgency
     SenderState.DROPOFF_CITY: [SenderState.DROPOFF_STREET],
