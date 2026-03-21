@@ -1373,7 +1373,7 @@ class DriverStateHandler:
                 "✅ <b>חיפוש חדש נוסף!</b>\n\n"
                 f"{summary}\n\n"
                 f"📊 סה״כ חיפושים פעילים: {active_count}/{MAX_ACTIVE_SEARCHES_PER_USER}\n\n"
-                "💡 להוספת חיפוש נוסף — שלח 'פ &lt;יעד&gt;'\n"
+                "💡 להוספת חיפוש נוסף - שלח 'פ &lt;יעד&gt;'\n"
                 "📋 לחזרה לתפריט שלח 'ת'"
             ),
             keyboard=[["🔍 חיפושים פעילים"], ["🔙 חזרה לתפריט"]],
@@ -1392,7 +1392,7 @@ class DriverStateHandler:
                 text=(
                     "🔍 <b>חיפושים פעילים</b>\n\n"
                     "אין חיפושים פעילים כרגע.\n\n"
-                    "💡 להוספת חיפוש — שלח 'פ &lt;יעד&gt;'\n"
+                    "💡 להוספת חיפוש - שלח 'פ &lt;יעד&gt;'\n"
                     "לדוגמה: 'פ ים' לחיפוש לירושלים"
                 ),
                 keyboard=[["🔙 חזרה לתפריט"]],
@@ -1413,7 +1413,7 @@ class DriverStateHandler:
             text_parts.append(
                 f"\n\n🚗 <b>נסיעות סדרן תואמות:</b>\n{dispatcher_rides_text}"
             )
-        text_parts.append("\n\n💡 להוספת חיפוש — שלח 'פ &lt;יעד&gt;'")
+        text_parts.append("\n\n💡 להוספת חיפוש - שלח 'פ &lt;יעד&gt;'")
 
         response = MessageResponse(
             text="".join(text_parts),
