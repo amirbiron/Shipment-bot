@@ -1575,9 +1575,13 @@ def auto_cancel_expired_deliveries() -> dict:
                             continue
 
                         # חישוב הזמן בפועל עד תפוגה — לא ערך קונפיגורציה קבוע
+                        # fallback למשלוחים ישנים ללא expires_at
+                        effective_expires = delivery.expires_at or (
+                            delivery.created_at + timedelta(hours=_settings.AUTO_CANCEL_UNCAPTURED_HOURS)
+                        )
                         actual_remaining = max(
                             1,
-                            int((delivery.expires_at - datetime.utcnow()).total_seconds() / 60),
+                            int((effective_expires - datetime.utcnow()).total_seconds() / 60),
                         )
                         await outbox_service.queue_expiry_warning(
                             delivery,
