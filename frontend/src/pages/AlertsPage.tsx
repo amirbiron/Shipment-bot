@@ -212,7 +212,17 @@ export default function AlertsPage() {
       }
     }
 
-    return { allAlerts: deduped, deliveryStatusMap: statusMap };
+    // סינון התראות uncollected_shipment למשלוחים שכבר לא פתוחים —
+    // התראות SSE עוקפות את סינון הבקאנד, לכן מסננים גם בפרונט
+    const filtered = deduped.filter((a) => {
+      if (a.type !== "uncollected_shipment") return true;
+      const deliveryId = a.data?.delivery_id as number | undefined;
+      if (deliveryId == null) return true;
+      const current = statusMap.get(deliveryId);
+      return !current || current === "open";
+    });
+
+    return { allAlerts: filtered, deliveryStatusMap: statusMap };
   })();
 
   return (
