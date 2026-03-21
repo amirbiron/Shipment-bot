@@ -379,6 +379,20 @@ async function initializeClient() {
         }
         console.log(`WhatsApp client initialized (connected: ${isConnected})`);
 
+        // טיפול בשינויי מצב — ניתוק, CONFLICT וכו'
+        client.onStateChange((state) => {
+            console.log('WhatsApp state changed:', state);
+            const disconnectedStates = ['CONFLICT', 'UNPAIRED', 'UNLAUNCHED'];
+            if (disconnectedStates.includes(state)) {
+                console.log(`Session disconnected (${state}), attempting to reconnect...`);
+                isConnected = false;
+                // useHere = true מחזיר את הסשן לדפדפן הנוכחי (פותר CONFLICT)
+                client.useHere().catch((err) => {
+                    console.error('useHere failed:', err.message);
+                });
+            }
+        });
+
         // Listen for incoming messages
         client.onMessage(async (message) => {
             console.log('Received message:', message.body);
