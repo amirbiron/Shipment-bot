@@ -394,10 +394,8 @@ async function initializeClient() {
                 console.log(`Session disconnected (${state}), attempting to reconnect...`);
                 isConnected = false;
                 // useHere = true מחזיר את הסשן לדפדפן הנוכחי (פותר CONFLICT)
-                client.useHere().then(() => {
-                    console.log('useHere succeeded, restoring connection state');
-                    isConnected = true;
-                }).catch((err) => {
+                // isConnected ישוחזר דרך onStateChange → CONNECTED
+                client.useHere().catch((err) => {
                     console.error('useHere failed:', err.message);
                 });
             }
