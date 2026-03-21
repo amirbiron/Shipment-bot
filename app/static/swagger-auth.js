@@ -124,12 +124,17 @@
       '<span id="qa-arrow">\u25BC</span>' +
       "</div>" +
       '<div class="qa-body" id="qa-body">' +
-      /* Admin API Key */
+      /* Admin API Key + Telegram Login */
       '<div class="qa-sec">' +
-      "<h4>Admin API Key</h4>" +
+      "<h4>Admin</h4>" +
       '<div class="qa-row">' +
       '<input id="qa-api-key" type="text" placeholder="ADMIN_API_KEY">' +
       '<button class="qa-btn" id="qa-key-btn">\u05d4\u05d2\u05d3\u05e8</button>' +
+      "</div>" +
+      '<div id="qa-admin-tg-section" style="display:none">' +
+      '<div class="qa-divider">\u05d0\u05d5</div>' +
+      '<button class="qa-btn-tg" id="qa-admin-tg-login" style="width:100%">' +
+      "\u2708\uFE0F \u05db\u05e0\u05d9\u05e1\u05d4 \u05d0\u05d3\u05de\u05d9\u05df \u05d3\u05e8\u05da Telegram</button>" +
       "</div>" +
       '<div class="qa-msg" id="qa-key-msg"></div>' +
       "</div>" +
@@ -167,6 +172,7 @@
         _telegramBotUsername = d.bot_username;
         _telegramBotId = d.bot_id;
         _$("qa-tg-section").style.display = "block";
+        _$("qa-admin-tg-section").style.display = "block";
         // טעינת סקריפט Telegram Widget
         var script = document.createElement("script");
         script.src = "https://telegram.org/js/telegram-widget.js?22";
@@ -386,6 +392,51 @@
     );
   }
 
+  /* ── Admin Telegram Login ── */
+  async function onAdminTelegramLogin() {
+    if (!window.Telegram || !window.Telegram.Login) {
+      setMsg("qa-key-msg", "\u05e1\u05e7\u05e8\u05d9\u05e4\u05d8 \u05d8\u05dc\u05d2\u05e8\u05dd \u05dc\u05d0 \u05e0\u05d8\u05e2\u05df, \u05e0\u05e1\u05d4 \u05dc\u05e8\u05e2\u05e0\u05df", "qa-err");
+      return;
+    }
+    _$("qa-admin-tg-login").disabled = true;
+    setMsg("qa-key-msg", "\u05de\u05de\u05ea\u05d9\u05df \u05dc\u05d0\u05d9\u05de\u05d5\u05ea \u05d8\u05dc\u05d2\u05e8\u05dd\u2026", "qa-info");
+
+    window.Telegram.Login.auth(
+      { bot_id: _telegramBotId, request_access: true },
+      async function (data) {
+        if (!data) {
+          _$("qa-admin-tg-login").disabled = false;
+          setMsg("qa-key-msg", "", "");
+          return;
+        }
+
+        try {
+          var r = await fetch("/api/admin/auth/telegram-login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(data),
+          });
+          var d = await r.json();
+
+          if (r.ok && d.access_token) {
+            setSwaggerToken(d.access_token);
+            setMsg(
+              "qa-key-msg",
+              "\u2713 \u05de\u05d7\u05d5\u05d1\u05e8 \u05db\u05d0\u05d3\u05de\u05d9\u05df \u05d3\u05e8\u05da \u05d8\u05dc\u05d2\u05e8\u05dd! " +
+                String(d.username),
+              "qa-ok"
+            );
+          } else {
+            setMsg("qa-key-msg", d.detail || "\u05db\u05e0\u05d9\u05e1\u05ea \u05d0\u05d3\u05de\u05d9\u05df \u05e0\u05db\u05e9\u05dc\u05d4", "qa-err");
+          }
+        } catch (e) {
+          setMsg("qa-key-msg", "\u05e9\u05d2\u05d9\u05d0\u05ea \u05e8\u05e9\u05ea: " + e.message, "qa-err");
+        }
+        _$("qa-admin-tg-login").disabled = false;
+      }
+    );
+  }
+
   /* ── Telegram Station Select ── */
   async function onTelegramSelectStation() {
     if (!_pendingTelegramData) return;
@@ -431,6 +482,7 @@
     if (id === "qa-key-btn") onSetAdminKey();
     else if (id === "qa-send") onRequestOTP();
     else if (id === "qa-verify") onVerifyOTP();
+    else if (id === "qa-admin-tg-login") onAdminTelegramLogin();
     else if (id === "qa-tg-login") onTelegramLogin();
     else if (id === "qa-tg-select") onTelegramSelectStation();
   });
