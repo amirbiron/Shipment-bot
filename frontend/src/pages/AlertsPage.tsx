@@ -49,6 +49,7 @@ const ALERT_TYPE_TO_STATUS: Record<string, string> = {
   delivery_captured: "captured",
   delivery_delivered: "delivered",
   delivery_cancelled: "cancelled",
+  uncollected_shipment: "open",
 };
 
 // סדר עדיפות סטטוסים — ערך גבוה יותר = סטטוס מתקדם יותר

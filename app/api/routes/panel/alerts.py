@@ -208,8 +208,39 @@ async def get_alerts_history(
     auth: TokenPayload = Depends(get_current_station_owner),
     limit: int = Query(50, ge=1, le=100, description="מספר התראות מקסימלי"),
 ) -> AlertHistoryResponse:
-    """היסטוריית התראות"""
+    """היסטוריית התראות — מסנן התראות uncollected_shipment של משלוחים שכבר לא פתוחים."""
+    from sqlalchemy import select
+    from app.db.models.delivery import Delivery, DeliveryStatus
+
     alerts = await get_alert_history(auth.station_id, limit=limit)
+
+    # איסוף delivery_ids מהתראות uncollected_shipment
+    uncollected_delivery_ids: set[int] = set()
+    for alert in alerts:
+        if alert.get("type") == "uncollected_shipment":
+            did = (alert.get("data") or {}).get("delivery_id")
+            if did is not None:
+                uncollected_delivery_ids.add(int(did))
+
+    # סינון רק אם יש התראות uncollected_shipment
+    if uncollected_delivery_ids:
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(Delivery.id, Delivery.status).where(
+                    Delivery.id.in_(uncollected_delivery_ids)
+                )
+            )
+            status_map = {row.id: row.status for row in result}
+
+        # סינון — השאר רק uncollected_shipment של משלוחים עדיין OPEN
+        alerts = [
+            a for a in alerts
+            if a.get("type") != "uncollected_shipment"
+            or status_map.get(
+                (a.get("data") or {}).get("delivery_id")
+            ) == DeliveryStatus.OPEN
+        ]
+
     return AlertHistoryResponse(alerts=alerts, count=len(alerts))
 
 
