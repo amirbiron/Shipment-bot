@@ -327,6 +327,8 @@ async function initializeClient() {
                 console.log('Scan with WhatsApp:');
                 console.log(asciiQR);
                 console.log('=== END QR CODE ===');
+                // QR נוצר = עדיין לא מחוברים (סשן פג או חיבור חדש)
+                isConnected = false;
                 // Store QR code for API access
                 currentQR = {
                     base64: base64Qr,
