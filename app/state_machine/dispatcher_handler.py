@@ -47,6 +47,27 @@ class DispatcherStateHandler:
         self.station_service = StationService(db)
         self.delivery_service = DeliveryService(db)
 
+    # מיפוי כפתורי תפריט → (מזהה פעולה, שם בעברית)
+    # משמש לזיהוי לחיצה על כפתור תפריט בזמן זרימה רב-שלבית
+    _MENU_BUTTON_ACTIONS: list[tuple[str, str, str]] = [
+        # (מילת מפתח, מזהה פעולה, שם פעולה בעברית)
+        ("הוספת משלוח", "add_shipment", "הוספת משלוח"),
+        ("משלוח חדש", "add_shipment", "הוספת משלוח"),
+        ("משלוחים פעילים", "view_active", "צפייה במשלוחים פעילים"),
+        ("היסטוריה", "view_history", "צפייה בהיסטוריה"),
+        ("היסטוריית", "view_history", "צפייה בהיסטוריה"),
+        ("חיוב ידני", "manual_charge", "חיוב ידני"),
+        ("פרסום נסיעה", "post_ride", "פרסום נסיעה"),
+        ("נסיעות פעילות", "view_rides", "צפייה בנסיעות פעילות"),
+    ]
+
+    # מיפוי prefix של state → שם זרימה בעברית
+    _FLOW_NAMES: dict[str, str] = {
+        "ADD_SHIPMENT": "הוספת משלוח",
+        "MANUAL_CHARGE": "חיוב ידני",
+        "POST_RIDE": "פרסום נסיעה",
+    }
+
     # מפתחות קונטקסט של הוספת משלוח — מנוקים בחזרה ל-MENU
     _SHIPMENT_CONTEXT_KEYS = {
         "pickup_city",
@@ -91,6 +112,66 @@ class DispatcherStateHandler:
             return False
         return True
 
+    def _is_known_multi_step_flow_state(self, state: str) -> bool:
+        """בודק אם המצב שייך לזרימה רב-שלבית מוכרת (עם handler רשום).
+
+        שימוש: יירוט כפתורי תפריט — רק ב-states מוכרים עם handler,
+        לא ב-states לא מוכרים שצריכים ניתוב ל-_handle_unknown.
+        """
+        if not self._is_multi_step_flow_state(state):
+            return False
+        # בדיקה שיש handler רשום — states לא מוכרים ילכו ל-_handle_unknown
+        handlers = {
+            DispatcherState.ADD_SHIPMENT_PICKUP_CITY.value,
+            DispatcherState.ADD_SHIPMENT_PICKUP_STREET.value,
+            DispatcherState.ADD_SHIPMENT_PICKUP_NUMBER.value,
+            DispatcherState.ADD_SHIPMENT_DROPOFF_CITY.value,
+            DispatcherState.ADD_SHIPMENT_DROPOFF_STREET.value,
+            DispatcherState.ADD_SHIPMENT_DROPOFF_NUMBER.value,
+            DispatcherState.ADD_SHIPMENT_DROPOFF_APARTMENT.value,
+            DispatcherState.ADD_SHIPMENT_DESCRIPTION.value,
+            DispatcherState.ADD_SHIPMENT_FEE.value,
+            DispatcherState.ADD_SHIPMENT_CONFIRM.value,
+            DispatcherState.MANUAL_CHARGE_DRIVER_NAME.value,
+            DispatcherState.MANUAL_CHARGE_AMOUNT.value,
+            DispatcherState.MANUAL_CHARGE_DESCRIPTION.value,
+            DispatcherState.MANUAL_CHARGE_CONFIRM.value,
+            DispatcherState.POST_RIDE_ORIGIN.value,
+            DispatcherState.POST_RIDE_DESTINATION.value,
+            DispatcherState.POST_RIDE_SEATS.value,
+            DispatcherState.POST_RIDE_PRICE.value,
+            DispatcherState.POST_RIDE_CONFIRM.value,
+        }
+        return state in handlers
+
+    def _get_current_flow_name(self, state: str) -> str:
+        """מחזיר את שם הזרימה הנוכחית בעברית לפי ה-state"""
+        if not state.startswith("DISPATCHER."):
+            return "הפעולה הנוכחית"
+        suffix = state[len("DISPATCHER."):]
+        for prefix, name in self._FLOW_NAMES.items():
+            if suffix.startswith(prefix):
+                return name
+        return "הפעולה הנוכחית"
+
+    def _detect_menu_action(self, message: str) -> tuple[str, str] | None:
+        """מזהה אם ההודעה תואמת כפתור תפריט.
+
+        מחזיר (מזהה_פעולה, שם_פעולה) או None.
+        """
+        msg = message.strip()
+        for keyword, action_id, action_name in self._MENU_BUTTON_ACTIONS:
+            if keyword in msg:
+                return action_id, action_name
+        # בדיקת אימוג'י בלבד (כפתורים עם אימוג'י בלבד)
+        if "➕" in msg:
+            return "add_shipment", "הוספת משלוח"
+        if "🚗" in msg:
+            return "post_ride", "פרסום נסיעה"
+        if "🛣" in msg:
+            return "view_rides", "צפייה בנסיעות פעילות"
+        return None
+
     async def handle_message(
         self, user: User, message: str, photo_file_id: str = None
     ) -> Tuple[MessageResponse, str]:
@@ -98,6 +179,66 @@ class DispatcherStateHandler:
         platform = self.platform or user.platform
         current_state = await self.state_manager.get_current_state(user.id, platform)
         context = await self.state_manager.get_context(user.id, platform)
+
+        # טיפול בתשובה לשאלת ביטול זרימה
+        pending_action = context.get("pending_menu_action")
+        if pending_action and self._is_known_multi_step_flow_state(current_state):
+            msg = message.strip()
+            if "כן" in msg or "בטל" in msg:
+                # המשתמש אישר ביטול — חזרה לתפריט ושליחת הפעולה החדשה
+                # ניקוי context של הזרימה + pending_menu_action
+                context_update = {"pending_menu_action": None}
+                response, new_state, ctx = await self._show_menu(user, context)
+                context_update.update(ctx)
+                # ננקה את הקונטקסט של הזרימה הנוכחית
+                keys_to_clean = (
+                    self._SHIPMENT_CONTEXT_KEYS
+                    | self._MANUAL_CHARGE_CONTEXT_KEYS
+                    | self._POST_RIDE_CONTEXT_KEYS
+                )
+                clean_context = {
+                    k: v for k, v in context.items() if k not in keys_to_clean
+                }
+                clean_context.update(context_update)
+                await self.state_manager.force_state(
+                    user.id, platform, DispatcherState.MENU.value, clean_context
+                )
+                # הפעלת הפעולה החדשה ישירות דרך _handle_menu
+                return await self.handle_message(
+                    user, pending_action, photo_file_id
+                )
+
+            # המשתמש בחר להמשיך בזרימה הנוכחית
+            # ניקוי pending_menu_action והחזרת ההנחיה הנוכחית
+            await self.state_manager.update_context(
+                user.id, platform, "pending_menu_action", None
+            )
+            flow_name = self._get_current_flow_name(current_state)
+            response = MessageResponse(
+                f"👍 ממשיכים ב{flow_name}.\n\n"
+                "אנא הזן את הנתון המבוקש:"
+            )
+            return response, current_state
+
+        # זיהוי לחיצה על כפתור תפריט בזמן זרימה רב-שלבית
+        if self._is_known_multi_step_flow_state(current_state):
+            menu_action = self._detect_menu_action(message)
+            if menu_action is not None:
+                action_id, action_name = menu_action
+                flow_name = self._get_current_flow_name(current_state)
+                # שמירת הפעולה המבוקשת בקונטקסט
+                await self.state_manager.update_context(
+                    user.id, platform, "pending_menu_action", message.strip()
+                )
+                response = MessageResponse(
+                    f"נראה שניסית להתחיל פעולה חדשה ({action_name}).\n"
+                    f"האם לבטל את {flow_name}?",
+                    keyboard=[
+                        [f"לא, אמשיך ב{flow_name}"],
+                        [f"כן, בטל את {flow_name}"],
+                    ],
+                )
+                return response, current_state
 
         handler = self._get_handler(current_state)
         response, new_state, context_update = await handler(user, message, context)
@@ -110,6 +251,7 @@ class DispatcherStateHandler:
                 self._SHIPMENT_CONTEXT_KEYS
                 | self._MANUAL_CHARGE_CONTEXT_KEYS
                 | self._POST_RIDE_CONTEXT_KEYS
+                | {"pending_menu_action"}
             )
             clean_context = {k: v for k, v in context.items() if k not in keys_to_clean}
             if context_update:
