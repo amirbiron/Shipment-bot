@@ -2288,3 +2288,45 @@ class StationService:
             .limit(20)
         )
         return list(result.scalars().all())
+
+    async def get_ride_by_id(self, ride_id: int) -> Optional["DispatcherRide"]:
+        """
+        שליפת נסיעה לפי מזהה.
+
+        Args:
+            ride_id: מזהה הנסיעה
+
+        Returns:
+            אובייקט הנסיעה או None
+        """
+        from app.db.models.dispatcher_ride import DispatcherRide
+
+        result = await self.db.execute(
+            select(DispatcherRide).where(DispatcherRide.id == ride_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def cancel_dispatcher_ride(self, ride_id: int) -> None:
+        """
+        ביטול נסיעה — עדכון סטטוס ל-CANCELLED.
+
+        Args:
+            ride_id: מזהה הנסיעה
+        """
+        from app.db.models.dispatcher_ride import (
+            DispatcherRide,
+            DispatcherRideStatus,
+        )
+
+        result = await self.db.execute(
+            select(DispatcherRide)
+            .where(DispatcherRide.id == ride_id)
+            .with_for_update()
+        )
+        ride = result.scalar_one_or_none()
+        if ride is None:
+            return
+
+        ride.status = DispatcherRideStatus.CANCELLED.value
+        ride.updated_at = datetime.utcnow()
+        await self.db.commit()

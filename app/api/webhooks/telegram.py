@@ -2244,9 +2244,15 @@ async def telegram_webhook(
                 extra_data={"user_id": user.id},
             )
 
-        confirm_response = MessageResponse(confirm_text)
+        confirm_response = MessageResponse(
+            confirm_text, keyboard=[["🔙 חזרה לתפריט"]]
+        )
         _queue_response_send(background_tasks, send_chat_id, confirm_response)
-        return {"ok": True}
+        # חזרה לתפריט המתאים לתפקיד המשתמש
+        menu_response, new_state = await _route_to_role_menu(
+            user, db, state_manager
+        )
+        return {"ok": True, "new_state": new_state}
 
     # ==================== ניתוב לפי תפקיד (handler לכל role) ====================
 

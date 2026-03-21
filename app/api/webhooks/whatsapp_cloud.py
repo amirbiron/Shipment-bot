@@ -748,8 +748,15 @@ async def _route_message_to_handler(
                 extra_data={"user_id": user.id},
             )
 
-        background_tasks.add_task(send_whatsapp_message, reply_to, confirm_text)
-        return confirm_text, None
+        background_tasks.add_task(
+            send_whatsapp_message, reply_to, confirm_text,
+            [["🔙 חזרה לתפריט"]],
+        )
+        # חזרה לתפריט המתאים לתפקיד המשתמש
+        _menu_response, _menu_state = await _route_to_role_menu_wa(
+            user, db, state_manager
+        )
+        return confirm_text, _menu_state
 
     # בעל תחנה
     if user.role == UserRole.STATION_OWNER:

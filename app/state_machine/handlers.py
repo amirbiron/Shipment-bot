@@ -1466,19 +1466,80 @@ class CourierStateHandler:
     async def _handle_support(
         self, user: User, message: str, context: dict, photo_file_id: str
     ):
-        """Handle support requests"""
+        """Handle support requests — העברת הודעה להנהלה"""
         if "חזרה" in message or "תפריט" in message:
             return await self._handle_menu(user, "תפריט", context, None)
 
-        response = MessageResponse(
-            "❓ <b>תמיכה</b>\n\n"
-            "לתמיכה טכנית או שאלות:\n\n"
-            "📧 שלח הודעה למנהל - פשוט כתוב את ההודעה כאן והיא תועבר.\n\n"
-            "📞 מוקד: 050-1234567\n"
-            "שעות פעילות: א'-ה' 08:00-20:00",
-            keyboard=[["🔙 חזרה לתפריט"]],
+        # כניסה ראשונה מהתפריט — הצגת הנחיות
+        if "תמיכה" in message or "עזרה" in message:
+            response = MessageResponse(
+                "❓ <b>תמיכה</b>\n\n"
+                "📧 שלח הודעה למנהל - פשוט כתוב את ההודעה כאן והיא תועבר.\n\n"
+                "📞 מוקד: 050-1234567\n"
+                "שעות פעילות: א'-ה' 08:00-20:00",
+                keyboard=[["🔙 חזרה לתפריט"]],
+            )
+            return response, CourierState.SUPPORT.value, {}
+
+        # העברת ההודעה להנהלה
+        from app.domain.services.admin_notification_service import (
+            AdminNotificationService,
+            _parse_csv_setting,
         )
-        return response, CourierState.SUPPORT.value, {}
+        from app.core.config import settings
+        from app.core.validation import PhoneNumberValidator
+
+        user_name = user.full_name or user.name or "לא צוין"
+        phone_display = (
+            PhoneNumberValidator.mask(user.phone_number)
+            if user.phone_number
+            else f"Telegram ID: {user.telegram_id or user.id}"
+        )
+        forward_text = (
+            f"📨 פנייה מ-{user_name}\n"
+            f"({phone_display})\n\n"
+            f"{message}"
+        )
+
+        sent = False
+        if settings.TELEGRAM_ADMIN_CHAT_ID:
+            sent = await AdminNotificationService._send_telegram_message(
+                settings.TELEGRAM_ADMIN_CHAT_ID, forward_text
+            )
+        if not sent:
+            tg_admins = (
+                _parse_csv_setting(settings.TELEGRAM_ADMIN_CHAT_IDS)
+                if settings.TELEGRAM_ADMIN_CHAT_IDS
+                else []
+            )
+            for admin_id in tg_admins:
+                sent = (
+                    await AdminNotificationService._send_telegram_message(
+                        admin_id, forward_text
+                    )
+                    or sent
+                )
+        if not sent and settings.WHATSAPP_ADMIN_GROUP_ID:
+            sent = await AdminNotificationService._send_whatsapp_admin_message(
+                settings.WHATSAPP_ADMIN_GROUP_ID, forward_text
+            )
+
+        if sent:
+            confirm_text = "✅ ההודעה נשלחה להנהלה. נחזור אליכם בהקדם!"
+        else:
+            confirm_text = (
+                "⚠️ לא הצלחנו להעביר את ההודעה כרגע.\n"
+                "אנא נסו שוב מאוחר יותר."
+            )
+            logger.error(
+                "כשלון בהעברת פנייה להנהלה — אין יעד זמין",
+                extra_data={"user_id": user.id},
+            )
+
+        response = MessageResponse(
+            confirm_text, keyboard=[["🔙 חזרה לתפריט"]]
+        )
+        return response, CourierState.MENU.value, {}
 
     # ==================== מצבי משלוח (webhook קבוצתי) ====================
     # מצבים אלה מופעלים בעיקר דרך callback queries בקבוצת טלגרם.

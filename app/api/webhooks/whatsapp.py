@@ -1687,9 +1687,16 @@ async def whatsapp_webhook(
                         extra_data={"user_id": user.id},
                     )
 
-                background_tasks.add_task(send_whatsapp_message, reply_to, confirm_text)
+                background_tasks.add_task(
+                    send_whatsapp_message, reply_to, confirm_text,
+                    [["🔙 חזרה לתפריט"]],
+                )
+                # חזרה לתפריט המתאים לתפקיד המשתמש
+                _menu_response, _menu_state = await _route_to_role_menu_wa(
+                    user, db, state_manager
+                )
                 responses.append(
-                    {"from": sender_id, "response": confirm_text, "new_state": None}
+                    {"from": sender_id, "response": confirm_text, "new_state": _menu_state}
                 )
                 continue
 

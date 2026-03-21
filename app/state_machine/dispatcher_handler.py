@@ -956,25 +956,74 @@ class DispatcherStateHandler:
         }
 
         text = "🛣 <b>נסיעות פעילות</b>\n\n"
+        keyboard: list[list[str]] = []
         for ride in rides[:10]:
             status_text = status_map.get(ride.status, ride.status)
             text += (
                 f"#{ride.id} | {status_text}\n"
-                f"  📍 {escape(ride.origin_city)} → {escape(ride.destination_city)}\n"
+                f"  📍 מ-{escape(ride.origin_city)} ל-{escape(ride.destination_city)}\n"
                 f"  👥 {ride.seats} מק' | 💰 {ride.price:.0f} ₪\n\n"
             )
+            # כפתור ביטול רק לנסיעות פתוחות
+            if ride.status == DispatcherRideStatus.OPEN.value:
+                keyboard.append(
+                    [f"❌ ביטול #{ride.id}"]
+                )
 
-        response = MessageResponse(text, keyboard=[["🔙 חזרה לתפריט סדרן"]])
+        text += "לביטול נסיעה, לחצו על הכפתור המתאים."
+        keyboard.append(["🔙 חזרה לתפריט סדרן"])
+
+        response = MessageResponse(text, keyboard=keyboard)
         return response, DispatcherState.VIEW_POSTED_RIDES.value, {}
 
     async def _handle_view_posted_rides(
         self, user: User, message: str, context: dict
     ) -> Tuple[MessageResponse, str, dict]:
-        """צפייה בנסיעות שפרסם הסדרן"""
+        """צפייה בנסיעות שפרסם הסדרן + ביטול נסיעה"""
         if "חזרה" in message:
             return await self._show_menu(user, context)
 
+        # ביטול נסיעה — כפתור "❌ ביטול #123"
+        cancel_match = re.match(r"❌\s*ביטול\s*#(\d+)", message)
+        if cancel_match:
+            ride_id = int(cancel_match.group(1))
+            return await self._cancel_ride(user, ride_id, context)
+
         return await self._show_posted_rides(user, context)
+
+    async def _cancel_ride(
+        self, user: User, ride_id: int, context: dict
+    ) -> Tuple[MessageResponse, str, dict]:
+        """ביטול נסיעה פעילה"""
+        from app.db.models.dispatcher_ride import DispatcherRide
+
+        ride = await self.station_service.get_ride_by_id(ride_id)
+        if ride is None or ride.station_id != self.station_id:
+            response = MessageResponse(
+                "❌ הנסיעה לא נמצאה.",
+                keyboard=[["🔙 חזרה לתפריט סדרן"]],
+            )
+            return response, DispatcherState.VIEW_POSTED_RIDES.value, {}
+
+        if ride.status != DispatcherRideStatus.OPEN.value:
+            response = MessageResponse(
+                f"❌ לא ניתן לבטל נסיעה בסטטוס: {ride.status}",
+                keyboard=[["🔙 חזרה לתפריט סדרן"]],
+            )
+            return response, DispatcherState.VIEW_POSTED_RIDES.value, {}
+
+        await self.station_service.cancel_dispatcher_ride(ride_id)
+
+        logger.info(
+            "נסיעה בוטלה ע\"י סדרן",
+            extra_data={"ride_id": ride_id, "user_id": user.id},
+        )
+
+        response = MessageResponse(
+            f"✅ נסיעה #{ride_id} בוטלה בהצלחה.",
+            keyboard=[["🔙 חזרה לתפריט סדרן"]],
+        )
+        return response, DispatcherState.VIEW_POSTED_RIDES.value, {}
 
     # ==================== Unknown ====================
 
