@@ -3,6 +3,7 @@ Admin Notification Service - Notify admins about courier events
 """
 import base64
 import mimetypes
+from html import escape as html_escape
 import httpx
 from typing import Any, Optional
 
@@ -36,10 +37,13 @@ def _format_telegram_contact(
     """
     if username:
         if html:
-            return f'@{username} (<a href="tg://user?id={chat_id}">פתח צ\'אט</a>)'
+            safe_user = html_escape(username)
+            safe_id = html_escape(str(chat_id))
+            return f'@{safe_user} (<a href="tg://user?id={safe_id}">פתח צ\'אט</a>)'
         return f"@{username}"
     if html:
-        return f'<a href="tg://user?id={chat_id}">פתח צ\'אט בטלגרם</a> (ID: {chat_id})'
+        safe_id = html_escape(str(chat_id))
+        return f'<a href="tg://user?id={safe_id}">פתח צ\'אט בטלגרם</a> (ID: {safe_id})'
     return f"טלגרם ID: {chat_id}"
 
 
