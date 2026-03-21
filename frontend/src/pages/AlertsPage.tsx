@@ -107,10 +107,12 @@ export default function AlertsPage() {
   const [thresholdInput, setThresholdInput] = useState("");
   const [thresholdDirty, setThresholdDirty] = useState(false);
 
-  // היסטוריית התראות
+  // היסטוריית התראות — refetchInterval מרענן כל דקה כדי שהתראות
+  // uncollected_shipment ייעלמו אוטומטית אחרי שהמשלוח בוטל/נתפס ב-DB
   const { data: history, isLoading: historyLoading } = useQuery({
     queryKey: ["alerts", "history"],
     queryFn: () => getAlertHistory(50),
+    refetchInterval: 60_000,
   });
 
   // סף ארנק
