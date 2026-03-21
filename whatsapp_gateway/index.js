@@ -370,9 +370,12 @@ async function initializeClient() {
             },
         });
 
-        isConnected = true;
-        currentQR = null; // Clear QR once connected
-        console.log('WhatsApp client connected successfully');
+        // בדיקה אם באמת מחובר — statusFind כבר מעדכן isConnected
+        // כש-isLogged/inChat. אם יש QR פעיל, אנחנו עדיין לא מחוברים.
+        if (!currentQR) {
+            isConnected = true;
+        }
+        console.log(`WhatsApp client initialized (connected: ${isConnected})`);
 
         // Listen for incoming messages
         client.onMessage(async (message) => {
