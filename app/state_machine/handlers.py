@@ -1466,19 +1466,63 @@ class CourierStateHandler:
     async def _handle_support(
         self, user: User, message: str, context: dict, photo_file_id: str
     ):
-        """Handle support requests"""
+        """Handle support requests — העברת הודעה להנהלה"""
         if "חזרה" in message or "תפריט" in message:
-            return await self._handle_menu(user, "תפריט", context, None)
+            # ניקוי דגל תמיכה כדי שהכניסה הבאה תציג הנחיות מחדש
+            menu_response, menu_state, menu_ctx = await self._handle_menu(
+                user, "תפריט", context, None
+            )
+            menu_ctx["support_prompt_shown"] = None
+            return menu_response, menu_state, menu_ctx
+
+        # כניסה ראשונה מהתפריט — הצגת הנחיות
+        # משתמשים ב-context flag כדי להבדיל בין כניסה ראשונה לבין הודעת תמיכה
+        # (בדיקת substring כמו "תמיכה" in message תתפוס גם הודעות תמיכה אמיתיות)
+        if not context.get("support_prompt_shown"):
+            response = MessageResponse(
+                "❓ <b>תמיכה</b>\n\n"
+                "📧 שלח הודעה למנהל - פשוט כתוב את ההודעה כאן והיא תועבר.\n\n"
+                "📞 מוקד: 050-1234567\n"
+                "שעות פעילות: א'-ה' 08:00-20:00",
+                keyboard=[["🔙 חזרה לתפריט"]],
+            )
+            return response, CourierState.SUPPORT.value, {"support_prompt_shown": True}
+
+        # העברת ההודעה להנהלה
+        from app.domain.services.admin_notification_service import (
+            AdminNotificationService,
+        )
+        from app.core.validation import PhoneNumberValidator
+
+        user_name = user.full_name or user.name or "לא צוין"
+        phone_display = (
+            PhoneNumberValidator.mask(user.phone_number)
+            if user.phone_number
+            else f"Telegram ID: {user.telegram_id or user.id}"
+        )
+        # plain text — ה-escape לטלגרם מתבצע ב-forward_support_message
+        forward_text = (
+            f"📨 פנייה מ-{user_name}\n"
+            f"({phone_display})\n\n"
+            f"{message}"
+        )
+
+        sent = await AdminNotificationService.forward_support_message(
+            forward_text, user.id, prefer_telegram=(self.platform == "telegram")
+        )
+
+        if sent:
+            confirm_text = "✅ ההודעה נשלחה להנהלה. נחזור אליכם בהקדם!"
+        else:
+            confirm_text = (
+                "⚠️ לא הצלחנו להעביר את ההודעה כרגע.\n"
+                "אנא נסו שוב מאוחר יותר."
+            )
 
         response = MessageResponse(
-            "❓ <b>תמיכה</b>\n\n"
-            "לתמיכה טכנית או שאלות:\n\n"
-            "📧 שלח הודעה למנהל - פשוט כתוב את ההודעה כאן והיא תועבר.\n\n"
-            "📞 מוקד: 050-1234567\n"
-            "שעות פעילות: א'-ה' 08:00-20:00",
-            keyboard=[["🔙 חזרה לתפריט"]],
+            confirm_text, keyboard=[["🔙 חזרה לתפריט"]]
         )
-        return response, CourierState.SUPPORT.value, {}
+        return response, CourierState.MENU.value, {"support_prompt_shown": None}
 
     # ==================== מצבי משלוח (webhook קבוצתי) ====================
     # מצבים אלה מופעלים בעיקר דרך callback queries בקבוצת טלגרם.

@@ -4,7 +4,7 @@ Admin Notification Service - Notify admins about courier events
 import base64
 import mimetypes
 import httpx
-from typing import Optional
+from typing import Any, Optional
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -1155,3 +1155,97 @@ class AdminNotificationService:
                 exc_info=True,
             )
             return False
+
+    @staticmethod
+    async def forward_support_message(
+        forward_text: str,
+        user_id: int,
+        *,
+        prefer_telegram: bool = True,
+    ) -> bool:
+        """העברת הודעת תמיכה למנהלים עם fallback בין פלטפורמות.
+
+        סדר הניסיון: קבוצה ראשית בפלטפורמה מועדפת → אדמינים בודדים →
+        קבוצה ראשית בפלטפורמה שנייה → אדמינים בודדים.
+
+        Args:
+            forward_text: הטקסט המפורמט להעברה (plain text — ללא HTML escape)
+            user_id: מזהה המשתמש (ללוגים)
+            prefer_telegram: אם True — מתחיל מטלגרם, אחרת מוואטסאפ
+        """
+        import html as html_mod
+
+        # טלגרם דורש escape כי parse_mode=HTML; וואטסאפ מקבל plain text
+        tg_text = html_mod.escape(forward_text)
+
+        # שלבי שליחה לכל פלטפורמה: (קבוצה ראשית, רשימת אדמינים בודדים)
+        tg_steps = AdminNotificationService._build_platform_steps(
+            primary_target=settings.TELEGRAM_ADMIN_CHAT_ID,
+            csv_setting=settings.TELEGRAM_ADMIN_CHAT_IDS,
+            send_fn=AdminNotificationService._send_telegram_message,
+            forward_text=tg_text,
+        )
+        wa_steps = AdminNotificationService._build_platform_steps(
+            primary_target=settings.WHATSAPP_ADMIN_GROUP_ID,
+            csv_setting=settings.WHATSAPP_ADMIN_NUMBERS,
+            send_fn=AdminNotificationService._send_whatsapp_admin_message,
+            forward_text=forward_text,
+        )
+
+        if prefer_telegram:
+            steps = tg_steps + wa_steps
+        else:
+            steps = wa_steps + tg_steps
+
+        sent = False
+        for step in steps:
+            if not sent:
+                sent = await step()
+
+        if not sent:
+            logger.error(
+                "כשלון בהעברת פנייה להנהלה — אין יעד זמין",
+                extra_data={"user_id": user_id},
+            )
+
+        return sent
+
+    @staticmethod
+    def _build_platform_steps(
+        primary_target: str | None,
+        csv_setting: str | None,
+        send_fn: Any,
+        forward_text: str,
+    ) -> list[Any]:
+        """בניית רשימת שלבי שליחה לפלטפורמה אחת.
+
+        מחזיר רשימת coroutine factories: קבוצה ראשית ראשונה, אחריה
+        פונקציה שמנסה את כל האדמינים הבודדים מ-CSV.
+        """
+        steps: list[Any] = []
+
+        if primary_target:
+
+            async def _send_primary(
+                _target: str = primary_target,
+            ) -> bool:
+                return await send_fn(_target, forward_text)
+
+            steps.append(_send_primary)
+
+        csv_admins = (
+            _parse_csv_setting(csv_setting) if csv_setting else []
+        )
+        if csv_admins:
+
+            async def _send_csv_admins(
+                _admins: list[str] = csv_admins,
+            ) -> bool:
+                result = False
+                for admin_id in _admins:
+                    result = await send_fn(admin_id, forward_text) or result
+                return result
+
+            steps.append(_send_csv_admins)
+
+        return steps

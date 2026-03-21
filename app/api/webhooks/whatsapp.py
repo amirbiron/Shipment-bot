@@ -843,6 +843,179 @@ from app.api.webhooks._admin_context import (
 )
 
 
+async def _resolve_role_state_wa(
+    user: User,
+    db: AsyncSession,
+    state_manager: StateManager,
+    *,
+    skip_dispatcher_check: bool = False,
+) -> tuple[str, int | None]:
+    """קביעת state יעד לפי תפקיד המשתמש — ביצוע force_state ותופעות לוואי (WhatsApp).
+
+    חובה: כל תפקיד (UserRole) חייב להיות מטופל כאן במפורש.
+    אם מוסיפים תפקיד חדש — חובה להוסיף ענף כאן, אחרת ייפול ל-SENDER עם אזהרה בלוג.
+
+    Returns: (new_state, station_id) — station_id מוחזר כשרלוונטי (בעל תחנה / סדרן)
+    """
+    platform = "whatsapp"
+
+    if user.role == UserRole.COURIER:
+        target = CourierState.MENU.value
+        await state_manager.force_state(user.id, platform, target, context={})
+        return target, None
+
+    if user.role == UserRole.STATION_OWNER:
+        from app.domain.services.station_service import StationService
+
+        station_service = StationService(db)
+        station = await station_service.get_station_by_owner(user.id)
+
+        if station:
+            target = StationOwnerState.MENU.value
+            await state_manager.force_state(user.id, platform, target, context={})
+            return target, station.id
+        # בעל תחנה ללא תחנה פעילה - הורדת תפקיד לשולח
+        logger.warning(
+            "Station owner without active station, downgrading to sender",
+            extra_data={"user_id": user.id},
+        )
+        user.role = UserRole.SENDER
+        await db.commit()
+        target = SenderState.MENU.value
+        await state_manager.force_state(user.id, platform, target, context={})
+        return target, None
+
+    if user.role == UserRole.DRIVER:
+        from app.domain.services.driver_session_service import DriverSessionService
+
+        # סשן 6: עדכון פעילות אחרונה — גם לנהג-סדרן
+        session_service = DriverSessionService(db)
+        await session_service.touch_session(user.id)
+
+        # סשן 9: בדיקה אם הנהג הוא גם סדרן פעיל בתחנה
+        if not skip_dispatcher_check:
+            from app.domain.services.station_service import StationService
+
+            station_service = StationService(db)
+            dispatcher_station = await station_service.get_dispatcher_station(user.id)
+            if dispatcher_station:
+                target = DispatcherState.MENU.value
+                await state_manager.force_state(user.id, platform, target, context={})
+                return target, dispatcher_station.id
+
+        target = DriverState.INITIAL.value
+        await state_manager.force_state(user.id, platform, target, context={})
+        return target, None
+
+    if user.role == UserRole.ADMIN:
+        from app.core.config import settings as _settings
+
+        if _settings.ADMIN_ROLE_SWITCH_ENABLED:
+            from app.state_machine.states import AdminState
+
+            target = AdminState.MENU.value
+            await state_manager.force_state(user.id, platform, target, context={})
+            return target, None
+        target = SenderState.MENU.value
+        await state_manager.force_state(user.id, platform, target, context={})
+        return target, None
+
+    if user.role == UserRole.SENDER:
+        if not skip_dispatcher_check:
+            from app.domain.services.station_service import StationService
+
+            station_service = StationService(db)
+            dispatcher_station = await station_service.get_dispatcher_station(user.id)
+            if dispatcher_station:
+                target = DispatcherState.MENU.value
+                await state_manager.force_state(user.id, platform, target, context={})
+                return target, dispatcher_station.id
+
+        target = SenderState.MENU.value
+        await state_manager.force_state(user.id, platform, target, context={})
+        return target, None
+
+    # תפקיד לא מוכר — אזהרה בלוג ו-fallback לשולח
+    logger.warning(
+        "Unknown user role in state reset, falling back to sender",
+        extra_data={"user_id": user.id, "role": str(user.role)},
+    )
+    target = SenderState.MENU.value
+    await state_manager.force_state(user.id, platform, target, context={})
+    return target, None
+
+
+async def _build_role_menu_response_wa(
+    user: User,
+    db: AsyncSession,
+    target_state: str,
+    station_id: int | None,
+) -> tuple:
+    """בניית תגובת תפריט לפי state שנקבע ע״י _resolve_role_state_wa."""
+    if target_state == CourierState.MENU.value:
+        handler = CourierStateHandler(db, platform="whatsapp")
+        return await handler.handle_message(user, "תפריט", None)
+
+    if target_state == StationOwnerState.MENU.value:
+        handler = StationOwnerStateHandler(db, station_id, platform="whatsapp")
+        return await handler.handle_message(user, "תפריט", None)
+
+    if target_state == DispatcherState.MENU.value:
+        handler = DispatcherStateHandler(db, station_id, platform="whatsapp")
+        return await handler.handle_message(user, "תפריט", None)
+
+    if target_state == DriverState.INITIAL.value:
+        from app.state_machine.driver_handler import DriverStateHandler
+
+        handler = DriverStateHandler(db, platform="whatsapp")
+        return await handler.handle_message(user, "תפריט", None)
+
+    # AdminState — ייבוא דינמי כי AdminState לא מיובא ברמת המודול
+    from app.state_machine.states import AdminState
+    if target_state == AdminState.MENU.value:
+        from app.state_machine.admin_handler import AdminStateHandler
+
+        handler = AdminStateHandler(db, platform="whatsapp")
+        return await handler.handle_message(user, "תפריט", None)
+
+    # SenderState.MENU — fallback (force_state כבר בוצע ב-_resolve_role_state_wa)
+    handler = SenderStateHandler(db)
+    return await handler.handle_message(
+        user_id=user.id, platform="whatsapp", message="תפריט"
+    )
+
+
+async def _reset_role_state_wa(
+    user: User,
+    db: AsyncSession,
+    state_manager: StateManager,
+) -> str:
+    """איפוס state לתפריט לפי תפקיד — ללא בניית תגובת תפריט (WhatsApp).
+
+    משמש כשצריך רק לאפס state בלי לשלוח תגובת תפריט.
+    חוסך שאילתות DB מיותרות שנדרשות לבניית התגובה.
+
+    Returns: new_state string
+    """
+    admin_keys = await _save_admin_context_wa(user.id, state_manager, "whatsapp")
+    is_admin_impersonating = bool(
+        admin_keys and admin_keys.get("original_role") == "admin"
+    )
+    admin_target = admin_keys.get("admin_target_role") if is_admin_impersonating else None
+    skip_dispatcher = admin_target is not None and admin_target != "dispatcher"
+
+    new_state, _ = await _resolve_role_state_wa(
+        user, db, state_manager, skip_dispatcher_check=skip_dispatcher
+    )
+
+    if is_admin_impersonating:
+        await _restore_admin_context_wa(
+            user.id, state_manager, new_state, admin_keys, "whatsapp"
+        )
+
+    return new_state
+
+
 async def _route_to_role_menu_wa(
     user: User,
     db: AsyncSession,
@@ -863,8 +1036,11 @@ async def _route_to_role_menu_wa(
     admin_target = admin_keys.get("admin_target_role") if is_admin_impersonating else None
     skip_dispatcher = admin_target is not None and admin_target != "dispatcher"
 
-    response, new_state = await _route_to_role_menu_wa_inner(
+    new_state, station_id = await _resolve_role_state_wa(
         user, db, state_manager, skip_dispatcher_check=skip_dispatcher
+    )
+    response, new_state = await _build_role_menu_response_wa(
+        user, db, new_state, station_id
     )
 
     # שחזור admin context והוספת כפתור חזרה
@@ -875,107 +1051,6 @@ async def _route_to_role_menu_wa(
         _inject_admin_return_button_wa(response)
 
     return response, new_state
-
-
-async def _route_to_role_menu_wa_inner(
-    user: User,
-    db: AsyncSession,
-    state_manager: StateManager,
-    *,
-    skip_dispatcher_check: bool = False,
-) -> tuple:
-    """ניתוב פנימי לתפריט לפי תפקיד — ללא טיפול ב-admin context (WhatsApp)"""
-    if user.role == UserRole.COURIER:
-        await state_manager.force_state(
-            user.id, "whatsapp", CourierState.MENU.value, context={}
-        )
-        handler = CourierStateHandler(db, platform="whatsapp")
-        return await handler.handle_message(user, "תפריט", None)
-
-    if user.role == UserRole.STATION_OWNER:
-        from app.domain.services.station_service import StationService
-
-        station_service = StationService(db)
-        station = await station_service.get_station_by_owner(user.id)
-
-        if station:
-            await state_manager.force_state(
-                user.id, "whatsapp", StationOwnerState.MENU.value, context={}
-            )
-            handler = StationOwnerStateHandler(db, station.id, platform="whatsapp")
-            return await handler.handle_message(user, "תפריט", None)
-        # בעל תחנה ללא תחנה פעילה - הורדת תפקיד לשולח
-        logger.warning(
-            "Station owner without active station, downgrading to sender",
-            extra_data={"user_id": user.id},
-        )
-        user.role = UserRole.SENDER
-        await db.commit()
-        return await _sender_fallback_wa(user, db, state_manager)
-
-    if user.role == UserRole.DRIVER:
-        from app.state_machine.driver_handler import DriverStateHandler
-        from app.domain.services.driver_session_service import DriverSessionService
-
-        # סשן 6: עדכון פעילות אחרונה — גם לנהג-סדרן
-        session_service = DriverSessionService(db)
-        await session_service.touch_session(user.id)
-
-        # סשן 9: בדיקה אם הנהג הוא גם סדרן פעיל בתחנה
-        if not skip_dispatcher_check:
-            from app.domain.services.station_service import StationService
-
-            station_service = StationService(db)
-            dispatcher_station = await station_service.get_dispatcher_station(user.id)
-            if dispatcher_station:
-                await state_manager.force_state(
-                    user.id, "whatsapp", DispatcherState.MENU.value, context={}
-                )
-                handler = DispatcherStateHandler(db, dispatcher_station.id, platform="whatsapp")
-                return await handler.handle_message(user, "תפריט", None)
-
-        await state_manager.force_state(
-            user.id, "whatsapp", DriverState.INITIAL.value, context={}
-        )
-        handler = DriverStateHandler(db, platform="whatsapp")
-        return await handler.handle_message(user, "תפריט", None)
-
-    if user.role == UserRole.ADMIN:
-        from app.core.config import settings as _settings
-
-        if _settings.ADMIN_ROLE_SWITCH_ENABLED:
-            from app.state_machine.admin_handler import AdminStateHandler
-            from app.state_machine.states import AdminState
-
-            await state_manager.force_state(
-                user.id, "whatsapp", AdminState.MENU.value, context={}
-            )
-            handler = AdminStateHandler(db, platform="whatsapp")
-            return await handler.handle_message(user, "תפריט", None)
-        return await _sender_fallback_wa(user, db, state_manager)
-
-    if user.role == UserRole.SENDER:
-        # בדיקה אם המשתמש הוא סדרן פעיל — סדרנים שאינם שליחים נכנסים ישירות לתפריט סדרן
-        if not skip_dispatcher_check:
-            from app.domain.services.station_service import StationService
-
-            station_service = StationService(db)
-            dispatcher_station = await station_service.get_dispatcher_station(user.id)
-            if dispatcher_station:
-                await state_manager.force_state(
-                    user.id, "whatsapp", DispatcherState.MENU.value, context={}
-                )
-                handler = DispatcherStateHandler(db, dispatcher_station.id, platform="whatsapp")
-                return await handler.handle_message(user, "תפריט", None)
-
-        return await _sender_fallback_wa(user, db, state_manager)
-
-    # תפקיד לא מוכר
-    logger.warning(
-        "Unknown user role in menu routing, falling back to sender",
-        extra_data={"user_id": user.id, "role": str(user.role)},
-    )
-    return await _sender_fallback_wa(user, db, state_manager)
 
 
 # ──────────────────────────────────────────────
@@ -1644,6 +1719,7 @@ async def whatsapp_webhook(
                     continue
 
                 # העברת ההודעה למנהלים
+                # plain text — ה-escape לטלגרם מתבצע ב-forward_support_message
                 user_name = user.full_name or user.name or "לא צוין"
                 forward_text = (
                     f"📨 פנייה מ-{user_name}\n"
@@ -1653,27 +1729,11 @@ async def whatsapp_webhook(
 
                 from app.domain.services.admin_notification_service import (
                     AdminNotificationService,
-                    _parse_csv_setting,
                 )
 
-                sent = False
-                # ניסיון שליחה לקבוצת אדמינים בוואטסאפ
-                if settings.WHATSAPP_ADMIN_GROUP_ID:
-                    sent = await AdminNotificationService._send_whatsapp_admin_message(
-                        settings.WHATSAPP_ADMIN_GROUP_ID, forward_text
-                    )
-                # fallback: שליחה למנהלים פרטיים בוואטסאפ
-                if not sent:
-                    wa_admins = _parse_csv_setting(settings.WHATSAPP_ADMIN_NUMBERS)
-                    for admin_phone in wa_admins:
-                        sent = await AdminNotificationService._send_whatsapp_admin_message(
-                            admin_phone, forward_text
-                        ) or sent
-                # fallback: שליחה לקבוצת טלגרם
-                if not sent and settings.TELEGRAM_ADMIN_CHAT_ID:
-                    sent = await AdminNotificationService._send_telegram_message(
-                        settings.TELEGRAM_ADMIN_CHAT_ID, forward_text
-                    )
+                sent = await AdminNotificationService.forward_support_message(
+                    forward_text, user.id, prefer_telegram=False
+                )
 
                 if sent:
                     confirm_text = "✅ ההודעה נשלחה להנהלה. נחזור אליכם בהקדם!"
@@ -1682,14 +1742,17 @@ async def whatsapp_webhook(
                         "⚠️ לא הצלחנו להעביר את ההודעה כרגע.\n"
                         "אנא נסו שוב מאוחר יותר."
                     )
-                    logger.error(
-                        "כשלון בהעברת פנייה להנהלה — אין יעד זמין",
-                        extra_data={"user_id": user.id},
-                    )
 
-                background_tasks.add_task(send_whatsapp_message, reply_to, confirm_text)
+                background_tasks.add_task(
+                    send_whatsapp_message, reply_to, confirm_text,
+                    [["🔙 חזרה לתפריט"]],
+                )
+                # חזרה לתפריט המתאים לתפקיד המשתמש — רק איפוס state
+                _menu_state = await _reset_role_state_wa(
+                    user, db, state_manager
+                )
                 responses.append(
-                    {"from": sender_id, "response": confirm_text, "new_state": None}
+                    {"from": sender_id, "response": confirm_text, "new_state": _menu_state}
                 )
                 continue
 
