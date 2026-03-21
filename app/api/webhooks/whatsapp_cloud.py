@@ -710,10 +710,11 @@ async def _route_message_to_handler(
             return response.text, new_state
 
         # plain text — ה-escape לטלגרם מתבצע ב-forward_support_message
+        # מספר טלפון מלא — כדי שהאדמין יוכל ליצור קשר חזרה
         user_name = user.full_name or user.name or "לא צוין"
         forward_text = (
             f"📨 פנייה מ-{user_name}\n"
-            f"({PhoneNumberValidator.mask(reply_to)})\n\n"
+            f"({reply_to})\n\n"
             f"{text or '(הודעה ריקה)'}"
         )
 

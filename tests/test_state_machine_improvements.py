@@ -542,3 +542,148 @@ class TestSupportContextCleanup:
         # בדיקה שהדגל נוקה — הכניסה הבאה צריכה להציג הנחיות
         context = await state_manager.get_context(approved_courier.id, "telegram")
         assert context.get("support_prompt_shown") is None
+
+
+# ============================================================================
+# יירוט כפתורי תפריט בזרימה רב-שלבית של סדרן
+# ============================================================================
+
+
+class TestDispatcherMenuButtonInterception:
+    """בדיקות ליירוט לחיצה על כפתור תפריט בזמן זרימה רב-שלבית"""
+
+    @pytest.mark.asyncio
+    async def test_menu_button_during_shipment_flow_asks_confirmation(
+        self, db_session, dispatcher_with_station
+    ):
+        """לחיצה על כפתור תפריט בזמן הוספת משלוח — שואלת אישור ביטול"""
+        dispatcher, station = dispatcher_with_station
+        handler = DispatcherStateHandler(db_session, station.id, platform="telegram")
+        state_manager = StateManager(db_session)
+
+        # סדרן באמצע הוספת משלוח — שלב עיר איסוף
+        await state_manager.force_state(
+            dispatcher.id, "telegram",
+            DispatcherState.ADD_SHIPMENT_PICKUP_CITY.value, {}
+        )
+
+        # לוחץ על "💳 חיוב ידני" במקום להזין עיר
+        response, new_state = await handler.handle_message(
+            dispatcher, "💳 חיוב ידני", None
+        )
+
+        # צריך לשאול אישור ביטול — לא לעבד את הטקסט כעיר
+        assert "האם לבטל" in response.text
+        assert "הוספת משלוח" in response.text
+        assert "חיוב ידני" in response.text
+        assert new_state == DispatcherState.ADD_SHIPMENT_PICKUP_CITY.value
+        assert response.keyboard is not None
+        assert len(response.keyboard) == 2
+
+    @pytest.mark.asyncio
+    async def test_confirm_cancel_flow_starts_new_action(
+        self, db_session, dispatcher_with_station
+    ):
+        """אישור ביטול — מתחיל את הפעולה החדשה"""
+        dispatcher, station = dispatcher_with_station
+        handler = DispatcherStateHandler(db_session, station.id, platform="telegram")
+        state_manager = StateManager(db_session)
+
+        # סדרן באמצע הוספת משלוח
+        await state_manager.force_state(
+            dispatcher.id, "telegram",
+            DispatcherState.ADD_SHIPMENT_PICKUP_CITY.value,
+            {"pickup_city": "תל אביב", "pending_menu_action": "💳 חיוב ידני"},
+        )
+
+        # לוחץ "כן, בטל"
+        response, new_state = await handler.handle_message(
+            dispatcher, "כן, בטל את הוספת משלוח", None
+        )
+
+        # צריך להתחיל את החיוב הידני
+        assert new_state == DispatcherState.MANUAL_CHARGE_DRIVER_NAME.value
+        assert "שם הנהג" in response.text
+
+        # בדיקה שקונטקסט הזרימה הקודמת נוקה
+        context = await state_manager.get_context(dispatcher.id, "telegram")
+        assert context.get("pickup_city") is None
+        assert context.get("pending_menu_action") is None
+
+    @pytest.mark.asyncio
+    async def test_decline_cancel_continues_flow(
+        self, db_session, dispatcher_with_station
+    ):
+        """סירוב ביטול — ממשיך בזרימה הנוכחית"""
+        dispatcher, station = dispatcher_with_station
+        handler = DispatcherStateHandler(db_session, station.id, platform="telegram")
+        state_manager = StateManager(db_session)
+
+        # סדרן באמצע חיוב ידני — שלב סכום
+        await state_manager.force_state(
+            dispatcher.id, "telegram",
+            DispatcherState.MANUAL_CHARGE_AMOUNT.value,
+            {"charge_driver_name": "ישראל", "pending_menu_action": "➕ הוספת משלוח"},
+        )
+
+        # לוחץ "לא, אמשיך"
+        response, new_state = await handler.handle_message(
+            dispatcher, "לא, אמשיך בחיוב ידני", None
+        )
+
+        # צריך להישאר באותו state
+        assert new_state == DispatcherState.MANUAL_CHARGE_AMOUNT.value
+        assert "ממשיכים" in response.text
+
+        # pending_menu_action נוקה
+        context = await state_manager.get_context(dispatcher.id, "telegram")
+        assert context.get("pending_menu_action") is None
+
+    @pytest.mark.asyncio
+    async def test_regular_input_not_intercepted(
+        self, db_session, dispatcher_with_station
+    ):
+        """קלט רגיל בזרימה רב-שלבית לא נתפס כיירוט"""
+        dispatcher, station = dispatcher_with_station
+        handler = DispatcherStateHandler(db_session, station.id, platform="telegram")
+        state_manager = StateManager(db_session)
+
+        # סדרן באמצע הוספת משלוח — שלב עיר איסוף
+        await state_manager.force_state(
+            dispatcher.id, "telegram",
+            DispatcherState.ADD_SHIPMENT_PICKUP_CITY.value, {}
+        )
+
+        # מזין עיר רגילה
+        response, new_state = await handler.handle_message(
+            dispatcher, "תל אביב", None
+        )
+
+        # צריך לעבד כרגיל — לעבור לשלב הרחוב
+        assert new_state == DispatcherState.ADD_SHIPMENT_PICKUP_STREET.value
+        assert "רחוב" in response.text
+
+    @pytest.mark.asyncio
+    async def test_menu_button_during_post_ride_asks_confirmation(
+        self, db_session, dispatcher_with_station
+    ):
+        """לחיצה על כפתור תפריט בזמן פרסום נסיעה — שואלת אישור ביטול"""
+        dispatcher, station = dispatcher_with_station
+        handler = DispatcherStateHandler(db_session, station.id, platform="telegram")
+        state_manager = StateManager(db_session)
+
+        # סדרן באמצע פרסום נסיעה
+        await state_manager.force_state(
+            dispatcher.id, "telegram",
+            DispatcherState.POST_RIDE_DESTINATION.value,
+            {"ride_origin": "ירושלים"},
+        )
+
+        # לוחץ על "📦 משלוחים פעילים"
+        response, new_state = await handler.handle_message(
+            dispatcher, "📦 משלוחים פעילים", None
+        )
+
+        assert "האם לבטל" in response.text
+        assert "פרסום נסיעה" in response.text
+        assert new_state == DispatcherState.POST_RIDE_DESTINATION.value

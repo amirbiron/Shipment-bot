@@ -1100,6 +1100,7 @@ async def _handle_courier_post_processing(
                 user.vehicle_category,
                 user.selfie_file_id,
                 user.vehicle_photo_file_id,
+                user.telegram_username if platform == "telegram" else None,
             )
             await _mark_message_completed(db, notify_key)
         else:
@@ -1120,6 +1121,7 @@ async def _handle_courier_post_processing(
                 contact_phone,
                 photo_file_id,
                 platform,
+                user.telegram_username if platform == "telegram" else None,
             )
 
 
@@ -1720,10 +1722,13 @@ async def whatsapp_webhook(
 
                 # העברת ההודעה למנהלים
                 # plain text — ה-escape לטלגרם מתבצע ב-forward_support_message
+                # מספר טלפון מלא — כדי שהאדמין יוכל ליצור קשר חזרה
+                # reply_to יכול להיות @lid או phone@c.us — לא מספר חייגני
                 user_name = user.full_name or user.name or "לא צוין"
+                display_phone = user.phone_number or reply_to
                 forward_text = (
                     f"📨 פנייה מ-{user_name}\n"
-                    f"({PhoneNumberValidator.mask(reply_to)})\n\n"
+                    f"({display_phone})\n\n"
                     f"{text}"
                 )
 

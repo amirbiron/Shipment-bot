@@ -427,6 +427,7 @@ class _InboundTelegramEvent:
     text: str
     photo_file_id: str | None
     name: str | None
+    username: str | None
     is_callback: bool
     callback_query_id: str | None
     # שיתוף מיקום GPS (סשן 5 — חיפוש לפי מיקום)
@@ -482,6 +483,7 @@ def _parse_inbound_event(
             text=text,
             photo_file_id=None,
             name=name,
+            username=callback.from_user.username,
             is_callback=True,
             callback_query_id=callback.id,
         )
@@ -514,10 +516,12 @@ def _parse_inbound_event(
             photo_file_id = message.document.file_id
 
         name = None
+        username = None
         if message.from_user:
             name = message.from_user.first_name
             if message.from_user.last_name:
                 name += f" {message.from_user.last_name}"
+            username = message.from_user.username
 
         # שיתוף מיקום GPS (סשן 5)
         location_lat = None
@@ -532,6 +536,7 @@ def _parse_inbound_event(
             text=text,
             photo_file_id=photo_file_id,
             name=name,
+            username=username,
             is_callback=False,
             callback_query_id=None,
             location_lat=location_lat,
@@ -862,7 +867,8 @@ class TelegramUpdate(BaseModel):
 
 
 async def get_or_create_user(
-    db: AsyncSession, telegram_chat_id: str, name: Optional[str] = None
+    db: AsyncSession, telegram_chat_id: str, name: Optional[str] = None,
+    username: Optional[str] = None,
 ) -> tuple[User, bool]:
     """
     Get existing user or create new one. Returns (user, is_new).
@@ -909,6 +915,7 @@ async def get_or_create_user(
             phone_number=_telegram_phone_placeholder(telegram_chat_id),
             telegram_chat_id=telegram_chat_id,
             name=name,
+            telegram_username=username,
             platform="telegram",
             role=UserRole.SENDER,
         )
@@ -942,6 +949,12 @@ async def get_or_create_user(
             return user, False
         await db.refresh(user)
         return user, True  # New user
+
+    # עדכון username בכל כניסה — המשתמש יכול לשנות או להסיר username בטלגרם
+    if user.telegram_username != username:
+        user.telegram_username = username
+        await db.commit()
+        await db.refresh(user)
 
     return user, False  # Existing user
 
@@ -1438,6 +1451,7 @@ async def telegram_webhook(
     text = event.text or ""
     photo_file_id = event.photo_file_id
     name = event.name
+    username = event.username
     location_lat = event.location_lat
     location_lng = event.location_lng
 
@@ -1684,7 +1698,7 @@ async def telegram_webhook(
             delivery_id = int(delivery_action.group(2))
 
             # זיהוי הלוחץ
-            user, _ = await get_or_create_user(db, telegram_user_id, name)
+            user, _ = await get_or_create_user(db, telegram_user_id, name, username)
 
             # שליפת המשלוח לבדיקת תחנה
             from app.domain.services.station_service import StationService
@@ -2002,7 +2016,7 @@ async def telegram_webhook(
                     }
 
     # Get or create user (מזהה לפי from_user.id כשאפשר)
-    user, is_new_user = await get_or_create_user(db, telegram_user_id, name)
+    user, is_new_user = await get_or_create_user(db, telegram_user_id, name, username)
 
     # לוג זיהוי משתמש — observability למעקב אחר חיפוש/יצירה
     logger.info(
@@ -2274,15 +2288,16 @@ async def telegram_webhook(
             return {"ok": True, "new_state": new_state}
 
         user_name = user.full_name or user.name or "לא צוין"
+        from app.domain.services.admin_notification_service import (
+            AdminNotificationService,
+            _format_telegram_contact,
+        )
+        contact_display = _format_telegram_contact(send_chat_id, user.telegram_username)
         # plain text — ה-escape לטלגרם מתבצע ב-forward_support_message
         forward_text = (
             f"📨 פנייה מ-{user_name}\n"
-            f"(Telegram: {send_chat_id})\n\n"
+            f"({contact_display})\n\n"
             f"{text}"
-        )
-
-        from app.domain.services.admin_notification_service import (
-            AdminNotificationService,
         )
 
         sent = await AdminNotificationService.forward_support_message(
