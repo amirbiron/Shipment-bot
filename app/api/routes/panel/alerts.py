@@ -248,7 +248,8 @@ async def get_alerts_history(
             did = (a.get("data") or {}).get("delivery_id")
             if did is None:
                 return True
-            return status_map.get(int(did)) == DeliveryStatus.OPEN
+            # משלוח שלא נמצא ב-DB — נשאיר את ההתראה לבטחון
+            return status_map.get(int(did), DeliveryStatus.OPEN) == DeliveryStatus.OPEN
 
         raw_alerts = [a for a in raw_alerts if _keep(a)]
 
