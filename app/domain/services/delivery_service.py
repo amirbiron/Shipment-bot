@@ -367,11 +367,22 @@ class DeliveryService:
         )
         delivery = result.scalar_one_or_none()
         if not delivery:
+            logger.warning(
+                "ביטול אוטומטי: משלוח לא נמצא",
+                extra_data={"delivery_id": delivery_id},
+            )
             return None
 
         # ולידציה — רק משלוחים פתוחים/ממתינים לאישור
         valid_statuses = (DeliveryStatus.OPEN, DeliveryStatus.PENDING_APPROVAL)
         if delivery.status not in valid_statuses:
+            logger.info(
+                "ביטול אוטומטי: משלוח כבר לא פתוח",
+                extra_data={
+                    "delivery_id": delivery_id,
+                    "status": delivery.status.value,
+                },
+            )
             return None
 
         old_status = delivery.status.value

@@ -1618,6 +1618,11 @@ def auto_cancel_expired_deliveries() -> dict:
                 # חילוץ מזהים לערכי Python — מונע MissingGreenlet
                 expired_ids = [d.id for d in expired]
 
+                logger.info(
+                    "שלב 2: נמצאו משלוחים שפג תוקפם",
+                    extra_data={"count": len(expired_ids), "ids": expired_ids[:20]},
+                )
+
                 for delivery_id in expired_ids:
                     try:
                         result = await delivery_service.auto_cancel_delivery(
@@ -1627,6 +1632,11 @@ def auto_cancel_expired_deliveries() -> dict:
                             deliveries_cancelled += 1
                             logger.info(
                                 "משלוח בוטל אוטומטית — לא נתפס בזמן",
+                                extra_data={"delivery_id": delivery_id},
+                            )
+                        else:
+                            logger.warning(
+                                "auto_cancel_delivery החזיר None — המשלוח לא בוטל",
                                 extra_data={"delivery_id": delivery_id},
                             )
                     except Exception as e:
