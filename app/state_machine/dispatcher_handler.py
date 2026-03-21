@@ -176,7 +176,7 @@ class DispatcherStateHandler:
         pending_action = context.get("pending_menu_action")
         if pending_action and self._is_known_multi_step_flow_state(current_state):
             msg = message.strip()
-            if "כן" in msg or "בטל" in msg:
+            if msg.startswith("כן,"):
                 # המשתמש אישר ביטול — חזרה לתפריט ושליחת הפעולה החדשה
                 # ניקוי context של הזרימה + pending_menu_action
                 context_update = {"pending_menu_action": None}
