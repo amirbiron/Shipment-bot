@@ -7,7 +7,31 @@ const apiClient = axios.create({
 });
 
 // נתיבי auth שלא דורשים redirect ב-401
-const AUTH_PATHS = ["/auth/request-otp", "/auth/verify-otp", "/auth/telegram-login", "/auth/telegram-login-select-station"];
+const AUTH_PATHS = ["/auth/request-otp", "/auth/verify-otp", "/auth/telegram-login", "/auth/telegram-login-select-station", "/auth/refresh"];
+
+// דגל למניעת ריפרוש מקבילי
+let isRefreshing = false;
+let refreshPromise: Promise<string | null> | null = null;
+
+// ריפרוש טוקן — מחזיר access token חדש או null אם נכשל
+async function tryRefreshToken(): Promise<string | null> {
+  const { refreshToken } = useAuthStore.getState();
+  if (!refreshToken) return null;
+
+  try {
+    // קריאה ישירה ל-axios כדי לא להיכנס ל-interceptor שלנו
+    const response = await axios.post(
+      `${apiClient.defaults.baseURL}/auth/refresh`,
+      { refresh_token: refreshToken },
+      { headers: { "Content-Type": "application/json" } }
+    );
+    const { access_token, refresh_token } = response.data;
+    useAuthStore.getState().setTokens(access_token, refresh_token);
+    return access_token;
+  } catch {
+    return null;
+  }
+}
 
 // הוספת טוקן לכל בקשה
 apiClient.interceptors.request.use((config) => {
@@ -18,18 +42,40 @@ apiClient.interceptors.request.use((config) => {
   return config;
 });
 
-// טיפול ב-401 — מעבר לדף כניסה (רק לנתיבים מוגנים, לא לזרימת OTP)
+// טיפול ב-401 — ניסיון ריפרוש לפני מעבר לדף כניסה
 apiClient.interceptors.response.use(
   (response) => response,
-  (error) => {
+  async (error) => {
     if (error.response?.status === 401) {
       const requestUrl = error.config?.url || "";
       const isAuthRoute = AUTH_PATHS.some((path) => requestUrl.includes(path));
-      if (!isAuthRoute) {
-        useAuthStore.getState().logout();
-        sessionStorage.setItem("session-expired", "1");
-        window.location.href = "/panel/login";
+
+      // אם זה נתיב auth (כמו verify-otp) — לא מנסים ריפרוש
+      if (isAuthRoute) {
+        return Promise.reject(error);
       }
+
+      // מניעת ריפרוש מקבילי — כולם ממתינים לאותו promise
+      if (!isRefreshing) {
+        isRefreshing = true;
+        refreshPromise = tryRefreshToken().finally(() => {
+          isRefreshing = false;
+          refreshPromise = null;
+        });
+      }
+
+      const newToken = await refreshPromise;
+
+      if (newToken) {
+        // ניסיון חוזר עם הטוקן החדש
+        error.config.headers.Authorization = `Bearer ${newToken}`;
+        return apiClient.request(error.config);
+      }
+
+      // ריפרוש נכשל — logout
+      useAuthStore.getState().logout();
+      sessionStorage.setItem("session-expired", "1");
+      window.location.href = "/panel/login";
     }
     return Promise.reject(error);
   }

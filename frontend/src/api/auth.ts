@@ -5,6 +5,7 @@ export type { ActionResponse };
 
 export interface TokenResponse {
   access_token: string;
+  refresh_token: string;
   token_type: string;
   station_id: number;
   station_name: string;
@@ -25,6 +26,9 @@ export const verifyOtp = (phoneNumber: string, otp: string): Promise<TokenRespon
 
 export const getMe = (): Promise<MeResponse> =>
   apiClient.get("/auth/me").then((r) => r.data);
+
+export const refreshAccessToken = (refreshToken: string): Promise<TokenResponse> =>
+  apiClient.post("/auth/refresh", { refresh_token: refreshToken }).then((r) => r.data);
 
 // Telegram Login Widget
 
