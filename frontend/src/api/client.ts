@@ -13,13 +13,86 @@ const AUTH_PATHS = ["/auth/request-otp", "/auth/verify-otp", "/auth/telegram-log
 let isRefreshing = false;
 let refreshPromise: Promise<string | null> | null = null;
 
-// ריפרוש טוקן — מחזיר access token חדש או null אם נכשל
-async function tryRefreshToken(): Promise<string | null> {
-  // קריאה טרייה מה-store (localStorage) — ייתכן שטאב אחר כבר ריפרש
-  const { refreshToken } = useAuthStore.getState();
-  if (!refreshToken) return null;
+// מפתחות localStorage לנעילה חוצת-טאבים
+const REFRESH_LOCK_KEY = "station-panel-refresh-lock";
+const REFRESH_LOCK_TTL_MS = 10_000; // נעילה פגה אחרי 10 שניות (הגנה מפני טאב שקרס)
+
+/**
+ * נעילה חוצת-טאבים למניעת ריפרוש מקבילי בין טאבים.
+ * משתמשים ב-localStorage כ-mutex — רק טאב אחד מבצע refresh,
+ * השאר ממתינים ל-storage event שיעדכן את הטוקנים.
+ */
+function acquireRefreshLock(): boolean {
+  const now = Date.now();
+  const existing = localStorage.getItem(REFRESH_LOCK_KEY);
+  if (existing) {
+    const lockTime = parseInt(existing, 10);
+    // נעילה קיימת ותקפה — טאב אחר מטפל
+    if (now - lockTime < REFRESH_LOCK_TTL_MS) {
+      return false;
+    }
+    // נעילה ישנה (טאב קרס) — דורסים
+  }
+  localStorage.setItem(REFRESH_LOCK_KEY, now.toString());
+  return true;
+}
+
+function releaseRefreshLock(): void {
+  localStorage.removeItem(REFRESH_LOCK_KEY);
+}
+
+/**
+ * ממתין לטוקן חדש מטאב אחר שמבצע ריפרוש.
+ * מאזין ל-storage event על ה-auth store, עם timeout.
+ */
+function waitForCrossTabRefresh(expiredToken: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      window.removeEventListener("storage", handler);
+      // ייתכן שטוקן התעדכן בינתיים (storage event הגיע ממש לפני ה-timeout)
+      const current = useAuthStore.getState().token;
+      resolve(current && current !== expiredToken ? current : null);
+    }, REFRESH_LOCK_TTL_MS);
+
+    function handler(event: StorageEvent): void {
+      if (event.key === "station-panel-auth" && event.newValue) {
+        try {
+          const parsed = JSON.parse(event.newValue);
+          const newToken = parsed?.state?.token;
+          if (newToken && newToken !== expiredToken) {
+            clearTimeout(timeout);
+            window.removeEventListener("storage", handler);
+            // מעדכנים את ה-store המקומי
+            useAuthStore.setState({
+              token: parsed.state.token,
+              refreshToken: parsed.state.refreshToken,
+            });
+            resolve(newToken);
+          }
+        } catch {
+          // JSON פגום — ממשיכים לחכות
+        }
+      }
+    }
+
+    window.addEventListener("storage", handler);
+  });
+}
+
+// ריפרוש טוקן עם נעילה חוצת-טאבים — מחזיר access token חדש או null אם נכשל
+async function tryRefreshToken(expiredToken: string): Promise<string | null> {
+  // ניסיון לתפוס את הנעילה
+  const gotLock = acquireRefreshLock();
+
+  if (!gotLock) {
+    // טאב אחר כבר מבצע ריפרוש — ממתינים לתוצאה
+    return waitForCrossTabRefresh(expiredToken);
+  }
 
   try {
+    const { refreshToken } = useAuthStore.getState();
+    if (!refreshToken) return null;
+
     // קריאה ישירה ל-axios כדי לא להיכנס ל-interceptor שלנו
     const response = await axios.post(
       `${apiClient.defaults.baseURL}/auth/refresh`,
@@ -31,6 +104,8 @@ async function tryRefreshToken(): Promise<string | null> {
     return access_token;
   } catch {
     return null;
+  } finally {
+    releaseRefreshLock();
   }
 }
 
@@ -67,11 +142,12 @@ apiClient.interceptors.response.use(
       }
       config._retry = true;
 
-      // לפני ריפרוש — בודקים אם טאב אחר כבר עדכן את הטוקן ב-localStorage
-      const currentTokenInHeader = config.headers.Authorization?.toString().replace("Bearer ", "");
+      // הטוקן שנכשל — משמש להשוואה עם טוקן חדש מטאב אחר
+      const failedToken = config.headers.Authorization?.toString().replace("Bearer ", "") || "";
+
+      // בדיקה מיידית: אולי טאב אחר כבר ריפרש לפני שהגענו לכאן
       const freshStoreToken = useAuthStore.getState().token;
-      if (freshStoreToken && freshStoreToken !== currentTokenInHeader) {
-        // טאב אחר כבר ריפרש — משתמשים בטוקן החדש
+      if (freshStoreToken && freshStoreToken !== failedToken) {
         config.headers.Authorization = `Bearer ${freshStoreToken}`;
         return apiClient.request(config);
       }
@@ -79,7 +155,7 @@ apiClient.interceptors.response.use(
       // מניעת ריפרוש מקבילי באותו טאב — כולם ממתינים לאותו promise
       if (!isRefreshing) {
         isRefreshing = true;
-        refreshPromise = tryRefreshToken().finally(() => {
+        refreshPromise = tryRefreshToken(failedToken).finally(() => {
           isRefreshing = false;
           refreshPromise = null;
         });
