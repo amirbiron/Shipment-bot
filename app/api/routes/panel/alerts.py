@@ -242,14 +242,25 @@ async def get_alerts_history(
                 row.id: row.status for row in result
             }
 
+        # דדופליקציה: לכל delivery_id נשמור רק את ההתראה הראשונה (החדשה ביותר,
+        # כי raw_alerts ממוינות מהחדשה לישנה ב-Redis LPUSH).
+        seen_uncollected: set[int] = set()
+
         def _keep(a: dict) -> bool:
             if a.get("type") != "uncollected_shipment":
                 return True
             did = (a.get("data") or {}).get("delivery_id")
             if did is None:
                 return True
+            did = int(did)
             # משלוח שלא נמצא ב-DB — נשאיר את ההתראה לבטחון
-            return status_map.get(int(did), DeliveryStatus.OPEN) == DeliveryStatus.OPEN
+            if status_map.get(did, DeliveryStatus.OPEN) != DeliveryStatus.OPEN:
+                return False
+            # דדופליקציה — רק ההתראה החדשה ביותר לכל משלוח
+            if did in seen_uncollected:
+                return False
+            seen_uncollected.add(did)
+            return True
 
         raw_alerts = [a for a in raw_alerts if _keep(a)]
 
