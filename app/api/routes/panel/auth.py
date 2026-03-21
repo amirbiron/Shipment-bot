@@ -433,7 +433,8 @@ async def telegram_bot_info() -> TelegramBotInfoResponse:
     bot_token = settings.TELEGRAM_BOT_TOKEN
     # bot_id הוא החלק המספרי לפני ה-':' בטוקן
     bot_id = bot_token.split(":")[0] if bot_token and ":" in bot_token else ""
-    enabled = bool(bot_username and bot_id)
+    # bot_id (מהטוקן) מספיק להפעלת הווידג'ט — bot_username אופציונלי
+    enabled = bool(bot_id)
     return TelegramBotInfoResponse(
         bot_username=bot_username or "",
         bot_id=bot_id,
