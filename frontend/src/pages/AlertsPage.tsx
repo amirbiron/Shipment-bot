@@ -144,8 +144,13 @@ export default function AlertsPage() {
   // חיבור SSE
   const handleNewAlert = useCallback(
     (alert: AlertItem) => {
-      setLiveAlerts((prev) => [alert, ...prev].slice(0, 50));
-      // רענון היסטוריה
+      // התראות uncollected_shipment לא נשמרות ב-liveAlerts — הסינון שלהן
+      // מול DB (האם המשלוח עדיין פתוח) מתבצע רק בבקאנד בנקודת /history.
+      // invalidateQueries מרענן את ההיסטוריה המסוננת, וזה מספיק.
+      if (alert.type !== "uncollected_shipment") {
+        setLiveAlerts((prev) => [alert, ...prev].slice(0, 50));
+      }
+      // רענון היסטוריה — גם עבור uncollected, כדי שיופיע מההיסטוריה אם רלוונטי
       queryClient.invalidateQueries({ queryKey: ["alerts", "history"] });
     },
     [queryClient]
