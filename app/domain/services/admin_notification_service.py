@@ -4,7 +4,7 @@ Admin Notification Service - Notify admins about courier events
 import base64
 import mimetypes
 import httpx
-from typing import Optional
+from typing import Any, Optional
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -1165,85 +1165,37 @@ class AdminNotificationService:
     ) -> bool:
         """העברת הודעת תמיכה למנהלים עם fallback בין פלטפורמות.
 
+        סדר הניסיון: קבוצה ראשית בפלטפורמה מועדפת → אדמינים בודדים →
+        קבוצה ראשית בפלטפורמה שנייה → אדמינים בודדים.
+
         Args:
             forward_text: הטקסט המפורמט להעברה
             user_id: מזהה המשתמש (ללוגים)
             prefer_telegram: אם True — מתחיל מטלגרם, אחרת מוואטסאפ
         """
-        sent = False
+        # שלבי שליחה לכל פלטפורמה: (קבוצה ראשית, רשימת אדמינים בודדים)
+        tg_steps = AdminNotificationService._build_platform_steps(
+            primary_target=settings.TELEGRAM_ADMIN_CHAT_ID,
+            csv_setting=settings.TELEGRAM_ADMIN_CHAT_IDS,
+            send_fn=AdminNotificationService._send_telegram_message,
+            forward_text=forward_text,
+        )
+        wa_steps = AdminNotificationService._build_platform_steps(
+            primary_target=settings.WHATSAPP_ADMIN_GROUP_ID,
+            csv_setting=settings.WHATSAPP_ADMIN_NUMBERS,
+            send_fn=AdminNotificationService._send_whatsapp_admin_message,
+            forward_text=forward_text,
+        )
 
         if prefer_telegram:
-            # טלגרם ראשון → וואטסאפ fallback
-            if settings.TELEGRAM_ADMIN_CHAT_ID:
-                sent = await AdminNotificationService._send_telegram_message(
-                    settings.TELEGRAM_ADMIN_CHAT_ID, forward_text
-                )
-            if not sent:
-                tg_admins = (
-                    _parse_csv_setting(settings.TELEGRAM_ADMIN_CHAT_IDS)
-                    if settings.TELEGRAM_ADMIN_CHAT_IDS
-                    else []
-                )
-                for admin_id in tg_admins:
-                    sent = (
-                        await AdminNotificationService._send_telegram_message(
-                            admin_id, forward_text
-                        )
-                        or sent
-                    )
-            if not sent and settings.WHATSAPP_ADMIN_GROUP_ID:
-                sent = await AdminNotificationService._send_whatsapp_admin_message(
-                    settings.WHATSAPP_ADMIN_GROUP_ID, forward_text
-                )
-            if not sent:
-                wa_admins = (
-                    _parse_csv_setting(settings.WHATSAPP_ADMIN_NUMBERS)
-                    if settings.WHATSAPP_ADMIN_NUMBERS
-                    else []
-                )
-                for admin_phone in wa_admins:
-                    sent = (
-                        await AdminNotificationService._send_whatsapp_admin_message(
-                            admin_phone, forward_text
-                        )
-                        or sent
-                    )
+            steps = tg_steps + wa_steps
         else:
-            # וואטסאפ ראשון → טלגרם fallback
-            if settings.WHATSAPP_ADMIN_GROUP_ID:
-                sent = await AdminNotificationService._send_whatsapp_admin_message(
-                    settings.WHATSAPP_ADMIN_GROUP_ID, forward_text
-                )
+            steps = wa_steps + tg_steps
+
+        sent = False
+        for step in steps:
             if not sent:
-                wa_admins = (
-                    _parse_csv_setting(settings.WHATSAPP_ADMIN_NUMBERS)
-                    if settings.WHATSAPP_ADMIN_NUMBERS
-                    else []
-                )
-                for admin_phone in wa_admins:
-                    sent = (
-                        await AdminNotificationService._send_whatsapp_admin_message(
-                            admin_phone, forward_text
-                        )
-                        or sent
-                    )
-            if not sent and settings.TELEGRAM_ADMIN_CHAT_ID:
-                sent = await AdminNotificationService._send_telegram_message(
-                    settings.TELEGRAM_ADMIN_CHAT_ID, forward_text
-                )
-            if not sent:
-                tg_admins = (
-                    _parse_csv_setting(settings.TELEGRAM_ADMIN_CHAT_IDS)
-                    if settings.TELEGRAM_ADMIN_CHAT_IDS
-                    else []
-                )
-                for admin_id in tg_admins:
-                    sent = (
-                        await AdminNotificationService._send_telegram_message(
-                            admin_id, forward_text
-                        )
-                        or sent
-                    )
+                sent = await step()
 
         if not sent:
             logger.error(
@@ -1252,3 +1204,43 @@ class AdminNotificationService:
             )
 
         return sent
+
+    @staticmethod
+    def _build_platform_steps(
+        primary_target: str | None,
+        csv_setting: str | None,
+        send_fn: Any,
+        forward_text: str,
+    ) -> list[Any]:
+        """בניית רשימת שלבי שליחה לפלטפורמה אחת.
+
+        מחזיר רשימת coroutine factories: קבוצה ראשית ראשונה, אחריה
+        פונקציה שמנסה את כל האדמינים הבודדים מ-CSV.
+        """
+        steps: list[Any] = []
+
+        if primary_target:
+
+            async def _send_primary(
+                _target: str = primary_target,
+            ) -> bool:
+                return await send_fn(_target, forward_text)
+
+            steps.append(_send_primary)
+
+        csv_admins = (
+            _parse_csv_setting(csv_setting) if csv_setting else []
+        )
+        if csv_admins:
+
+            async def _send_csv_admins(
+                _admins: list[str] = csv_admins,
+            ) -> bool:
+                result = False
+                for admin_id in _admins:
+                    result = await send_fn(admin_id, forward_text) or result
+                return result
+
+            steps.append(_send_csv_admins)
+
+        return steps

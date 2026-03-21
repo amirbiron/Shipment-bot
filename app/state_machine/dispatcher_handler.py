@@ -1005,8 +1005,10 @@ class DispatcherStateHandler:
             )
             return response, DispatcherState.VIEW_POSTED_RIDES.value, {}
 
-        # cancel_dispatcher_ride בודק סטטוס אטומית אחרי נעילת שורה
-        cancelled = await self.station_service.cancel_dispatcher_ride(ride_id)
+        # cancel_dispatcher_ride בודק סטטוס + בעלות אטומית אחרי נעילת שורה
+        cancelled = await self.station_service.cancel_dispatcher_ride(
+            ride_id, station_id=self.station_id
+        )
         if not cancelled:
             response = MessageResponse(
                 "❌ לא ניתן לבטל את הנסיעה — ייתכן שכבר נתפסה או בוטלה.",

@@ -2306,12 +2306,15 @@ class StationService:
         )
         return result.scalar_one_or_none()
 
-    async def cancel_dispatcher_ride(self, ride_id: int) -> bool:
+    async def cancel_dispatcher_ride(
+        self, ride_id: int, *, station_id: int | None = None
+    ) -> bool:
         """
-        ביטול נסיעה — עדכון סטטוס ל-CANCELLED עם בדיקת סטטוס אטומית.
+        ביטול נסיעה — עדכון סטטוס ל-CANCELLED עם בדיקת סטטוס והרשאה אטומית.
 
         Args:
             ride_id: מזהה הנסיעה
+            station_id: מזהה התחנה — אם סופק, מוודא בעלות אחרי נעילה
 
         Returns:
             True אם הנסיעה בוטלה, False אם לא נמצאה או שהסטטוס כבר השתנה
@@ -2330,7 +2333,11 @@ class StationService:
         if ride is None:
             return False
 
-        # בדיקת סטטוס אטומית — אחרי הנעילה, כדי למנוע TOCTOU
+        # בדיקת הרשאה אטומית — אחרי הנעילה, כדי למנוע TOCTOU
+        if station_id is not None and ride.station_id != station_id:
+            return False
+
+        # בדיקת סטטוס אטומית — אחרי הנעילה
         if ride.status != DispatcherRideStatus.OPEN.value:
             return False
 
