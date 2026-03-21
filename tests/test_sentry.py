@@ -121,9 +121,19 @@ class TestBeforeSend:
 
     @pytest.mark.unit
     def test_adds_correlation_id_tag(self) -> None:
-        with patch("app.core.sentry.get_correlation_id", return_value="abc123"):
+        with patch("app.core.sentry.correlation_id_var") as mock_var:
+            mock_var.get.return_value = "abc123"
+            # noinspection PyUnusedLocal
             event = _before_send({}, {})
         assert event["tags"]["correlation_id"] == "abc123"
+
+    @pytest.mark.unit
+    def test_no_correlation_id_tag_when_empty(self) -> None:
+        """correlation ID ריק לא צריך להוסיף tag — מונע זיהום מ-Celery/startup"""
+        with patch("app.core.sentry.correlation_id_var") as mock_var:
+            mock_var.get.return_value = ""
+            event = _before_send({}, {})
+        assert "tags" not in event or "correlation_id" not in event.get("tags", {})
 
     @pytest.mark.unit
     def test_scrubs_exception_value(self) -> None:
@@ -132,7 +142,9 @@ class TestBeforeSend:
                 "values": [{"value": "שגיאה עבור 0501234567", "type": "ValueError"}]
             }
         }
-        with patch("app.core.sentry.get_correlation_id", return_value=""):
+        with patch("app.core.sentry.correlation_id_var") as mock_var:
+            mock_var.get.return_value = ""
+            # noinspection PyUnusedLocal
             result = _before_send(event, {})
         assert "0501234567" not in result["exception"]["values"][0]["value"]
         assert "[REDACTED_PHONE]" in result["exception"]["values"][0]["value"]
@@ -144,7 +156,9 @@ class TestBeforeSend:
                 "values": [{"message": "שליחה ל-0501234567"}]
             }
         }
-        with patch("app.core.sentry.get_correlation_id", return_value=""):
+        with patch("app.core.sentry.correlation_id_var") as mock_var:
+            mock_var.get.return_value = ""
+            # noinspection PyUnusedLocal
             result = _before_send(event, {})
         assert "0501234567" not in result["breadcrumbs"]["values"][0]["message"]
 
@@ -156,7 +170,9 @@ class TestBeforeSend:
                 "headers": {"X-User": "0501234567"},
             }
         }
-        with patch("app.core.sentry.get_correlation_id", return_value=""):
+        with patch("app.core.sentry.correlation_id_var") as mock_var:
+            mock_var.get.return_value = ""
+            # noinspection PyUnusedLocal
             result = _before_send(event, {})
         assert "0501234567" not in result["request"]["data"]["phone"]
         assert "0501234567" not in result["request"]["headers"]["X-User"]
@@ -169,7 +185,9 @@ class TestBeforeSend:
                 "data": "phone=0501234567&name=test",
             }
         }
-        with patch("app.core.sentry.get_correlation_id", return_value=""):
+        with patch("app.core.sentry.correlation_id_var") as mock_var:
+            mock_var.get.return_value = ""
+            # noinspection PyUnusedLocal
             result = _before_send(event, {})
         assert "0501234567" not in result["request"]["data"]
         assert "[REDACTED_PHONE]" in result["request"]["data"]
@@ -182,7 +200,9 @@ class TestBeforeSend:
                 "url": "https://example.com/api/users/0501234567/deliver",
             }
         }
-        with patch("app.core.sentry.get_correlation_id", return_value=""):
+        with patch("app.core.sentry.correlation_id_var") as mock_var:
+            mock_var.get.return_value = ""
+            # noinspection PyUnusedLocal
             result = _before_send(event, {})
         assert "0501234567" not in result["request"]["url"]
         assert "[REDACTED_PHONE]" in result["request"]["url"]
@@ -195,7 +215,9 @@ class TestBeforeSend:
                 "query_string": "phone=0501234567&action=send",
             }
         }
-        with patch("app.core.sentry.get_correlation_id", return_value=""):
+        with patch("app.core.sentry.correlation_id_var") as mock_var:
+            mock_var.get.return_value = ""
+            # noinspection PyUnusedLocal
             result = _before_send(event, {})
         assert "0501234567" not in result["request"]["query_string"]
         assert "[REDACTED_PHONE]" in result["request"]["query_string"]
@@ -203,7 +225,9 @@ class TestBeforeSend:
     @pytest.mark.unit
     def test_scrubs_message(self) -> None:
         event = {"message": "שגיאה בשליחה ל-0501234567"}
-        with patch("app.core.sentry.get_correlation_id", return_value=""):
+        with patch("app.core.sentry.correlation_id_var") as mock_var:
+            mock_var.get.return_value = ""
+            # noinspection PyUnusedLocal
             result = _before_send(event, {})
         assert "0501234567" not in result["message"]
 

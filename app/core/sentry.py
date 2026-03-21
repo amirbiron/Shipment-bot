@@ -11,7 +11,7 @@ import re
 
 import sentry_sdk
 
-from app.core.logging import get_logger, get_correlation_id
+from app.core.logging import get_logger, correlation_id_var
 
 logger = get_logger(__name__)
 
@@ -91,8 +91,8 @@ def _scrub_breadcrumbs(event: dict) -> None:
 
 def _before_send(event: dict, hint: dict) -> dict:
     """סינון PII והעשרת event לפני שליחה ל-Sentry"""
-    # העשרה עם correlation ID
-    correlation_id = get_correlation_id()
+    # העשרה עם correlation ID — קריאה ישירה מ-ContextVar בלי side effect של יצירת ID חדש
+    correlation_id = correlation_id_var.get()
     if correlation_id:
         event.setdefault("tags", {})["correlation_id"] = correlation_id
 
