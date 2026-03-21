@@ -1,4 +1,4 @@
-import axios from "axios";
+import axios, { type InternalAxiosRequestConfig } from "axios";
 import { useAuthStore } from "@/store/auth";
 
 const apiClient = axios.create({
@@ -9,12 +9,13 @@ const apiClient = axios.create({
 // נתיבי auth שלא דורשים redirect ב-401
 const AUTH_PATHS = ["/auth/request-otp", "/auth/verify-otp", "/auth/telegram-login", "/auth/telegram-login-select-station", "/auth/refresh"];
 
-// דגל למניעת ריפרוש מקבילי
+// דגל למניעת ריפרוש מקבילי באותו טאב
 let isRefreshing = false;
 let refreshPromise: Promise<string | null> | null = null;
 
 // ריפרוש טוקן — מחזיר access token חדש או null אם נכשל
 async function tryRefreshToken(): Promise<string | null> {
+  // קריאה טרייה מה-store (localStorage) — ייתכן שטאב אחר כבר ריפרש
   const { refreshToken } = useAuthStore.getState();
   if (!refreshToken) return null;
 
@@ -33,7 +34,7 @@ async function tryRefreshToken(): Promise<string | null> {
   }
 }
 
-// הוספת טוקן לכל בקשה
+// הוספת טוקן לכל בקשה — קריאה טרייה מה-store (תומך בעדכונים חוצי-טאבים)
 apiClient.interceptors.request.use((config) => {
   const token = useAuthStore.getState().token;
   if (token) {
@@ -46,8 +47,10 @@ apiClient.interceptors.request.use((config) => {
 apiClient.interceptors.response.use(
   (response) => response,
   async (error) => {
+    const config = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
+
     if (error.response?.status === 401) {
-      const requestUrl = error.config?.url || "";
+      const requestUrl = config?.url || "";
       const isAuthRoute = AUTH_PATHS.some((path) => requestUrl.includes(path));
 
       // אם זה נתיב auth (כמו verify-otp) — לא מנסים ריפרוש
@@ -55,7 +58,25 @@ apiClient.interceptors.response.use(
         return Promise.reject(error);
       }
 
-      // מניעת ריפרוש מקבילי — כולם ממתינים לאותו promise
+      // מניעת לולאת retry אינסופית — ניסיון חוזר פעם אחת בלבד
+      if (config._retry) {
+        useAuthStore.getState().logout();
+        sessionStorage.setItem("session-expired", "1");
+        window.location.href = "/panel/login";
+        return Promise.reject(error);
+      }
+      config._retry = true;
+
+      // לפני ריפרוש — בודקים אם טאב אחר כבר עדכן את הטוקן ב-localStorage
+      const currentTokenInHeader = config.headers.Authorization?.toString().replace("Bearer ", "");
+      const freshStoreToken = useAuthStore.getState().token;
+      if (freshStoreToken && freshStoreToken !== currentTokenInHeader) {
+        // טאב אחר כבר ריפרש — משתמשים בטוקן החדש
+        config.headers.Authorization = `Bearer ${freshStoreToken}`;
+        return apiClient.request(config);
+      }
+
+      // מניעת ריפרוש מקבילי באותו טאב — כולם ממתינים לאותו promise
       if (!isRefreshing) {
         isRefreshing = true;
         refreshPromise = tryRefreshToken().finally(() => {
@@ -68,8 +89,8 @@ apiClient.interceptors.response.use(
 
       if (newToken) {
         // ניסיון חוזר עם הטוקן החדש
-        error.config.headers.Authorization = `Bearer ${newToken}`;
-        return apiClient.request(error.config);
+        config.headers.Authorization = `Bearer ${newToken}`;
+        return apiClient.request(config);
       }
 
       // ריפרוש נכשל — logout
