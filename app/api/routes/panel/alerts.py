@@ -208,8 +208,53 @@ async def get_alerts_history(
     auth: TokenPayload = Depends(get_current_station_owner),
     limit: int = Query(50, ge=1, le=100, description="מספר התראות מקסימלי"),
 ) -> AlertHistoryResponse:
-    """היסטוריית התראות"""
-    alerts = await get_alert_history(auth.station_id, limit=limit)
+    """היסטוריית התראות — מסנן התראות uncollected_shipment של משלוחים שכבר לא פתוחים.
+
+    שולף יותר מה-limit המבוקש כדי לפצות על התראות שיסוננו,
+    ואז חותך לגודל הסופי.
+    """
+    from sqlalchemy import select
+    from app.db.models.delivery import Delivery, DeliveryStatus
+
+    # שליפת מאגר רחב יותר מ-Redis כדי לפצות על סינון
+    _OVER_FETCH_FACTOR = 2
+    raw_alerts = await get_alert_history(
+        auth.station_id, limit=min(limit * _OVER_FETCH_FACTOR, 100)
+    )
+
+    # איסוף delivery_ids מהתראות uncollected_shipment
+    uncollected_delivery_ids: set[int] = set()
+    for alert in raw_alerts:
+        if alert.get("type") == "uncollected_shipment":
+            did = (alert.get("data") or {}).get("delivery_id")
+            if did is not None:
+                uncollected_delivery_ids.add(int(did))
+
+    # סינון רק אם יש התראות uncollected_shipment
+    if uncollected_delivery_ids:
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(Delivery.id, Delivery.status).where(
+                    Delivery.id.in_(uncollected_delivery_ids)
+                )
+            )
+            status_map: dict[int, DeliveryStatus] = {
+                row.id: row.status for row in result
+            }
+
+        def _keep(a: dict) -> bool:
+            if a.get("type") != "uncollected_shipment":
+                return True
+            did = (a.get("data") or {}).get("delivery_id")
+            if did is None:
+                return True
+            # משלוח שלא נמצא ב-DB — נשאיר את ההתראה לבטחון
+            return status_map.get(int(did), DeliveryStatus.OPEN) == DeliveryStatus.OPEN
+
+        raw_alerts = [a for a in raw_alerts if _keep(a)]
+
+    # חיתוך ל-limit המבוקש
+    alerts = raw_alerts[:limit]
     return AlertHistoryResponse(alerts=alerts, count=len(alerts))
 
 
