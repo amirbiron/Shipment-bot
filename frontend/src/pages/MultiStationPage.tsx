@@ -1,12 +1,13 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type ColumnDef } from "@tanstack/react-table";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   getMultiStationDashboard,
   type StationSummary,
 } from "@/api/stations";
 import { switchStation } from "@/api/auth";
 import { useAuthStore } from "@/store/auth";
+import { useToast } from "@/components/ui/use-toast";
 import DataTable from "@/components/shared/DataTable";
 import StatCard from "@/components/shared/StatCard";
 import { Badge } from "@/components/ui/badge";
@@ -29,6 +30,7 @@ import {
 export default function MultiStationPage() {
   const { stationId, login } = useAuthStore();
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const [switchingId, setSwitchingId] = useState<number | null>(null);
 
   const { data, isLoading } = useQuery({
@@ -46,13 +48,17 @@ export default function MultiStationPage() {
       // רענון כל הנתונים בפאנל לתחנה החדשה
       await queryClient.invalidateQueries();
     } catch {
-      // שגיאה תטופל ע"י ה-interceptor של apiClient (401/403)
+      toast({
+        title: "שגיאה",
+        description: "לא ניתן לעבור לתחנה המבוקשת, נסה שוב",
+        variant: "destructive",
+      });
     } finally {
       setSwitchingId(null);
     }
   };
 
-  const columns: ColumnDef<StationSummary, unknown>[] = [
+  const columns = useMemo<ColumnDef<StationSummary, unknown>[]>(() => [
     {
       accessorKey: "station_name",
       header: "תחנה",
@@ -130,7 +136,7 @@ export default function MultiStationPage() {
         );
       },
     },
-  ];
+  ], [stationId, switchingId]);
 
   if (isLoading) {
     return (
