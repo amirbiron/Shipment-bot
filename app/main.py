@@ -19,6 +19,10 @@ from app.core.middleware import setup_middleware, setup_exception_handlers
 from app.api.routes import router as api_router
 from app.db.database import engine, Base
 
+# אתחול Sentry לפני הכל — כדי שילכוד שגיאות גם בזמן הטעינה
+from app.core.sentry import init_sentry
+init_sentry()
+
 # Setup logging before anything else
 setup_logging(
     level="DEBUG" if settings.DEBUG else "INFO",
