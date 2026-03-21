@@ -21,6 +21,28 @@ def _parse_csv_setting(value: str) -> list[str]:
     return [v.strip() for v in value.split(",") if v.strip()]
 
 
+def _format_telegram_contact(
+    chat_id: str,
+    username: str | None = None,
+    *,
+    html: bool = False,
+) -> str:
+    """פורמט פרטי קשר לטלגרם — @username אם יש, אחרת לינק לצ'אט.
+
+    Args:
+        chat_id: מזהה הצ'אט/משתמש בטלגרם
+        username: שם משתמש בטלגרם (ללא @)
+        html: אם True — פורמט HTML לטלגרם, אחרת plain text לוואטסאפ
+    """
+    if username:
+        if html:
+            return f'@{username} (<a href="tg://user?id={chat_id}">פתח צ\'אט</a>)'
+        return f"@{username}"
+    if html:
+        return f'<a href="tg://user?id={chat_id}">פתח צ\'אט בטלגרם</a> (ID: {chat_id})'
+    return f"טלגרם ID: {chat_id}"
+
+
 class AdminNotificationService:
     """Service for sending notifications to admins"""
 
@@ -47,6 +69,7 @@ class AdminNotificationService:
         vehicle_category: Optional[str] = None,
         selfie_file_id: Optional[str] = None,
         vehicle_photo_file_id: Optional[str] = None,
+        telegram_username: Optional[str] = None,
     ) -> bool:
         """
         שליחת "כרטיס נהג" למנהלים בפרטי לאישור [שלב 2].
@@ -118,9 +141,11 @@ class AdminNotificationService:
             selfie_status = _status("selfie", "✗")
             vehicle_status = _status("vehicle", "✗")
 
-            # קישור יצירת קשר - לינק לפרופיל בטלגרם או מספר טלפון בוואטסאפ
+            # קישור יצירת קשר - @username בטלגרם או מספר טלפון בוואטסאפ
             if platform == "telegram":
-                wa_contact_line = f"טלגרם ID: {phone_or_chat_id}"
+                wa_contact_line = _format_telegram_contact(
+                    phone_or_chat_id, telegram_username, html=False
+                )
             else:
                 wa_contact_line = phone_or_chat_id
 
@@ -200,9 +225,11 @@ class AdminNotificationService:
             safe_service_area = TextSanitizer.sanitize_for_html(service_area)
             safe_vehicle_display = TextSanitizer.sanitize_for_html(vehicle_display)
 
-            # קישור יצירת קשר - לינק לפרופיל בטלגרם או מספר טלפון בוואטסאפ
+            # קישור יצירת קשר - @username בטלגרם או מספר טלפון בוואטסאפ
             if platform == "telegram":
-                contact_line = f'<a href="tg://user?id={phone_or_chat_id}">פתח צ\'אט בטלגרם</a> (ID: {phone_or_chat_id})'
+                contact_line = _format_telegram_contact(
+                    phone_or_chat_id, telegram_username, html=True
+                )
             else:
                 contact_line = TextSanitizer.sanitize_for_html(phone_or_chat_id)
 
@@ -284,6 +311,7 @@ class AdminNotificationService:
         phone_or_chat_id: str,
         selfie_file_id: Optional[str] = None,
         id_file_id: Optional[str] = None,
+        telegram_username: Optional[str] = None,
     ) -> bool:
         """
         שליחת כרטיס אימות נהג למנהלים בפרטי לאישור.
@@ -313,9 +341,8 @@ class AdminNotificationService:
             safe_dress = TextSanitizer.sanitize_for_html(dress_display)
 
             if platform == "telegram":
-                contact_line = (
-                    f'<a href="tg://user?id={phone_or_chat_id}">פתח צ\'אט בטלגרם</a>'
-                    f" (ID: {phone_or_chat_id})"
+                contact_line = _format_telegram_contact(
+                    phone_or_chat_id, telegram_username, html=True
                 )
             else:
                 contact_line = TextSanitizer.sanitize_for_html(phone_or_chat_id)
@@ -371,7 +398,9 @@ class AdminNotificationService:
 
         if wa_targets:
             if platform == "telegram":
-                wa_contact_line = f"טלגרם ID: {phone_or_chat_id}"
+                wa_contact_line = _format_telegram_contact(
+                    phone_or_chat_id, telegram_username, html=False
+                )
             else:
                 wa_contact_line = phone_or_chat_id
 
@@ -575,6 +604,7 @@ class AdminNotificationService:
         contact_identifier: str,
         screenshot_file_id: str,
         platform: str = "telegram",
+        telegram_username: Optional[str] = None,
     ) -> bool:
         """Notify admin about deposit request.
 
@@ -585,7 +615,9 @@ class AdminNotificationService:
 
         # תווית ליצירת קשר לפי פלטפורמה
         if platform == "telegram":
-            contact_line = f"Telegram ID: {contact_identifier}"
+            contact_line = _format_telegram_contact(
+                contact_identifier, telegram_username, html=True
+            )
         else:
             contact_line = f"WhatsApp: {contact_identifier}"
 

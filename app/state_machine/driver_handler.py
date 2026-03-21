@@ -682,6 +682,7 @@ class DriverStateHandler:
                 ),
                 selfie_file_id=profile.verification_selfie_file_id,
                 id_file_id=profile.verification_id_file_id,
+                telegram_username=user.telegram_username,
             )
         except Exception as e:
             # כשלון בהתראה לא עוצר את הזרימה — הנהג יקבל הודעת "בבדיקה"

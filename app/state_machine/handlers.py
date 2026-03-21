@@ -1491,15 +1491,19 @@ class CourierStateHandler:
         # העברת ההודעה להנהלה
         from app.domain.services.admin_notification_service import (
             AdminNotificationService,
+            _format_telegram_contact,
         )
-        from app.core.validation import PhoneNumberValidator
 
         user_name = user.full_name or user.name or "לא צוין"
-        phone_display = (
-            PhoneNumberValidator.mask(user.phone_number)
-            if user.phone_number
-            else f"Telegram ID: {user.telegram_id or user.id}"
-        )
+        if self.platform == "telegram":
+            # בטלגרם — @username או לינק לצ'אט, כדי שהאדמין יוכל לחזור למשתמש
+            phone_display = _format_telegram_contact(
+                str(user.telegram_chat_id or user.id),
+                user.telegram_username,
+            )
+        else:
+            # בוואטסאפ — מספר טלפון מלא כדי שהאדמין יוכל ליצור קשר
+            phone_display = user.phone_number or "לא צוין"
         # plain text — ה-escape לטלגרם מתבצע ב-forward_support_message
         forward_text = (
             f"📨 פנייה מ-{user_name}\n"

@@ -40,6 +40,8 @@ class User(Base):
     is_active = Column(Boolean, default=True)
     platform = Column(String(20), nullable=False)  # whatsapp or telegram
     telegram_chat_id = Column(String(50), unique=True, nullable=True, index=True)
+    # מיגרציה: ALTER TABLE users ADD COLUMN telegram_username VARCHAR(100);
+    telegram_username = Column(String(100), nullable=True)  # @username בטלגרם — לזיהוי בהודעות אדמין
 
     # Courier-specific fields
     approval_status = Column(
