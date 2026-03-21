@@ -1962,7 +1962,7 @@ async def telegram_webhook(
                 # fallback: context אבד — מזהים לפי TELEGRAM_ADMIN_CHAT_IDS
                 _is_admin_by_id = (
                     not _is_admin_ctx
-                    and _is_telegram_admin_id(str(user.id))
+                    and _is_telegram_admin_id(telegram_user_id)
                 )
                 if _is_admin_ctx or _is_admin_by_id:
                     if _is_admin_by_id:
@@ -2060,7 +2060,7 @@ async def telegram_webhook(
         _is_admin_by_id = (
             not _is_admin_ctx
             and user.role != UserRole.ADMIN
-            and _is_telegram_admin_id(str(user.id))
+            and _is_telegram_admin_id(telegram_user_id)
         )
         if _is_admin_ctx or _is_admin_by_id:
             if _is_admin_by_id:
@@ -2294,7 +2294,7 @@ async def telegram_webhook(
                     )
                 if (
                     (_dm_admin_keys and _dm_admin_keys.get("original_role") == "admin")
-                    or _is_telegram_admin_id(str(user.id))
+                    or _is_telegram_admin_id(telegram_user_id)
                 ):
                     _inject_admin_return_button(response)
                 _queue_response_send(background_tasks, send_chat_id, response)
@@ -2349,7 +2349,7 @@ async def telegram_webhook(
             _disp_ctx = await state_manager.get_context(user.id, "telegram")
             if (
                 _disp_ctx.get("original_role") == "admin"
-                or _is_telegram_admin_id(str(user.id))
+                or _is_telegram_admin_id(telegram_user_id)
             ):
                 _inject_admin_return_button(response)
             _queue_response_send(background_tasks, send_chat_id, response)
@@ -2388,7 +2388,7 @@ async def telegram_webhook(
         _courier_ctx = await state_manager.get_context(user.id, "telegram")
         if (
             _courier_ctx.get("original_role") == "admin"
-            or _is_telegram_admin_id(str(user.id))
+            or _is_telegram_admin_id(telegram_user_id)
         ):
             _inject_admin_return_button(response)
         _queue_response_send(background_tasks, send_chat_id, response)
@@ -2430,7 +2430,7 @@ async def telegram_webhook(
             _driver_ctx = await state_manager.get_context(user.id, "telegram")
             if (
                 _driver_ctx.get("original_role") == "admin"
-                or _is_telegram_admin_id(str(user.id))
+                or _is_telegram_admin_id(telegram_user_id)
             ):
                 _inject_admin_return_button(response)
         _queue_response_send(background_tasks, send_chat_id, response)
@@ -2484,7 +2484,7 @@ async def telegram_webhook(
             _sender_ctx = await state_manager.get_context(user.id, "telegram")
             if (
                 _sender_ctx.get("original_role") == "admin"
-                or _is_telegram_admin_id(str(user.id))
+                or _is_telegram_admin_id(telegram_user_id)
             ):
                 _inject_admin_return_button(response)
             _queue_response_send(background_tasks, send_chat_id, response)
@@ -2508,7 +2508,7 @@ async def telegram_webhook(
             _sender_ctx2 = await state_manager.get_context(user.id, "telegram")
             if (
                 _sender_ctx2.get("original_role") == "admin"
-                or _is_telegram_admin_id(str(user.id))
+                or _is_telegram_admin_id(telegram_user_id)
             ):
                 _inject_admin_return_button(response)
             _queue_response_send(background_tasks, send_chat_id, response)
