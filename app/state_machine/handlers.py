@@ -90,11 +90,15 @@ class SenderStateHandler:
                 extra_data={"user_id": user_id, "state": current_state},
             )
             handler = self._get_handler(SenderState.MENU.value)
-            response, new_state, context_update = await handler(message, context, user_id)
-            # ניקוי context של משלוח
+            response, new_state, context_update = await handler("תפריט", context, user_id)
+            # ניקוי context של משלוח + מיזוג context_update מה-handler
             clean_context = {
                 k: v for k, v in context.items() if k not in self._DELIVERY_CONTEXT_KEYS
             }
+            if context_update:
+                for k, v in context_update.items():
+                    if k not in self._DELIVERY_CONTEXT_KEYS:
+                        clean_context[k] = v
             await self.state_manager.force_state(
                 user_id, platform, new_state, clean_context
             )
@@ -994,7 +998,7 @@ class CourierStateHandler:
                 "שליח רשום ניגש ל-INITIAL — מנתב לתפריט",
                 extra_data={"user_id": user.id},
             )
-            return await self._handle_menu(user, message, context, photo_file_id)
+            return await self._handle_menu(user, "תפריט", context, photo_file_id)
 
         # שליח שסיים רישום וממתין לאישור (לא נדחה/נחסם) — מנתב להמתנה
         if user.terms_accepted_at is not None and user.approval_status == ApprovalStatus.PENDING:
@@ -1263,7 +1267,7 @@ class CourierStateHandler:
             return await self._handle_initial(user, message, context, photo_file_id)
 
         if user.approval_status == ApprovalStatus.APPROVED:
-            return await self._handle_menu(user, message, context, photo_file_id)
+            return await self._handle_menu(user, "תפריט", context, photo_file_id)
 
         response = MessageResponse(
             "⏳ בקשתך עדיין בבדיקה. תקבל הודעה ברגע שחשבונך יאושר.\n\n"
@@ -1444,7 +1448,7 @@ class CourierStateHandler:
             return response, CourierState.VIEW_HISTORY.value, {}
 
         # כל קלט אחר (כולל כפתורי תפריט) — חזרה לתפריט
-        return await self._handle_menu(user, message, context, None)
+        return await self._handle_menu(user, "תפריט", context, None)
 
     async def _handle_view_active(
         self, user: User, message: str, context: dict, photo_file_id: str
