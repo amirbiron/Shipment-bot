@@ -301,6 +301,9 @@ async def add_enum_values(engine: AsyncEngine) -> None:
             "DELIVERY_REJECTED",
             "WALLET_REFUND",
             "AUTO_BLACKLIST_ADDED",
+            "DELIVERY_STATUS_CHANGED",
+            "WALLET_DEBIT",
+            "WALLET_CREDIT",
         ]
         for action_name in new_audit_actions:
             await conn.execute(text(
