@@ -102,11 +102,11 @@ async def list_stations(
     summary="יצירת תחנה חדשה",
     description=(
         "יצירת תחנה חדשה והקצאת בעלים לפי מספר טלפון. "
-        "המשתמש הופך אוטומטית ל-STATION_OWNER. דורש מפתח אדמין."
+        "המשתמש הופך אוטומטית ל-STATION_OWNER. דורש מפתח אדמין. "
+        "ניתן ליצור מספר תחנות לאותו בעלים."
     ),
     responses={
         200: {"description": "התחנה נוצרה בהצלחה"},
-        400: {"description": "למשתמש כבר יש תחנה פעילה"},
         401: {"description": "מפתח API חסר"},
         403: {"description": "מפתח API שגוי"},
         422: {"description": "שגיאת ולידציה"},
@@ -129,23 +129,6 @@ async def create_station(
     user = await station_service.get_or_create_user_by_phone(
         station_data.owner_phone, context="בעת יצירת תחנה",
     )
-
-    # בדיקה שאין כבר תחנה פעילה לבעלים הזה
-    existing = await station_service.get_station_by_owner(user.id)
-    if existing:
-        # תיקון תפקיד המשתמש אם נדרש (למקרה שהתחנה נוצרה אבל הרול לא עודכן)
-        if user.role != UserRole.STATION_OWNER:
-            user.role = UserRole.STATION_OWNER
-            await db.commit()
-            logger.info(
-                "תוקן תפקיד המשתמש ל-STATION_OWNER עבור תחנה קיימת",
-                extra_data={
-                    "station_id": existing.id,
-                    "owner_id": user.id,
-                    "phone": PhoneNumberValidator.mask(station_data.owner_phone),
-                }
-            )
-        raise HTTPException(status_code=400, detail="למשתמש כבר יש תחנה פעילה")
 
     # יצירת התחנה + עדכון תפקיד באותה טרנזקציה
     station = await station_service.create_station(
