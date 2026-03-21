@@ -1169,16 +1169,21 @@ class AdminNotificationService:
         קבוצה ראשית בפלטפורמה שנייה → אדמינים בודדים.
 
         Args:
-            forward_text: הטקסט המפורמט להעברה
+            forward_text: הטקסט המפורמט להעברה (plain text — ללא HTML escape)
             user_id: מזהה המשתמש (ללוגים)
             prefer_telegram: אם True — מתחיל מטלגרם, אחרת מוואטסאפ
         """
+        import html as html_mod
+
+        # טלגרם דורש escape כי parse_mode=HTML; וואטסאפ מקבל plain text
+        tg_text = html_mod.escape(forward_text)
+
         # שלבי שליחה לכל פלטפורמה: (קבוצה ראשית, רשימת אדמינים בודדים)
         tg_steps = AdminNotificationService._build_platform_steps(
             primary_target=settings.TELEGRAM_ADMIN_CHAT_ID,
             csv_setting=settings.TELEGRAM_ADMIN_CHAT_IDS,
             send_fn=AdminNotificationService._send_telegram_message,
-            forward_text=forward_text,
+            forward_text=tg_text,
         )
         wa_steps = AdminNotificationService._build_platform_steps(
             primary_target=settings.WHATSAPP_ADMIN_GROUP_ID,
