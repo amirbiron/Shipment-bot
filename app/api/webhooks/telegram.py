@@ -623,6 +623,9 @@ async def _handle_sender_join_as_courier(
     photo_file_id: str | None,
 ) -> tuple[MessageResponse, str]:
     """ניתוב לתהליך רישום כשליח מתוך תפריט שולח."""
+    # שמירת admin context לפני force_state שמוחק context
+    admin_keys = await _save_admin_context(user.id, state_manager, "telegram")
+
     user.role = UserRole.COURIER
     await db.commit()
 
@@ -631,6 +634,14 @@ async def _handle_sender_join_as_courier(
     )
     handler = CourierStateHandler(db)
     response, new_state = await handler.handle_message(user, text, photo_file_id)
+
+    # שחזור admin context והוספת כפתור חזרה
+    if admin_keys and admin_keys.get("original_role") == "admin":
+        await _restore_admin_context(
+            user.id, state_manager, new_state, admin_keys, "telegram"
+        )
+        _inject_admin_return_button(response)
+
     return response, new_state
 
 
@@ -644,6 +655,9 @@ async def _handle_sender_join_as_driver(
     """ניתוב לתהליך רישום כנהג (iDriver) מתוך תפריט שולח."""
     from app.state_machine.driver_handler import DriverStateHandler
 
+    # שמירת admin context לפני force_state שמוחק context
+    admin_keys = await _save_admin_context(user.id, state_manager, "telegram")
+
     user.role = UserRole.DRIVER
     await db.commit()
 
@@ -652,6 +666,14 @@ async def _handle_sender_join_as_driver(
     )
     handler = DriverStateHandler(db, platform="telegram")
     response, new_state = await handler.handle_message(user, text, photo_file_id)
+
+    # שחזור admin context והוספת כפתור חזרה
+    if admin_keys and admin_keys.get("original_role") == "admin":
+        await _restore_admin_context(
+            user.id, state_manager, new_state, admin_keys, "telegram"
+        )
+        _inject_admin_return_button(response)
+
     return response, new_state
 
 
@@ -1917,12 +1939,19 @@ async def telegram_webhook(
         if user.role == UserRole.COURIER:
             await db.refresh(user)
             if user.approval_status != ApprovalStatus.APPROVED:
-                # שליח לא מאושר - מחזירים ל-INITIAL לא ל-MENU
-                await state_manager.force_state(
-                    user.id, "telegram", CourierState.INITIAL.value, context={}
-                )
-                handler = CourierStateHandler(db)
-                response, new_state = await handler.handle_message(user, "תפריט", None)
+                # בדיקה: אם אדמין מחליף תפקיד — מחזירים לתפריט אדמין
+                _start_ctx = await state_manager.get_context(user.id, "telegram")
+                if _start_ctx.get("original_role") == "admin":
+                    response, new_state = await _restore_admin_role_and_route(
+                        user, db, state_manager, "telegram"
+                    )
+                else:
+                    # שליח לא מאושר - מחזירים ל-INITIAL לא ל-MENU
+                    await state_manager.force_state(
+                        user.id, "telegram", CourierState.INITIAL.value, context={}
+                    )
+                    handler = CourierStateHandler(db)
+                    response, new_state = await handler.handle_message(user, "תפריט", None)
             else:
                 response, new_state = await _route_to_role_menu(user, db, state_manager)
         else:
@@ -1940,6 +1969,15 @@ async def telegram_webhook(
             user.role == UserRole.COURIER
             and user.approval_status != ApprovalStatus.APPROVED
         ):
+            # בדיקה: אם אדמין מחליף תפקיד — מחזירים לתפריט אדמין
+            _hash_ctx = await state_manager.get_context(user.id, "telegram")
+            if _hash_ctx.get("original_role") == "admin":
+                response, new_state = await _restore_admin_role_and_route(
+                    user, db, state_manager, "telegram"
+                )
+                _queue_response_send(background_tasks, send_chat_id, response)
+                return {"ok": True, "new_state": new_state, "admin_return": True}
+
             # שליח לא מאושר - מחזירים אותו להיות שולח רגיל
             user.role = UserRole.SENDER
             await db.commit()
