@@ -12,8 +12,8 @@
     ):
         ...
 """
-from fastapi import Depends, HTTPException, Request, status
-from fastapi.security import APIKeyHeader
+from fastapi import Depends, HTTPException, status
+from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.auth import verify_token
 from app.core.config import settings
@@ -22,46 +22,32 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 _api_key_header = APIKeyHeader(name="X-Admin-API-Key", auto_error=False)
-
-
-def _extract_bearer_token(request: Request) -> str | None:
-    """חילוץ Bearer token מ-Authorization header"""
-    auth_header = request.headers.get("Authorization")
-    if auth_header and auth_header.startswith("Bearer "):
-        return auth_header[7:]
-    return None
+_bearer_scheme = HTTPBearer(auto_error=False)
 
 
 async def require_admin(
-    request: Request,
     api_key: str | None = Depends(_api_key_header),
+    bearer: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
 ) -> None:
     """
     ולידציה של גישת אדמין — מפתח API או JWT טלגרם.
 
-    בודק קודם API Key, אם אין — בודק Bearer JWT עם role=admin.
+    בודק קודם API Key, אם לא תקין — בודק Bearer JWT עם role=admin.
     זורק 401 אם אין אמצעי אימות, 403 אם לא תקין.
+
+    שתי השיטות מוצהרות כ-security dependencies כדי ש-OpenAPI/Swagger
+    יציג את שתי האפשרויות וישלח את ה-headers הנכונים.
     """
     # ניסיון 1: מפתח API
     if api_key:
-        if not settings.ADMIN_API_KEY:
-            logger.warning("גישה ל-admin endpoint נדחתה — ADMIN_API_KEY לא מוגדר")
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="ADMIN_API_KEY לא מוגדר בסביבה",
-            )
-        if api_key == settings.ADMIN_API_KEY:
+        if settings.ADMIN_API_KEY and api_key == settings.ADMIN_API_KEY:
             return  # אימות הצליח
-        logger.warning("גישה ל-admin endpoint נדחתה — מפתח API שגוי")
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="מפתח API לא תקין",
-        )
+        # מפתח שגוי — לא חוסמים מיד, ממשיכים לבדוק JWT
+        logger.info("מפתח API לא תואם — בודק Bearer JWT")
 
     # ניסיון 2: JWT Bearer token עם role=admin
-    bearer_token = _extract_bearer_token(request)
-    if bearer_token:
-        token_data = verify_token(bearer_token)
+    if bearer:
+        token_data = verify_token(bearer.credentials)
         if token_data and token_data.role == "admin":
             return  # אימות הצליח
         logger.warning(
@@ -73,7 +59,21 @@ async def require_admin(
             detail="טוקן לא תקין או שאינו שייך לאדמין",
         )
 
-    # אין אמצעי אימות
+    # אם היה API key (אבל שגוי) ולא היה JWT — מחזיר 403
+    if api_key:
+        if not settings.ADMIN_API_KEY:
+            logger.warning("גישה ל-admin endpoint נדחתה — ADMIN_API_KEY לא מוגדר")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="ADMIN_API_KEY לא מוגדר בסביבה",
+            )
+        logger.warning("גישה ל-admin endpoint נדחתה — מפתח API שגוי")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="מפתח API לא תקין",
+        )
+
+    # אין אמצעי אימות כלל
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="נדרש אימות — מפתח API (X-Admin-API-Key) או JWT אדמין (Bearer token)",

@@ -212,3 +212,29 @@ class TestAdminDependencyWithJWT:
             headers={"Authorization": "Bearer invalid-token"},
         )
         assert response.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_wrong_api_key_with_valid_jwt_falls_back(
+        self, test_client: httpx.AsyncClient,
+    ) -> None:
+        """מפתח API שגוי + JWT תקין — JWT גובר (fallback)"""
+        token = create_access_token(user_id=1, station_id=0, role="admin")
+        response = await test_client.get(
+            "/api/admin/debug/circuit-breakers",
+            headers={
+                "X-Admin-API-Key": "wrong-key",
+                "Authorization": f"Bearer {token}",
+            },
+        )
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_wrong_api_key_without_jwt_returns_403(
+        self, test_client: httpx.AsyncClient,
+    ) -> None:
+        """מפתח API שגוי ללא JWT — 403"""
+        response = await test_client.get(
+            "/api/admin/debug/circuit-breakers",
+            headers={"X-Admin-API-Key": "wrong-key"},
+        )
+        assert response.status_code == 403
