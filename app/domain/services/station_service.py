@@ -2306,12 +2306,15 @@ class StationService:
         )
         return result.scalar_one_or_none()
 
-    async def cancel_dispatcher_ride(self, ride_id: int) -> None:
+    async def cancel_dispatcher_ride(self, ride_id: int) -> bool:
         """
-        ביטול נסיעה — עדכון סטטוס ל-CANCELLED.
+        ביטול נסיעה — עדכון סטטוס ל-CANCELLED עם בדיקת סטטוס אטומית.
 
         Args:
             ride_id: מזהה הנסיעה
+
+        Returns:
+            True אם הנסיעה בוטלה, False אם לא נמצאה או שהסטטוס כבר השתנה
         """
         from app.db.models.dispatcher_ride import (
             DispatcherRide,
@@ -2325,8 +2328,13 @@ class StationService:
         )
         ride = result.scalar_one_or_none()
         if ride is None:
-            return
+            return False
+
+        # בדיקת סטטוס אטומית — אחרי הנעילה, כדי למנוע TOCTOU
+        if ride.status != DispatcherRideStatus.OPEN.value:
+            return False
 
         ride.status = DispatcherRideStatus.CANCELLED.value
         ride.updated_at = datetime.utcnow()
         await self.db.commit()
+        return True

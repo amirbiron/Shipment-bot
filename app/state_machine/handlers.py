@@ -1471,7 +1471,9 @@ class CourierStateHandler:
             return await self._handle_menu(user, "תפריט", context, None)
 
         # כניסה ראשונה מהתפריט — הצגת הנחיות
-        if "תמיכה" in message or "עזרה" in message:
+        # משתמשים ב-context flag כדי להבדיל בין כניסה ראשונה לבין הודעת תמיכה
+        # (בדיקת substring כמו "תמיכה" in message תתפוס גם הודעות תמיכה אמיתיות)
+        if not context.get("support_prompt_shown"):
             response = MessageResponse(
                 "❓ <b>תמיכה</b>\n\n"
                 "📧 שלח הודעה למנהל - פשוט כתוב את ההודעה כאן והיא תועבר.\n\n"
@@ -1479,7 +1481,7 @@ class CourierStateHandler:
                 "שעות פעילות: א'-ה' 08:00-20:00",
                 keyboard=[["🔙 חזרה לתפריט"]],
             )
-            return response, CourierState.SUPPORT.value, {}
+            return response, CourierState.SUPPORT.value, {"support_prompt_shown": True}
 
         # העברת ההודעה להנהלה
         from app.domain.services.admin_notification_service import (
@@ -1539,7 +1541,7 @@ class CourierStateHandler:
         response = MessageResponse(
             confirm_text, keyboard=[["🔙 חזרה לתפריט"]]
         )
-        return response, CourierState.MENU.value, {}
+        return response, CourierState.MENU.value, {"support_prompt_shown": None}
 
     # ==================== מצבי משלוח (webhook קבוצתי) ====================
     # מצבים אלה מופעלים בעיקר דרך callback queries בקבוצת טלגרם.
