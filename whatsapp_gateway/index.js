@@ -382,12 +382,22 @@ async function initializeClient() {
         // טיפול בשינויי מצב — ניתוק, CONFLICT וכו'
         client.onStateChange((state) => {
             console.log('WhatsApp state changed:', state);
+
+            if (state === 'CONNECTED') {
+                console.log('WhatsApp state restored to CONNECTED');
+                isConnected = true;
+                return;
+            }
+
             const disconnectedStates = ['CONFLICT', 'UNPAIRED', 'UNLAUNCHED'];
             if (disconnectedStates.includes(state)) {
                 console.log(`Session disconnected (${state}), attempting to reconnect...`);
                 isConnected = false;
                 // useHere = true מחזיר את הסשן לדפדפן הנוכחי (פותר CONFLICT)
-                client.useHere().catch((err) => {
+                client.useHere().then(() => {
+                    console.log('useHere succeeded, restoring connection state');
+                    isConnected = true;
+                }).catch((err) => {
                     console.error('useHere failed:', err.message);
                 });
             }
