@@ -1187,6 +1187,126 @@ async def _sender_fallback(
     )
 
 
+async def _resolve_role_state(
+    user: User,
+    db: AsyncSession,
+    state_manager: StateManager,
+    *,
+    skip_dispatcher_check: bool = False,
+) -> tuple[str, int | None]:
+    """קביעת state יעד לפי תפקיד המשתמש — ביצוע force_state ותופעות לוואי.
+
+    חובה: כל תפקיד (UserRole) חייב להיות מטופל כאן במפורש.
+    אם מוסיפים תפקיד חדש — חובה להוסיף ענף כאן, אחרת ייפול ל-SENDER עם אזהרה בלוג.
+
+    Returns: (new_state, station_id) — station_id מוחזר כשרלוונטי (בעל תחנה / סדרן)
+    """
+    platform = "telegram"
+
+    if user.role == UserRole.COURIER:
+        target = CourierState.MENU.value
+        await state_manager.force_state(user.id, platform, target, context={})
+        return target, None
+
+    if user.role == UserRole.STATION_OWNER:
+        station = await _get_station_for_owner_or_downgrade(user, db)
+        if station is not None:
+            target = StationOwnerState.MENU.value
+            await state_manager.force_state(user.id, platform, target, context={})
+            return target, station.id
+        target = SenderState.MENU.value
+        await state_manager.force_state(user.id, platform, target, context={})
+        return target, None
+
+    if user.role == UserRole.DRIVER:
+        from app.domain.services.driver_session_service import DriverSessionService
+
+        # סשן 6: עדכון פעילות אחרונה — גם לנהג-סדרן
+        session_service = DriverSessionService(db)
+        await session_service.touch_session(user.id)
+
+        # סשן 9: בדיקה אם הנהג הוא גם סדרן פעיל בתחנה
+        if not skip_dispatcher_check:
+            dispatcher_station = await _get_dispatcher_station(user, db)
+            if dispatcher_station is not None:
+                target = DispatcherState.MENU.value
+                await state_manager.force_state(user.id, platform, target, context={})
+                return target, dispatcher_station.id
+
+        target = DriverState.INITIAL.value
+        await state_manager.force_state(user.id, platform, target, context={})
+        return target, None
+
+    if user.role == UserRole.ADMIN:
+        if settings.ADMIN_ROLE_SWITCH_ENABLED:
+            target = AdminState.MENU.value
+            await state_manager.force_state(user.id, platform, target, context={})
+            return target, None
+        target = SenderState.MENU.value
+        await state_manager.force_state(user.id, platform, target, context={})
+        return target, None
+
+    if user.role == UserRole.SENDER:
+        if not skip_dispatcher_check:
+            dispatcher_station = await _get_dispatcher_station(user, db)
+            if dispatcher_station is not None:
+                target = DispatcherState.MENU.value
+                await state_manager.force_state(user.id, platform, target, context={})
+                return target, dispatcher_station.id
+
+        target = SenderState.MENU.value
+        await state_manager.force_state(user.id, platform, target, context={})
+        return target, None
+
+    # תפקיד לא מוכר — אזהרה בלוג ו-fallback לשולח
+    logger.warning(
+        "Unknown user role in state reset, falling back to sender",
+        extra_data={"user_id": user.id, "role": str(user.role)},
+    )
+    target = SenderState.MENU.value
+    await state_manager.force_state(user.id, platform, target, context={})
+    return target, None
+
+
+async def _build_role_menu_response(
+    user: User,
+    db: AsyncSession,
+    target_state: str,
+    station_id: int | None,
+) -> tuple[MessageResponse, str]:
+    """בניית תגובת תפריט לפי state שנקבע ע״י _resolve_role_state."""
+    if target_state == CourierState.MENU.value:
+        handler = CourierStateHandler(db)
+        return await handler.handle_message(user, "תפריט", None)
+
+    if target_state == StationOwnerState.MENU.value:
+        handler = StationOwnerStateHandler(db, station_id)
+        return await handler.handle_message(user, "תפריט", None)
+
+    if target_state == DispatcherState.MENU.value:
+        handler = DispatcherStateHandler(db, station_id)
+        return await handler.handle_message(user, "תפריט", None)
+
+    if target_state == DriverState.INITIAL.value:
+        from app.state_machine.driver_handler import DriverStateHandler
+
+        # נהג רשום → ישירות לתפריט; לא רשום → _handle_initial ינתב לרישום
+        handler = DriverStateHandler(db, platform="telegram")
+        return await handler.handle_message(user, "תפריט", None)
+
+    if target_state == AdminState.MENU.value:
+        from app.state_machine.admin_handler import AdminStateHandler
+
+        handler = AdminStateHandler(db)
+        return await handler.handle_message(user, "תפריט", None)
+
+    # SenderState.MENU — fallback
+    handler = SenderStateHandler(db)
+    return await handler.handle_message(
+        user_id=user.id, platform="telegram", message="תפריט"
+    )
+
+
 async def _reset_role_state(
     user: User,
     db: AsyncSession,
@@ -1206,7 +1326,7 @@ async def _reset_role_state(
     admin_target = admin_keys.get("admin_target_role") if is_admin_impersonating else None
     skip_dispatcher = admin_target is not None and admin_target != "dispatcher"
 
-    new_state = await _reset_role_state_inner(
+    new_state, _ = await _resolve_role_state(
         user, db, state_manager, skip_dispatcher_check=skip_dispatcher
     )
 
@@ -1216,78 +1336,6 @@ async def _reset_role_state(
         )
 
     return new_state
-
-
-async def _reset_role_state_inner(
-    user: User,
-    db: AsyncSession,
-    state_manager: StateManager,
-    *,
-    skip_dispatcher_check: bool = False,
-) -> str:
-    """איפוס state פנימי לפי תפקיד — ללא handle_message."""
-    platform = "telegram"
-
-    if user.role == UserRole.COURIER:
-        target = CourierState.MENU.value
-        await state_manager.force_state(user.id, platform, target, context={})
-        return target
-
-    if user.role == UserRole.STATION_OWNER:
-        station = await _get_station_for_owner_or_downgrade(user, db)
-        if station is not None:
-            target = StationOwnerState.MENU.value
-            await state_manager.force_state(user.id, platform, target, context={})
-            return target
-        target = SenderState.MENU.value
-        await state_manager.force_state(user.id, platform, target, context={})
-        return target
-
-    if user.role == UserRole.DRIVER:
-        from app.domain.services.driver_session_service import DriverSessionService
-
-        session_service = DriverSessionService(db)
-        await session_service.touch_session(user.id)
-
-        if not skip_dispatcher_check:
-            dispatcher_station = await _get_dispatcher_station(user, db)
-            if dispatcher_station is not None:
-                target = DispatcherState.MENU.value
-                await state_manager.force_state(user.id, platform, target, context={})
-                return target
-
-        target = DriverState.INITIAL.value
-        await state_manager.force_state(user.id, platform, target, context={})
-        return target
-
-    if user.role == UserRole.ADMIN:
-        if settings.ADMIN_ROLE_SWITCH_ENABLED:
-            target = AdminState.MENU.value
-            await state_manager.force_state(user.id, platform, target, context={})
-            return target
-        target = SenderState.MENU.value
-        await state_manager.force_state(user.id, platform, target, context={})
-        return target
-
-    if user.role == UserRole.SENDER:
-        if not skip_dispatcher_check:
-            dispatcher_station = await _get_dispatcher_station(user, db)
-            if dispatcher_station is not None:
-                target = DispatcherState.MENU.value
-                await state_manager.force_state(user.id, platform, target, context={})
-                return target
-
-        target = SenderState.MENU.value
-        await state_manager.force_state(user.id, platform, target, context={})
-        return target
-
-    logger.warning(
-        "Unknown user role in state reset, falling back to sender",
-        extra_data={"user_id": user.id, "role": str(user.role)},
-    )
-    target = SenderState.MENU.value
-    await state_manager.force_state(user.id, platform, target, context={})
-    return target
 
 
 async def _route_to_role_menu(
@@ -1317,8 +1365,11 @@ async def _route_to_role_menu(
     admin_target = admin_keys.get("admin_target_role") if is_admin_impersonating else None
     skip_dispatcher = admin_target is not None and admin_target != "dispatcher"
 
-    response, new_state = await _route_to_role_menu_inner(
+    new_state, station_id = await _resolve_role_state(
         user, db, state_manager, skip_dispatcher_check=skip_dispatcher
+    )
+    response, new_state = await _build_role_menu_response(
+        user, db, new_state, station_id
     )
 
     # שחזור admin context והוספת כפתור חזרה
@@ -1329,89 +1380,6 @@ async def _route_to_role_menu(
         _inject_admin_return_button(response)
 
     return response, new_state
-
-
-async def _route_to_role_menu_inner(
-    user: User,
-    db: AsyncSession,
-    state_manager: StateManager,
-    *,
-    skip_dispatcher_check: bool = False,
-) -> tuple[MessageResponse, str]:
-    """ניתוב פנימי לתפריט לפי תפקיד — ללא טיפול ב-admin context"""
-    if user.role == UserRole.COURIER:
-        await state_manager.force_state(
-            user.id, "telegram", CourierState.MENU.value, context={}
-        )
-        handler = CourierStateHandler(db)
-        return await handler.handle_message(user, "תפריט", None)
-
-    if user.role == UserRole.STATION_OWNER:
-        station = await _get_station_for_owner_or_downgrade(user, db)
-        if station is not None:
-            await state_manager.force_state(
-                user.id, "telegram", StationOwnerState.MENU.value, context={}
-            )
-            handler = StationOwnerStateHandler(db, station.id)
-            return await handler.handle_message(user, "תפריט", None)
-        return await _sender_fallback(user, db, state_manager)
-
-    if user.role == UserRole.DRIVER:
-        from app.state_machine.driver_handler import DriverStateHandler
-        from app.domain.services.driver_session_service import DriverSessionService
-
-        # סשן 6: עדכון פעילות אחרונה — גם לנהג-סדרן
-        session_service = DriverSessionService(db)
-        await session_service.touch_session(user.id)
-
-        # סשן 9: בדיקה אם הנהג הוא גם סדרן פעיל בתחנה
-        if not skip_dispatcher_check:
-            dispatcher_station = await _get_dispatcher_station(user, db)
-            if dispatcher_station is not None:
-                await state_manager.force_state(
-                    user.id, "telegram", DispatcherState.MENU.value, context={}
-                )
-                handler = DispatcherStateHandler(db, dispatcher_station.id)
-                return await handler.handle_message(user, "תפריט", None)
-
-        # נהג רשום → ישירות לתפריט; לא רשום → _handle_initial ינתב לרישום
-        await state_manager.force_state(
-            user.id, "telegram", DriverState.INITIAL.value, context={}
-        )
-        handler = DriverStateHandler(db, platform="telegram")
-        return await handler.handle_message(user, "תפריט", None)
-
-    if user.role == UserRole.ADMIN:
-        if settings.ADMIN_ROLE_SWITCH_ENABLED:
-            from app.state_machine.admin_handler import AdminStateHandler
-
-            await state_manager.force_state(
-                user.id, "telegram", AdminState.MENU.value, context={}
-            )
-            handler = AdminStateHandler(db)
-            return await handler.handle_message(user, "תפריט", None)
-        # פיצ'ר כבוי — fallback לשולח
-        return await _sender_fallback(user, db, state_manager)
-
-    if user.role == UserRole.SENDER:
-        # בדיקה אם המשתמש הוא סדרן פעיל — סדרנים שאינם שליחים נכנסים ישירות לתפריט סדרן
-        if not skip_dispatcher_check:
-            dispatcher_station = await _get_dispatcher_station(user, db)
-            if dispatcher_station is not None:
-                await state_manager.force_state(
-                    user.id, "telegram", DispatcherState.MENU.value, context={}
-                )
-                handler = DispatcherStateHandler(db, dispatcher_station.id)
-                return await handler.handle_message(user, "תפריט", None)
-
-        return await _sender_fallback(user, db, state_manager)
-
-    # תפקיד לא מוכר - אזהרה בלוג ו-fallback לשולח
-    logger.warning(
-        "Unknown user role in menu routing, falling back to sender",
-        extra_data={"user_id": user.id, "role": str(user.role)},
-    )
-    return await _sender_fallback(user, db, state_manager)
 
 
 # עזרי admin context — ייבוא מקובץ משותף

@@ -996,16 +996,8 @@ class DispatcherStateHandler:
     async def _cancel_ride(
         self, user: User, ride_id: int, context: dict
     ) -> Tuple[MessageResponse, str, dict]:
-        """ביטול נסיעה פעילה — ולידציה + ביטול אטומי"""
-        ride = await self.station_service.get_ride_by_id(ride_id)
-        if ride is None or ride.station_id != self.station_id:
-            response = MessageResponse(
-                "❌ הנסיעה לא נמצאה.",
-                keyboard=[["🔙 חזרה לתפריט סדרן"]],
-            )
-            return response, DispatcherState.VIEW_POSTED_RIDES.value, {}
-
-        # cancel_dispatcher_ride בודק סטטוס + בעלות אטומית אחרי נעילת שורה
+        """ביטול נסיעה פעילה — ביטול אטומי בלבד (ללא pre-read שגורם ל-stale identity map)"""
+        # cancel_dispatcher_ride בודק קיום + סטטוס + בעלות אטומית אחרי נעילת שורה
         cancelled = await self.station_service.cancel_dispatcher_ride(
             ride_id, station_id=self.station_id
         )
