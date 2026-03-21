@@ -4,7 +4,7 @@ Delivery Service - Handles delivery creation and management
 from datetime import datetime, timedelta
 from typing import List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, or_, and_
 from sqlalchemy.orm import joinedload
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -293,18 +293,39 @@ class DeliveryService:
 
         מחזירה משלוחים בסטטוס OPEN או PENDING_APPROVAL שתפוגתם בטווח
         [now, now + warning_minutes] וטרם קיבלו התראת תפוגה.
+        כולל משלוחים ישנים ללא expires_at — fallback לפי created_at + TTL.
         """
         now = datetime.utcnow()
         warning_cutoff = now + timedelta(minutes=warning_minutes)
+        # fallback: משלוחים ישנים ללא expires_at —
+        # "תפוגה וירטואלית" = created_at + TTL
+        # שולחים התראה כש-TTL וירטואלי בטווח [now, now + warning_minutes]
+        fallback_warn_cutoff = now - timedelta(
+            hours=settings.AUTO_CANCEL_UNCAPTURED_HOURS
+        ) + timedelta(minutes=warning_minutes)
+        fallback_expired_cutoff = now - timedelta(
+            hours=settings.AUTO_CANCEL_UNCAPTURED_HOURS
+        )
         result = await self.db.execute(
             select(Delivery)
             .options(joinedload(Delivery.sender))
             .where(
                 Delivery.status.in_([DeliveryStatus.OPEN, DeliveryStatus.PENDING_APPROVAL]),
-                Delivery.expires_at.isnot(None),
-                Delivery.expires_at <= warning_cutoff,
-                Delivery.expires_at > now,
                 Delivery.expiry_warning_sent.is_(None),
+                or_(
+                    # משלוחים עם expires_at — בטווח [now, now + warning_minutes]
+                    and_(
+                        Delivery.expires_at.isnot(None),
+                        Delivery.expires_at <= warning_cutoff,
+                        Delivery.expires_at > now,
+                    ),
+                    # משלוחים ישנים ללא expires_at — TTL וירטואלי בטווח warning
+                    and_(
+                        Delivery.expires_at.is_(None),
+                        Delivery.created_at <= fallback_warn_cutoff,
+                        Delivery.created_at > fallback_expired_cutoff,
+                    ),
+                ),
             )
         )
         return list(result.unique().scalars().all())
@@ -313,15 +334,21 @@ class DeliveryService:
         """שליפת משלוחים שפג תוקפם וצריך לבטלם אוטומטית.
 
         מחזירה משלוחים בסטטוס OPEN או PENDING_APPROVAL שעבר זמן ה-expires_at שלהם.
+        כולל משלוחים ישנים ללא expires_at — fallback לפי created_at + TTL.
         הקורא משתמש רק ב-d.id ושולף מחדש עם נעילת שורה — אין צורך ב-joinedload.
         """
         now = datetime.utcnow()
+        fallback_cutoff = now - timedelta(
+            hours=settings.AUTO_CANCEL_UNCAPTURED_HOURS
+        )
         result = await self.db.execute(
             select(Delivery)
             .where(
                 Delivery.status.in_([DeliveryStatus.OPEN, DeliveryStatus.PENDING_APPROVAL]),
-                Delivery.expires_at.isnot(None),
-                Delivery.expires_at <= now,
+                or_(
+                    and_(Delivery.expires_at.isnot(None), Delivery.expires_at <= now),
+                    and_(Delivery.expires_at.is_(None), Delivery.created_at <= fallback_cutoff),
+                ),
             )
         )
         return list(result.scalars().all())
