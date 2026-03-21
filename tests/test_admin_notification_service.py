@@ -468,9 +468,9 @@ async def test_deposit_notification_telegram_label(monkeypatch):
         )
 
     assert result is True
-    # הודעה נשלחה עם תווית Telegram ID
+    # הודעה נשלחה עם לינק לצ'אט בטלגרם (ללא username)
     sent_msg = mock_send.call_args[0][1]
-    assert "Telegram ID: 123456789" in sent_msg
+    assert 'tg://user?id=123456789' in sent_msg
     assert "WhatsApp:" not in sent_msg
     # תמונה הועברה ב-_forward_photo (לא _forward_whatsapp_photo_to_telegram)
     mock_fwd.assert_called_once_with("admin_chat", "AgACAgIAAxk")
@@ -535,7 +535,7 @@ async def test_deposit_notification_default_platform_is_telegram(monkeypatch):
 
     assert result is True
     sent_msg = mock_send.call_args[0][1]
-    assert "Telegram ID: 999" in sent_msg
+    assert 'tg://user?id=999' in sent_msg
     mock_fwd.assert_called_once()
 
 
