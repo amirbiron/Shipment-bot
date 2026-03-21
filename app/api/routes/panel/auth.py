@@ -130,6 +130,7 @@ class TelegramLoginRequest(BaseModel):
 class TelegramBotInfoResponse(BaseModel):
     """מידע על הבוט — נדרש ל-Telegram Login Widget"""
     bot_username: str
+    bot_id: str
     enabled: bool
 
 
@@ -427,11 +428,16 @@ async def verify_otp_endpoint(
     tags=["Panel - אימות"],
 )
 async def telegram_bot_info() -> TelegramBotInfoResponse:
-    """מידע על הבוט — הפרונט צריך את שם הבוט כדי לטעון את Telegram Login Widget"""
+    """מידע על הבוט — הפרונט צריך את ה-bot_id המספרי כדי לפתוח Telegram Login Widget"""
     bot_username = settings.TELEGRAM_BOT_USERNAME
-    enabled = bool(bot_username and settings.TELEGRAM_BOT_TOKEN)
+    bot_token = settings.TELEGRAM_BOT_TOKEN
+    # bot_id הוא החלק המספרי לפני ה-':' בטוקן
+    bot_id = bot_token.split(":")[0] if bot_token and ":" in bot_token else ""
+    # bot_id (מהטוקן) מספיק להפעלת הווידג'ט — bot_username אופציונלי
+    enabled = bool(bot_id)
     return TelegramBotInfoResponse(
         bot_username=bot_username or "",
+        bot_id=bot_id,
         enabled=enabled,
     )
 

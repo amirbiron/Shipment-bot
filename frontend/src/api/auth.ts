@@ -30,6 +30,7 @@ export const getMe = (): Promise<MeResponse> =>
 
 export interface TelegramBotInfoResponse {
   bot_username: string;
+  bot_id: string;
   enabled: boolean;
 }
 

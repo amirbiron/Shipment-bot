@@ -18,6 +18,7 @@
   var _phone = "";
   var _pendingStations = null;
   var _telegramBotUsername = "";
+  var _telegramBotId = "";
   var _pendingTelegramData = null;
 
   /* ── helpers ── */
@@ -162,8 +163,9 @@
       var r = await fetch("/api/panel/auth/telegram-bot-info");
       if (!r.ok) return;
       var d = await r.json();
-      if (d.enabled && d.bot_username) {
+      if (d.enabled && d.bot_id) {
         _telegramBotUsername = d.bot_username;
+        _telegramBotId = d.bot_id;
         _$("qa-tg-section").style.display = "block";
         // טעינת סקריפט Telegram Widget
         var script = document.createElement("script");
@@ -319,7 +321,7 @@
     setMsg("qa-otp-msg", "\u05de\u05de\u05ea\u05d9\u05df \u05dc\u05d0\u05d9\u05de\u05d5\u05ea \u05d8\u05dc\u05d2\u05e8\u05dd\u2026", "qa-info");
 
     window.Telegram.Login.auth(
-      { bot_id: _telegramBotUsername, request_access: true },
+      { bot_id: _telegramBotId, request_access: true },
       async function (data) {
         if (!data) {
           _$("qa-tg-login").disabled = false;
