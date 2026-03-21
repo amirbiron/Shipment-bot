@@ -421,9 +421,12 @@ async function initializeClient() {
                 // isConnected ישוחזר דרך onStateChange → CONNECTED
                 console.log('Session conflict detected, reclaiming with useHere()...');
                 isConnected = false;
-                client.useHere().catch((err) => {
-                    console.error('useHere failed:', err.message);
-                });
+                // בדיקת null — client יכול להתאפס אם reset-session רץ במקביל
+                if (client) {
+                    client.useHere().catch((err) => {
+                        console.error('useHere failed:', err.message);
+                    });
+                }
             } else if (state === 'UNPAIRED' || state === 'UNLAUNCHED') {
                 // UNPAIRED = הטלפון ביטל את החיבור, צריך QR חדש.
                 // UNLAUNCHED = הסשן לא קיים. useHere() לא יעזור.
@@ -659,7 +662,7 @@ app.get('/health', async (req, res) => {
             const page = await Promise.race([
                 client.getHost(),
                 new Promise((_, reject) =>
-                    setTimeout(() => reject(new Error('getHost timeout')), 5000)
+                    setTimeout(() => reject(new Error('getHost timeout')), 3000)
                 )
             ]);
             browserAlive = !!page;
