@@ -272,13 +272,40 @@ function resolveWhatsappWebVersion() {
 
     // ברירת מחדל: בוחרים את הגרסה האחרונה שזמינה בתוך @wppconnect/wa-version
     // זה מונע את הלוג: "Version not available for X, using latest as fallback"
+    // סינון: מתעלמים מגרסאות alpha/beta ומגרסאות עם build number חריג
+    // (למשל 2.3000.1035680923-alpha) שוואטסאפ לא מזהה ושוברות סריקת QR.
     try {
-        const latestLocal = waVersion.getLatestVersion('*', true);
-        if (latestLocal) {
-            candidates.push(latestLocal);
+        const allVersions = waVersion.getAvailableVersions();
+        if (allVersions && allVersions.length > 0) {
+            const stableVersions = allVersions.filter((v) => {
+                // סינון alpha/beta/rc
+                if (/-(alpha|beta|rc)/i.test(v)) return false;
+                // סינון build numbers חריגים (מעל 6 ספרות בחלק האחרון)
+                const parts = v.split('.');
+                const lastPart = parts[parts.length - 1];
+                const numericPart = lastPart.replace(/[^0-9]/g, '');
+                if (numericPart.length > 6) return false;
+                return true;
+            });
+            // מיון יורד כדי לקחת את הגרסה האחרונה היציבה
+            stableVersions.sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+            if (stableVersions.length > 0) {
+                candidates.push(stableVersions[0]);
+                console.log(`Filtered ${allVersions.length} versions → ${stableVersions.length} stable. Best: ${stableVersions[0]}`);
+            } else {
+                console.log('WARNING: No stable versions found after filtering, will try latest');
+                const latestLocal = waVersion.getLatestVersion('*', true);
+                if (latestLocal) candidates.push(latestLocal);
+            }
         }
     } catch (e) {
-        // לא חוסמים את העלייה – ניפול ל-null (ללא forced version)
+        // fallback: ניסיון ישן עם getLatestVersion
+        try {
+            const latestLocal = waVersion.getLatestVersion('*', true);
+            if (latestLocal) candidates.push(latestLocal);
+        } catch (_) {
+            // לא חוסמים את העלייה – ניפול ל-null (ללא forced version)
+        }
     }
 
     for (const candidate of candidates) {
@@ -378,6 +405,33 @@ async function initializeClient() {
             isConnected = true;
         }
         console.log(`WhatsApp client initialized (connected: ${isConnected})`);
+
+        // טיפול בשינויי מצב — ניתוק, CONFLICT וכו'
+        client.onStateChange((state) => {
+            console.log('WhatsApp state changed:', state);
+
+            if (state === 'CONNECTED') {
+                console.log('WhatsApp state restored to CONNECTED');
+                isConnected = true;
+                return;
+            }
+
+            if (state === 'CONFLICT') {
+                // CONFLICT = סשן נתפס בדפדפן אחר. useHere() מחזיר אותו לכאן.
+                // isConnected ישוחזר דרך onStateChange → CONNECTED
+                console.log('Session conflict detected, reclaiming with useHere()...');
+                isConnected = false;
+                client.useHere().catch((err) => {
+                    console.error('useHere failed:', err.message);
+                });
+            } else if (state === 'UNPAIRED' || state === 'UNLAUNCHED') {
+                // UNPAIRED = הטלפון ביטל את החיבור, צריך QR חדש.
+                // UNLAUNCHED = הסשן לא קיים. useHere() לא יעזור.
+                // לא משנים isConnected כי WPPConnect שולח UNPAIRED גם בסשנים תקינים (באג ידוע).
+                // אם באמת מנותק, statusFind או QR callback יעדכנו.
+                console.log(`State changed to ${state} — ignoring (may be false positive). QR scan required if truly disconnected.`);
+            }
+        });
 
         // Listen for incoming messages
         client.onMessage(async (message) => {
@@ -596,10 +650,30 @@ async function initializeClient() {
 }
 
 // Health check endpoint
-app.get('/health', (req, res) => {
+app.get('/health', async (req, res) => {
+    let browserAlive = false;
+    if (client) {
+        try {
+            // בדיקה אם Chromium עדיין חי — עם timeout של 5 שניות
+            // כדי למנוע תקיעת health check אם הדפדפן תקוע
+            const page = await Promise.race([
+                client.getHost(),
+                new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error('getHost timeout')), 5000)
+                )
+            ]);
+            browserAlive = !!page;
+        } catch (e) {
+            browserAlive = false;
+        }
+    }
+
     res.json({
         status: 'ok',
-        connected: isConnected
+        connected: isConnected,
+        browserAlive,
+        hasQR: !!currentQR,
+        qrAge: currentQR ? Math.round((Date.now() - qrTimestamp) / 1000) + 's' : null
     });
 });
 
