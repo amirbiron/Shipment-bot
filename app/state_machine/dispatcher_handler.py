@@ -148,7 +148,8 @@ class DispatcherStateHandler:
         "💳 חיוב ידני": ("manual_charge", "חיוב ידני"),
         "🚗 פרסום נסיעה": ("post_ride", "פרסום נסיעה"),
         "🛣 נסיעות פעילות": ("view_rides", "צפייה בנסיעות פעילות"),
-        "🔙 חזרה לתפריט ראשי": ("back_to_main", "חזרה לתפריט ראשי"),
+        # הערה: "🔙 חזרה לתפריט ראשי" לא כלול כאן בכוונה —
+        # כפתור זה מטופל בשכבת ה-webhook (telegram.py) שמנתבת לתפריט התפקיד הנכון
     }
 
     def _detect_menu_action(self, message: str) -> tuple[str, str] | None:
