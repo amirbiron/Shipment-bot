@@ -654,8 +654,14 @@ app.get('/health', async (req, res) => {
     let browserAlive = false;
     if (client) {
         try {
-            // בדיקה אם Chromium עדיין חי
-            const page = await client.getHost();
+            // בדיקה אם Chromium עדיין חי — עם timeout של 5 שניות
+            // כדי למנוע תקיעת health check אם הדפדפן תקוע
+            const page = await Promise.race([
+                client.getHost(),
+                new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error('getHost timeout')), 5000)
+                )
+            ]);
             browserAlive = !!page;
         } catch (e) {
             browserAlive = false;
