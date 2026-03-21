@@ -23,6 +23,7 @@ from app.state_machine.handlers import CourierStateHandler, MessageResponse
 from app.state_machine.manager import StateManager
 from app.db.models.user import User, UserRole, ApprovalStatus
 from app.db.models.station import Station
+from app.db.models.station_owner import StationOwner
 from app.db.models.station_dispatcher import StationDispatcher
 from app.db.models.station_wallet import StationWallet
 from app.db.models.station_blacklist import StationBlacklist
@@ -963,38 +964,41 @@ class TestStationCreationAPI:
         assert user.role == UserRole.STATION_OWNER
 
     @pytest.mark.asyncio
-    async def test_existing_station_fixes_role(
+    async def test_multi_station_creation_allowed(
         self, test_client, db_session, user_factory
     ):
         """
-        אם לתחנה כבר קיימת אבל התפקיד לא עודכן (באג ישן),
-        הקריאה ל-API מתקנת את התפקיד ל-STATION_OWNER.
+        משתמש שכבר בעל תחנה יכול ליצור תחנה נוספת (תמיכה במולטי-תחנות).
         """
-        # יצירת משתמש עם תפקיד SENDER (סימולציה של באג ישן)
+        # יצירת משתמש עם תפקיד SENDER (סימולציה של משתמש קיים)
         user = await user_factory(
             phone_number="+972501230002",
-            name="Broken Owner",
+            name="Multi Owner",
             role=UserRole.SENDER,
             platform="whatsapp",
         )
 
-        # יצירת תחנה ישירות בDB בלי לעדכן תפקיד (סימולציה של באג)
-        station = Station(name="תחנה שבורה", owner_id=user.id)
+        # יצירת תחנה ראשונה ישירות ב-DB
+        station = Station(name="תחנה ראשונה", owner_id=user.id)
         db_session.add(station)
         await db_session.flush()
         wallet = StationWallet(station_id=station.id)
         db_session.add(wallet)
+        owner_record = StationOwner(station_id=station.id, user_id=user.id)
+        db_session.add(owner_record)
         await db_session.commit()
 
-        # ניסיון ליצור תחנה - צריך להיכשל עם 400 אבל לתקן את הרול
+        # יצירת תחנה שנייה דרך ה-API — צריכה להצליח
         with patch.object(settings, "ADMIN_API_KEY", "test-key"):
             response = await test_client.post(
                 "/api/stations/",
-                json={"name": "תחנה כפולה", "owner_phone": "0501230002"},
+                json={"name": "תחנה שנייה", "owner_phone": "0501230002"},
                 headers={"X-Admin-API-Key": "test-key"},
             )
-        assert response.status_code == 400
+        assert response.status_code == 200
+        data = response.json()
+        assert data["name"] == "תחנה שנייה"
 
-        # וידוא שהתפקיד תוקן למרות השגיאה
+        # וידוא שהתפקיד עודכן ל-STATION_OWNER
         await db_session.refresh(user)
         assert user.role == UserRole.STATION_OWNER
