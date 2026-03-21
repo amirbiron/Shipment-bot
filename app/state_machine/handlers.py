@@ -1507,7 +1507,7 @@ class CourierStateHandler:
         )
 
         sent = await AdminNotificationService.forward_support_message(
-            forward_text, user.id, prefer_telegram=True
+            forward_text, user.id, prefer_telegram=(self.platform == "telegram")
         )
 
         if sent:
