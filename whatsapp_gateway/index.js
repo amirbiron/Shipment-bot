@@ -620,10 +620,24 @@ async function initializeClient() {
 }
 
 // Health check endpoint
-app.get('/health', (req, res) => {
+app.get('/health', async (req, res) => {
+    let browserAlive = false;
+    if (client) {
+        try {
+            // בדיקה אם Chromium עדיין חי
+            const page = await client.getHost();
+            browserAlive = !!page;
+        } catch (e) {
+            browserAlive = false;
+        }
+    }
+
     res.json({
         status: 'ok',
-        connected: isConnected
+        connected: isConnected,
+        browserAlive,
+        hasQR: !!currentQR,
+        qrAge: currentQR ? Math.round((Date.now() - qrTimestamp) / 1000) + 's' : null
     });
 });
 
