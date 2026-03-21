@@ -1,6 +1,9 @@
 """
-בדיקות אימות לפאנל ווב — OTP + JWT
+בדיקות אימות לפאנל ווב — OTP + JWT + Telegram Login
 """
+import hashlib
+import hmac
+import time
 from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
@@ -11,8 +14,10 @@ from app.core.auth import (
     store_otp,
     try_set_otp_cooldown_by_phone,
     verify_otp,
+    verify_telegram_login_data,
     verify_token,
 )
+from app.core.config import settings
 from app.db.models.user import UserRole
 from app.db.models.outbox_message import OutboxMessage, MessagePlatform, MessageStatus
 from app.db.models.station import Station
@@ -662,3 +667,232 @@ class TestOTPDelivery:
             data = response.json()
             assert data["success"] is False
             assert "שגיאה" in data["message"]
+
+
+# ==================== Telegram Login ====================
+
+
+_TEST_BOT_TOKEN = "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+
+
+def _make_telegram_auth_data(
+    telegram_id: int = 123456789,
+    first_name: str = "Test",
+    auth_date: int | None = None,
+    bot_token: str = _TEST_BOT_TOKEN,
+) -> dict:
+    """יצירת נתוני אימות טלגרם תקפים עם hash נכון"""
+    if auth_date is None:
+        auth_date = int(time.time())
+    data = {
+        "id": telegram_id,
+        "first_name": first_name,
+        "auth_date": auth_date,
+    }
+    # חישוב hash לפי פרוטוקול טלגרם
+    check_pairs = sorted(f"{k}={v}" for k, v in data.items())
+    data_check_string = "\n".join(check_pairs)
+    secret_key = hashlib.sha256(bot_token.encode()).digest()
+    computed_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
+    data["hash"] = computed_hash
+    return data
+
+
+def _patch_bot_token():
+    """mock ל-TELEGRAM_BOT_TOKEN — מחזיר patch חדש כל פעם (מונע דליפת state)"""
+    return patch.object(settings, "TELEGRAM_BOT_TOKEN", _TEST_BOT_TOKEN)
+
+
+class TestTelegramLoginVerification:
+    """בדיקות אימות נתוני Telegram Login Widget"""
+
+    @pytest.mark.unit
+    def test_valid_telegram_auth_data(self):
+        """נתוני אימות תקינים עוברים ולידציה"""
+        with _patch_bot_token():
+            data = _make_telegram_auth_data()
+            assert verify_telegram_login_data(data) is True
+
+    @pytest.mark.unit
+    def test_invalid_hash_rejected(self):
+        """hash שגוי נדחה"""
+        with _patch_bot_token():
+            data = _make_telegram_auth_data()
+            data["hash"] = "invalid_hash"
+            assert verify_telegram_login_data(data) is False
+
+    @pytest.mark.unit
+    def test_missing_hash_rejected(self):
+        """נתונים ללא hash נדחים"""
+        with _patch_bot_token():
+            data = _make_telegram_auth_data()
+            del data["hash"]
+            assert verify_telegram_login_data(data) is False
+
+    @pytest.mark.unit
+    def test_expired_auth_data_rejected(self):
+        """נתונים עם auth_date ישן (מעל 5 דקות) נדחים"""
+        with _patch_bot_token():
+            old_time = int(time.time()) - 600  # לפני 10 דקות
+            data = _make_telegram_auth_data(auth_date=old_time)
+            assert verify_telegram_login_data(data) is False
+
+    @pytest.mark.unit
+    def test_tampered_data_rejected(self):
+        """שינוי נתונים אחרי חתימה נדחה"""
+        with _patch_bot_token():
+            data = _make_telegram_auth_data(first_name="Original")
+            data["first_name"] = "Tampered"
+            assert verify_telegram_login_data(data) is False
+
+    @pytest.mark.unit
+    def test_missing_auth_date_rejected(self):
+        """נתונים ללא auth_date נדחים"""
+        with _patch_bot_token():
+            data = _make_telegram_auth_data()
+            del data["auth_date"]
+            assert verify_telegram_login_data(data) is False
+
+
+class TestTelegramLoginEndpoints:
+    """בדיקות API endpoints של כניסה דרך טלגרם"""
+
+    @pytest.mark.asyncio
+    async def test_telegram_bot_info_enabled(self, test_client):
+        """מידע על הבוט כשטלגרם מופעל"""
+        with (
+            patch.object(settings, "TELEGRAM_BOT_USERNAME", "test_bot"),
+            _patch_bot_token(),
+        ):
+            response = await test_client.get("/api/panel/auth/telegram-bot-info")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["bot_username"] == "test_bot"
+        assert data["enabled"] is True
+
+    @pytest.mark.asyncio
+    async def test_telegram_bot_info_disabled(self, test_client):
+        """מידע על הבוט כשטלגרם מושבת"""
+        with patch.object(settings, "TELEGRAM_BOT_USERNAME", ""):
+            response = await test_client.get("/api/panel/auth/telegram-bot-info")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["enabled"] is False
+
+    @pytest.mark.asyncio
+    async def test_telegram_login_success(
+        self, test_client, user_factory, db_session,
+    ):
+        """כניסה מוצלחת דרך טלגרם — מחזיר JWT"""
+        user = await user_factory(
+            phone_number="+972501234567",
+            name="בעל תחנה טלגרם",
+            role=UserRole.STATION_OWNER,
+            platform="telegram",
+            telegram_chat_id="123456789",
+        )
+        station = Station(name="תחנת טלגרם", owner_id=user.id)
+        db_session.add(station)
+        await db_session.flush()
+        wallet = StationWallet(station_id=station.id)
+        db_session.add(wallet)
+        await db_session.commit()
+
+        with _patch_bot_token():
+            auth_data = _make_telegram_auth_data(telegram_id=123456789)
+            response = await test_client.post("/api/panel/auth/telegram-login", json=auth_data)
+        assert response.status_code == 200
+        data = response.json()
+        assert "access_token" in data
+        assert data["station_name"] == "תחנת טלגרם"
+
+    @pytest.mark.asyncio
+    async def test_telegram_login_unknown_user(self, test_client):
+        """כניסה דרך טלגרם עם משתמש לא קיים — 401"""
+        with _patch_bot_token():
+            auth_data = _make_telegram_auth_data(telegram_id=999999999)
+            response = await test_client.post("/api/panel/auth/telegram-login", json=auth_data)
+        assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_telegram_login_invalid_hash(
+        self, test_client, user_factory, db_session,
+    ):
+        """כניסה דרך טלגרם עם hash שגוי — 401"""
+        await user_factory(
+            phone_number="+972501234567",
+            role=UserRole.STATION_OWNER,
+            telegram_chat_id="123456789",
+        )
+
+        with _patch_bot_token():
+            auth_data = _make_telegram_auth_data(telegram_id=123456789)
+            auth_data["hash"] = "invalid"
+            response = await test_client.post("/api/panel/auth/telegram-login", json=auth_data)
+        assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_telegram_login_non_owner_rejected(
+        self, test_client, user_factory,
+    ):
+        """כניסה דרך טלגרם למשתמש שאינו בעל תחנה — 401"""
+        await user_factory(
+            phone_number="+972501234567",
+            role=UserRole.SENDER,
+            telegram_chat_id="123456789",
+        )
+
+        with _patch_bot_token():
+            auth_data = _make_telegram_auth_data(telegram_id=123456789)
+            response = await test_client.post("/api/panel/auth/telegram-login", json=auth_data)
+        assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_telegram_login_inactive_user_rejected(
+        self, test_client, user_factory, db_session,
+    ):
+        """כניסה דרך טלגרם למשתמש לא פעיל — 401"""
+        user = await user_factory(
+            phone_number="+972501234567",
+            role=UserRole.STATION_OWNER,
+            telegram_chat_id="123456789",
+            is_active=False,
+        )
+        station = Station(name="תחנה", owner_id=user.id)
+        db_session.add(station)
+        await db_session.flush()
+        wallet = StationWallet(station_id=station.id)
+        db_session.add(wallet)
+        await db_session.commit()
+
+        with _patch_bot_token():
+            auth_data = _make_telegram_auth_data(telegram_id=123456789)
+            response = await test_client.post("/api/panel/auth/telegram-login", json=auth_data)
+        assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_telegram_login_multiple_stations_returns_picker(
+        self, test_client, user_factory, db_session,
+    ):
+        """כניסה דרך טלגרם עם כמה תחנות — מחזיר station picker"""
+        user = await user_factory(
+            phone_number="+972501234567",
+            name="בעל כמה תחנות",
+            role=UserRole.STATION_OWNER,
+            telegram_chat_id="123456789",
+        )
+        for name in ["תחנה א", "תחנה ב"]:
+            station = Station(name=name, owner_id=user.id)
+            db_session.add(station)
+            await db_session.flush()
+            wallet = StationWallet(station_id=station.id)
+            db_session.add(wallet)
+        await db_session.commit()
+
+        with _patch_bot_token():
+            auth_data = _make_telegram_auth_data(telegram_id=123456789)
+            response = await test_client.post("/api/panel/auth/telegram-login", json=auth_data)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["choose_station"] is True
+        assert len(data["stations"]) == 2
