@@ -389,15 +389,20 @@ async function initializeClient() {
                 return;
             }
 
-            const disconnectedStates = ['CONFLICT', 'UNPAIRED', 'UNLAUNCHED'];
-            if (disconnectedStates.includes(state)) {
-                console.log(`Session disconnected (${state}), attempting to reconnect...`);
-                isConnected = false;
-                // useHere = true מחזיר את הסשן לדפדפן הנוכחי (פותר CONFLICT)
+            if (state === 'CONFLICT') {
+                // CONFLICT = סשן נתפס בדפדפן אחר. useHere() מחזיר אותו לכאן.
                 // isConnected ישוחזר דרך onStateChange → CONNECTED
+                console.log('Session conflict detected, reclaiming with useHere()...');
+                isConnected = false;
                 client.useHere().catch((err) => {
                     console.error('useHere failed:', err.message);
                 });
+            } else if (state === 'UNPAIRED' || state === 'UNLAUNCHED') {
+                // UNPAIRED = הטלפון ביטל את החיבור, צריך QR חדש.
+                // UNLAUNCHED = הסשן לא קיים. useHere() לא יעזור.
+                // לא משנים isConnected כי WPPConnect שולח UNPAIRED גם בסשנים תקינים (באג ידוע).
+                // אם באמת מנותק, statusFind או QR callback יעדכנו.
+                console.log(`State changed to ${state} — ignoring (may be false positive). QR scan required if truly disconnected.`);
             }
         });
 
