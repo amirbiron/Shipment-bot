@@ -39,7 +39,7 @@ export default function LoginPage() {
   const [phone, setPhone] = useState("");
   const [otp, setOtp] = useState("");
   const [loading, setLoading] = useState(false);
-  const [telegramBotUsername, setTelegramBotUsername] = useState("");
+  const [telegramBotId, setTelegramBotId] = useState("");
   const [telegramEnabled, setTelegramEnabled] = useState(false);
   const [telegramLoading, setTelegramLoading] = useState(false);
   const telegramScriptLoaded = useRef(false);
@@ -56,8 +56,8 @@ export default function LoginPage() {
   useEffect(() => {
     getTelegramBotInfo()
       .then((info) => {
-        if (info.enabled && info.bot_username) {
-          setTelegramBotUsername(info.bot_username);
+        if (info.enabled && info.bot_id) {
+          setTelegramBotId(info.bot_id);
           setTelegramEnabled(true);
           // טעינת סקריפט Telegram Login Widget
           if (!telegramScriptLoaded.current) {
@@ -134,7 +134,7 @@ export default function LoginPage() {
 
     setTelegramLoading(true);
     window.Telegram.Login.auth(
-      { bot_id: telegramBotUsername, request_access: true },
+      { bot_id: telegramBotId, request_access: true },
       async (data: TelegramAuthData | false) => {
         if (!data) {
           setTelegramLoading(false);
