@@ -954,6 +954,7 @@ async def get_or_create_user(
     if user.telegram_username != username:
         user.telegram_username = username
         await db.commit()
+        await db.refresh(user)
 
     return user, False  # Existing user
 
