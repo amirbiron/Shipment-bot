@@ -272,13 +272,40 @@ function resolveWhatsappWebVersion() {
 
     // ברירת מחדל: בוחרים את הגרסה האחרונה שזמינה בתוך @wppconnect/wa-version
     // זה מונע את הלוג: "Version not available for X, using latest as fallback"
+    // סינון: מתעלמים מגרסאות alpha/beta ומגרסאות עם build number חריג
+    // (למשל 2.3000.1035680923-alpha) שוואטסאפ לא מזהה ושוברות סריקת QR.
     try {
-        const latestLocal = waVersion.getLatestVersion('*', true);
-        if (latestLocal) {
-            candidates.push(latestLocal);
+        const allVersions = waVersion.getAvailableVersions();
+        if (allVersions && allVersions.length > 0) {
+            const stableVersions = allVersions.filter((v) => {
+                // סינון alpha/beta/rc
+                if (/-(alpha|beta|rc)/i.test(v)) return false;
+                // סינון build numbers חריגים (מעל 6 ספרות בחלק האחרון)
+                const parts = v.split('.');
+                const lastPart = parts[parts.length - 1];
+                const numericPart = lastPart.replace(/[^0-9]/g, '');
+                if (numericPart.length > 6) return false;
+                return true;
+            });
+            // מיון יורד כדי לקחת את הגרסה האחרונה היציבה
+            stableVersions.sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+            if (stableVersions.length > 0) {
+                candidates.push(stableVersions[0]);
+                console.log(`Filtered ${allVersions.length} versions → ${stableVersions.length} stable. Best: ${stableVersions[0]}`);
+            } else {
+                console.log('WARNING: No stable versions found after filtering, will try latest');
+                const latestLocal = waVersion.getLatestVersion('*', true);
+                if (latestLocal) candidates.push(latestLocal);
+            }
         }
     } catch (e) {
-        // לא חוסמים את העלייה – ניפול ל-null (ללא forced version)
+        // fallback: ניסיון ישן עם getLatestVersion
+        try {
+            const latestLocal = waVersion.getLatestVersion('*', true);
+            if (latestLocal) candidates.push(latestLocal);
+        } catch (_) {
+            // לא חוסמים את העלייה – ניפול ל-null (ללא forced version)
+        }
     }
 
     for (const candidate of candidates) {
