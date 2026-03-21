@@ -22,7 +22,9 @@ from app.core.auth import (
     try_set_otp_cooldown_by_phone,
     verify_otp,
     verify_refresh_token,
+    verify_telegram_login_data,
 )
+from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.validation import PhoneNumberValidator
 from app.db.database import get_db
@@ -105,6 +107,30 @@ class RefreshRequest(BaseModel):
         if not v or len(v) < 10:
             raise ValueError("refresh token לא תקין")
         return v
+
+
+class TelegramLoginRequest(BaseModel):
+    """נתוני אימות מ-Telegram Login Widget"""
+    id: int
+    first_name: str
+    last_name: Optional[str] = None
+    username: Optional[str] = None
+    photo_url: Optional[str] = None
+    auth_date: int
+    hash: str
+
+    @field_validator("auth_date")
+    @classmethod
+    def validate_auth_date(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("auth_date חייב להיות חיובי")
+        return v
+
+
+class TelegramBotInfoResponse(BaseModel):
+    """מידע על הבוט — נדרש ל-Telegram Login Widget"""
+    bot_username: str
+    enabled: bool
 
 
 class SwitchStationRequest(BaseModel):
@@ -380,6 +406,196 @@ async def verify_otp_endpoint(
     logger.info(
         "Panel login successful",
         extra_data={"user_id": user.id, "station_id": station.id},
+    )
+
+    return TokenResponse(
+        access_token=token,
+        refresh_token=refresh,
+        station_id=station.id,
+        station_name=station.name,
+    )
+
+
+@router.get(
+    "/telegram-bot-info",
+    response_model=TelegramBotInfoResponse,
+    summary="מידע על הבוט לטלגרם",
+    description="מחזיר את שם הבוט הנדרש ל-Telegram Login Widget.",
+    responses={
+        200: {"description": "מידע על הבוט"},
+    },
+    tags=["Panel - אימות"],
+)
+async def telegram_bot_info() -> TelegramBotInfoResponse:
+    """מידע על הבוט — הפרונט צריך את שם הבוט כדי לטעון את Telegram Login Widget"""
+    bot_username = settings.TELEGRAM_BOT_USERNAME
+    enabled = bool(bot_username and settings.TELEGRAM_BOT_TOKEN)
+    return TelegramBotInfoResponse(
+        bot_username=bot_username or "",
+        enabled=enabled,
+    )
+
+
+@router.post(
+    "/telegram-login",
+    response_model=Union[TokenResponse, StationPickerResponse],
+    summary="כניסה דרך Telegram Login Widget",
+    description=(
+        "אימות באמצעות Telegram Login Widget. "
+        "הנתונים מאומתים מול הטוקן של הבוט (HMAC-SHA256). "
+        "אם למשתמש יש כמה תחנות, מחזיר רשימה לבחירה."
+    ),
+    responses={
+        200: {"description": "התחברות הצליחה או בחירת תחנה"},
+        401: {"description": "אימות טלגרם נכשל או המשתמש לא מורשה"},
+    },
+    tags=["Panel - אימות"],
+)
+async def telegram_login(
+    data: TelegramLoginRequest,
+    db: AsyncSession = Depends(get_db),
+) -> Union[TokenResponse, StationPickerResponse]:
+    """כניסה דרך Telegram Login Widget — אימות HMAC-SHA256 + הנפקת JWT"""
+    # אימות נתוני טלגרם (hash + תוקף)
+    # exclude_none — שדות None לא נשלחים מטלגרם ולא נכללים בחישוב ה-hash
+    auth_data = data.model_dump(exclude_none=True)
+    if not verify_telegram_login_data(auth_data):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="אימות טלגרם נכשל — נתונים לא תקינים או פגי תוקף",
+        )
+
+    # חיפוש משתמש לפי telegram_chat_id
+    telegram_id = str(data.id)
+    result = await db.execute(
+        select(User).where(User.telegram_chat_id == telegram_id)
+    )
+    user = result.scalar_one_or_none()
+
+    # תשובה אחידה לכל כשלון — מונע user-enumeration
+    if not user or not user.is_active or user.role != UserRole.STATION_OWNER:
+        logger.info("Telegram Login — משתמש לא מורשה", extra_data={
+            "telegram_id": telegram_id,
+            "user_found": user is not None,
+            "is_active": user.is_active if user else None,
+            "role": str(user.role) if user else None,
+        })
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="המשתמש לא רשום כבעל תחנה או שהחשבון אינו פעיל",
+        )
+
+    # קבלת תחנות
+    station_service = StationService(db)
+    stations = await station_service.get_stations_by_owner(user.id)
+    if not stations:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="המשתמש לא רשום כבעל תחנה או שהחשבון אינו פעיל",
+        )
+
+    # אם יש כמה תחנות — מחזיר בורר (בלי צריכת OTP כי אין כאן OTP)
+    if len(stations) > 1:
+        return StationPickerResponse(
+            stations=[
+                StationOption(station_id=s.id, station_name=s.name)
+                for s in stations
+            ],
+        )
+
+    station = stations[0]
+
+    # הנפקת JWT + refresh token
+    token = create_access_token(
+        user_id=user.id,
+        station_id=station.id,
+        role=user.role.value,
+    )
+    refresh = await create_refresh_token(
+        user_id=user.id,
+        station_id=station.id,
+        role=user.role.value,
+    )
+
+    logger.info(
+        "Telegram Login — כניסה הצליחה",
+        extra_data={"user_id": user.id, "station_id": station.id, "telegram_id": telegram_id},
+    )
+
+    return TokenResponse(
+        access_token=token,
+        refresh_token=refresh,
+        station_id=station.id,
+        station_name=station.name,
+    )
+
+
+@router.post(
+    "/telegram-login-select-station",
+    response_model=TokenResponse,
+    summary="בחירת תחנה אחרי כניסה דרך טלגרם",
+    description=(
+        "כשלמשתמש יש כמה תחנות ונכנס דרך טלגרם — שולח את נתוני הטלגרם שוב עם בחירת תחנה."
+    ),
+    responses={
+        200: {"description": "התחברות הצליחה"},
+        401: {"description": "אימות טלגרם נכשל"},
+        403: {"description": "אין הרשאה לתחנה שנבחרה"},
+    },
+    tags=["Panel - אימות"],
+)
+async def telegram_login_select_station(
+    data: TelegramLoginRequest,
+    station_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> TokenResponse:
+    """בחירת תחנה אחרי Telegram Login — מאמת שוב את הנתונים ומנפיק JWT"""
+    # אימות מחדש של נתוני טלגרם
+    auth_data = data.model_dump(exclude_none=True)
+    if not verify_telegram_login_data(auth_data):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="אימות טלגרם נכשל — נתונים לא תקינים או פגי תוקף",
+        )
+
+    # חיפוש משתמש
+    telegram_id = str(data.id)
+    result = await db.execute(
+        select(User).where(User.telegram_chat_id == telegram_id)
+    )
+    user = result.scalar_one_or_none()
+
+    if not user or not user.is_active or user.role != UserRole.STATION_OWNER:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="המשתמש לא רשום כבעל תחנה או שהחשבון אינו פעיל",
+        )
+
+    # ולידציה שהמשתמש בעלים של התחנה שנבחרה
+    station_service = StationService(db)
+    stations = await station_service.get_stations_by_owner(user.id)
+    station = next((s for s in stations if s.id == station_id), None)
+    if not station:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="אין הרשאה לתחנה שנבחרה",
+        )
+
+    # הנפקת JWT + refresh token
+    token = create_access_token(
+        user_id=user.id,
+        station_id=station.id,
+        role=user.role.value,
+    )
+    refresh = await create_refresh_token(
+        user_id=user.id,
+        station_id=station.id,
+        role=user.role.value,
+    )
+
+    logger.info(
+        "Telegram Login — בחירת תחנה הצליחה",
+        extra_data={"user_id": user.id, "station_id": station.id, "telegram_id": telegram_id},
     )
 
     return TokenResponse(

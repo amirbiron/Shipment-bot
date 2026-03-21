@@ -100,6 +100,7 @@ class Settings(BaseSettings):
 
     # Telegram
     TELEGRAM_BOT_TOKEN: Optional[str] = None
+    TELEGRAM_BOT_USERNAME: str = ""  # שם הבוט בטלגרם (בלי @) — נדרש ל-Telegram Login Widget
     TELEGRAM_ADMIN_CHAT_ID: Optional[str] = None  # קבוצת מנהלים בטלגרם - לסיכומי אישור/דחייה
     TELEGRAM_WEBHOOK_SECRET_TOKEN: str = ""  # אימות webhook — openssl rand -hex 32
     # URL חיצוני של האפליקציה לרישום webhook אוטומטי.

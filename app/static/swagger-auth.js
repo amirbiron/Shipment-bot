@@ -1,7 +1,7 @@
 /**
  * swagger-auth.js — ווידג'ט כניסה מהירה ל-Swagger UI
  *
- * מאפשר הזנת Admin API Key ו-JWT (דרך OTP) ישירות מדף הדוקומנטציה,
+ * מאפשר הזנת Admin API Key ו-JWT (דרך OTP או Telegram Login) ישירות מדף הדוקומנטציה,
  * ללא צורך לקרוא ידנית ל-endpoints של האימות.
  */
 (function () {
@@ -17,6 +17,8 @@
 
   var _phone = "";
   var _pendingStations = null;
+  var _telegramBotUsername = "";
+  var _pendingTelegramData = null;
 
   /* ── helpers ── */
   function _$(id) {
@@ -39,6 +41,17 @@
       .replace(/'/g, "&#39;");
   }
 
+  /** הגדרת Bearer token ב-Swagger UI */
+  function setSwaggerToken(token) {
+    window.ui.authActions.authorize({
+      HTTPBearer: {
+        name: "HTTPBearer",
+        schema: { type: "http", scheme: "bearer" },
+        value: token,
+      },
+    });
+  }
+
   /* ── בניית הווידג'ט ── */
   function buildWidget() {
     var el = document.createElement("div");
@@ -52,7 +65,7 @@
       var body = _$("qa-body");
       var arrow = _$("qa-arrow");
       body.classList.toggle("qa-collapsed");
-      arrow.textContent = body.classList.contains("qa-collapsed") ? "◀" : "▼";
+      arrow.textContent = body.classList.contains("qa-collapsed") ? "\u25C0" : "\u25BC";
     });
 
     // Enter key — בדיקת disabled מונעת שליחה כפולה בלחיצה מהירה
@@ -65,6 +78,9 @@
     _$("qa-otp").addEventListener("keydown", function (e) {
       if (e.key === "Enter" && !_$("qa-verify").disabled) onVerifyOTP();
     });
+
+    // טעינת מידע על הבוט ל-Telegram Login
+    loadTelegramBotInfo();
   }
 
   /* ── HTML ── */
@@ -89,6 +105,9 @@
       "#qa .qa-btn{background:#49cc90;color:#1b1b1b;font-weight:700}" +
       "#qa .qa-btn:hover{background:#3eb882}" +
       "#qa .qa-btn:disabled{opacity:.4;cursor:not-allowed}" +
+      "#qa .qa-btn-tg{background:#229ED9;color:#fff;font-weight:700}" +
+      "#qa .qa-btn-tg:hover{background:#1a8bc4}" +
+      "#qa .qa-btn-tg:disabled{opacity:.4;cursor:not-allowed}" +
       "#qa .qa-msg{font-size:12px;margin-top:6px;min-height:16px}" +
       "#qa .qa-ok{color:#49cc90}" +
       "#qa .qa-err{color:#ff6b6b}" +
@@ -96,6 +115,8 @@
       "#qa .qa-stations{margin-top:8px}" +
       "#qa .qa-stations label{display:block;padding:4px 0;cursor:pointer;font-size:13px}" +
       "#qa .qa-stations input[type=radio]{margin-left:6px}" +
+      "#qa .qa-divider{display:flex;align-items:center;gap:8px;margin:10px 0 8px;font-size:12px;color:#666}" +
+      "#qa .qa-divider::before,#qa .qa-divider::after{content:'';flex:1;border-top:1px solid #444}" +
       "</style>" +
       '<div class="qa-hdr" id="qa-toggle">' +
       "<span>\u05db\u05e0\u05d9\u05e1\u05d4 \u05de\u05d4\u05d9\u05e8\u05d4 \u05dc-API</span>" +
@@ -111,7 +132,7 @@
       "</div>" +
       '<div class="qa-msg" id="qa-key-msg"></div>' +
       "</div>" +
-      /* OTP Login */
+      /* OTP + Telegram Login */
       '<div class="qa-sec">' +
       "<h4>JWT \u2014 \u05db\u05e0\u05d9\u05e1\u05d4 \u05e2\u05dd OTP</h4>" +
       '<div class="qa-row" id="qa-step1">' +
@@ -122,11 +143,37 @@
       '<input id="qa-otp" type="text" placeholder="\u05e7\u05d5\u05d3 OTP (6 \u05e1\u05e4\u05e8\u05d5\u05ea)" maxlength="6">' +
       '<button class="qa-btn" id="qa-verify">\u05d0\u05de\u05ea</button>' +
       "</div>" +
+      /* Telegram Login — מוסתר עד שהמידע על הבוט נטען */
+      '<div id="qa-tg-section" style="display:none">' +
+      '<div class="qa-divider">\u05d0\u05d5</div>' +
+      '<button class="qa-btn-tg" id="qa-tg-login" style="width:100%">' +
+      "\u2708\uFE0F \u05db\u05e0\u05d9\u05e1\u05d4 \u05d3\u05e8\u05da Telegram</button>' +
+      "</div>" +
       '<div id="qa-stations" class="qa-stations" style="display:none"></div>' +
       '<div class="qa-msg" id="qa-otp-msg"></div>' +
       "</div>" +
       "</div>"
     );
+  }
+
+  /* ── Telegram Bot Info ── */
+  async function loadTelegramBotInfo() {
+    try {
+      var r = await fetch("/api/panel/auth/telegram-bot-info");
+      if (!r.ok) return;
+      var d = await r.json();
+      if (d.enabled && d.bot_username) {
+        _telegramBotUsername = d.bot_username;
+        _$("qa-tg-section").style.display = "block";
+        // טעינת סקריפט Telegram Widget
+        var script = document.createElement("script");
+        script.src = "https://telegram.org/js/telegram-widget.js?22";
+        script.async = true;
+        document.head.appendChild(script);
+      }
+    } catch (e) {
+      // אם לא ניתן לטעון — לא מציגים את כפתור טלגרם
+    }
   }
 
   /* ── Admin API Key ── */
@@ -217,14 +264,7 @@
       var d = await r.json();
 
       if (r.ok && d.access_token) {
-        // הגדרת Bearer token ב-Swagger UI
-        window.ui.authActions.authorize({
-          HTTPBearer: {
-            name: "HTTPBearer",
-            schema: { type: "http", scheme: "bearer" },
-            value: d.access_token,
-          },
-        });
+        setSwaggerToken(d.access_token);
         _pendingStations = null;
         _$("qa-stations").style.display = "none";
         // setMsg משתמש ב-textContent ולכן בטוח מ-XSS
@@ -269,11 +309,127 @@
     _$("qa-verify").disabled = false;
   }
 
+  /* ── Telegram Login ── */
+  async function onTelegramLogin() {
+    if (!window.Telegram || !window.Telegram.Login) {
+      setMsg("qa-otp-msg", "\u05e1\u05e7\u05e8\u05d9\u05e4\u05d8 \u05d8\u05dc\u05d2\u05e8\u05dd \u05dc\u05d0 \u05e0\u05d8\u05e2\u05df, \u05e0\u05e1\u05d4 \u05dc\u05e8\u05e2\u05e0\u05df", "qa-err");
+      return;
+    }
+    _$("qa-tg-login").disabled = true;
+    setMsg("qa-otp-msg", "\u05de\u05de\u05ea\u05d9\u05df \u05dc\u05d0\u05d9\u05de\u05d5\u05ea \u05d8\u05dc\u05d2\u05e8\u05dd\u2026", "qa-info");
+
+    window.Telegram.Login.auth(
+      { bot_id: _telegramBotUsername, request_access: true },
+      async function (data) {
+        if (!data) {
+          _$("qa-tg-login").disabled = false;
+          setMsg("qa-otp-msg", "", "");
+          return;
+        }
+
+        try {
+          var r = await fetch("/api/panel/auth/telegram-login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(data),
+          });
+          var d = await r.json();
+
+          if (r.ok && d.access_token) {
+            setSwaggerToken(d.access_token);
+            _pendingTelegramData = null;
+            _$("qa-stations").style.display = "none";
+            setMsg(
+              "qa-otp-msg",
+              "\u2713 \u05de\u05d7\u05d5\u05d1\u05e8 \u05d3\u05e8\u05da \u05d8\u05dc\u05d2\u05e8\u05dd! \u05ea\u05d7\u05e0\u05d4: " +
+                String(d.station_name) +
+                " (ID: " +
+                String(d.station_id) +
+                ")",
+              "qa-ok"
+            );
+          } else if (r.ok && d.choose_station) {
+            // ריבוי תחנות — שמירת נתוני טלגרם לשליחה חוזרת עם תחנה נבחרת
+            _pendingTelegramData = data;
+            _pendingStations = d.stations;
+            var html = "<strong>\u05d1\u05d7\u05e8 \u05ea\u05d7\u05e0\u05d4:</strong>";
+            d.stations.forEach(function (s) {
+              var safeId = escapeHtml(s.station_id);
+              var safeName = escapeHtml(s.station_name);
+              html +=
+                '<label><input type="radio" name="qa-station" value="' +
+                safeId +
+                '">' +
+                safeName +
+                " (ID: " +
+                safeId +
+                ")</label>";
+            });
+            html += '<div style="margin-top:8px"><button class="qa-btn" id="qa-tg-select">\u05d1\u05d7\u05e8 \u05ea\u05d7\u05e0\u05d4</button></div>';
+            _$("qa-stations").innerHTML = html;
+            _$("qa-stations").style.display = "block";
+            setMsg(
+              "qa-otp-msg",
+              "\u05d9\u05e9 \u05db\u05de\u05d4 \u05ea\u05d7\u05e0\u05d5\u05ea \u2014 \u05d1\u05d7\u05e8 \u05d5\u05dc\u05d7\u05e5 \u05e2\u05dc \u05d1\u05d7\u05e8 \u05ea\u05d7\u05e0\u05d4",
+              "qa-info"
+            );
+          } else {
+            setMsg("qa-otp-msg", d.detail || "\u05db\u05e0\u05d9\u05e1\u05d4 \u05d3\u05e8\u05da \u05d8\u05dc\u05d2\u05e8\u05dd \u05e0\u05db\u05e9\u05dc\u05d4", "qa-err");
+          }
+        } catch (e) {
+          setMsg("qa-otp-msg", "\u05e9\u05d2\u05d9\u05d0\u05ea \u05e8\u05e9\u05ea: " + e.message, "qa-err");
+        }
+        _$("qa-tg-login").disabled = false;
+      }
+    );
+  }
+
+  /* ── Telegram Station Select ── */
+  async function onTelegramSelectStation() {
+    if (!_pendingTelegramData) return;
+    var checked = document.querySelector("#qa-stations input[type=radio]:checked");
+    if (!checked) {
+      setMsg("qa-otp-msg", "\u05d9\u05e9 \u05dc\u05d1\u05d7\u05d5\u05e8 \u05ea\u05d7\u05e0\u05d4", "qa-err");
+      return;
+    }
+    var stationId = parseInt(checked.value, 10);
+    setMsg("qa-otp-msg", "\u05de\u05d0\u05de\u05ea\u2026", "qa-info");
+    try {
+      var r = await fetch("/api/panel/auth/telegram-login-select-station?station_id=" + stationId, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(_pendingTelegramData),
+      });
+      var d = await r.json();
+      if (r.ok && d.access_token) {
+        setSwaggerToken(d.access_token);
+        _pendingTelegramData = null;
+        _pendingStations = null;
+        _$("qa-stations").style.display = "none";
+        setMsg(
+          "qa-otp-msg",
+          "\u2713 \u05de\u05d7\u05d5\u05d1\u05e8 \u05d3\u05e8\u05da \u05d8\u05dc\u05d2\u05e8\u05dd! \u05ea\u05d7\u05e0\u05d4: " +
+            String(d.station_name) +
+            " (ID: " +
+            String(d.station_id) +
+            ")",
+          "qa-ok"
+        );
+      } else {
+        setMsg("qa-otp-msg", d.detail || "\u05d1\u05d7\u05d9\u05e8\u05ea \u05ea\u05d7\u05e0\u05d4 \u05e0\u05db\u05e9\u05dc\u05d4", "qa-err");
+      }
+    } catch (e) {
+      setMsg("qa-otp-msg", "\u05e9\u05d2\u05d9\u05d0\u05ea \u05e8\u05e9\u05ea: " + e.message, "qa-err");
+    }
+  }
+
   /* ── חיבור כפתורים (onclick) ── */
   document.addEventListener("click", function (e) {
     var id = e.target.id;
     if (id === "qa-key-btn") onSetAdminKey();
     else if (id === "qa-send") onRequestOTP();
     else if (id === "qa-verify") onVerifyOTP();
+    else if (id === "qa-tg-login") onTelegramLogin();
+    else if (id === "qa-tg-select") onTelegramSelectStation();
   });
 })();

@@ -8,11 +8,13 @@
 4. בעל התחנה מזין את הקוד בפאנל ומקבל access token + refresh token
 5. כש-access token פג — הלקוח שולח refresh token ומקבל access חדש
 """
+import hashlib
 import hmac
 import json
 import secrets
+import time
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import jwt as pyjwt
 from pydantic import BaseModel
@@ -219,3 +221,77 @@ async def verify_otp(user_id: int, otp: str, consume: bool = True) -> bool:
 
     logger.warning("OTP verification failed", extra_data={"user_id": user_id})
     return False
+
+
+# ==================== Telegram Login Widget ====================
+
+# זמן מקסימלי (בשניות) שנתוני אימות טלגרם תקפים — מונע replay attacks
+_TELEGRAM_AUTH_MAX_AGE_SECONDS = 300  # 5 דקות
+
+
+def verify_telegram_login_data(
+    auth_data: Dict[str, Any],
+    max_age_seconds: int = _TELEGRAM_AUTH_MAX_AGE_SECONDS,
+) -> bool:
+    """אימות נתוני Telegram Login Widget באמצעות HMAC-SHA256.
+
+    הפרוטוקול של טלגרם:
+    1. secret_key = SHA256(bot_token)
+    2. data_check_string = מחרוזת של key=value ממוינת (ללא hash)
+    3. HMAC-SHA256(secret_key, data_check_string) == hash שהתקבל
+
+    Args:
+        auth_data: נתוני אימות מטלגרם (id, first_name, auth_date, hash, ...)
+        max_age_seconds: זמן מקסימלי לתוקף הנתונים
+
+    Returns:
+        True אם האימות תקין ולא פג תוקף
+    """
+    if not settings.TELEGRAM_BOT_TOKEN:
+        logger.error("TELEGRAM_BOT_TOKEN לא מוגדר — אי אפשר לאמת Telegram Login")
+        return False
+
+    received_hash = auth_data.get("hash")
+    if not received_hash:
+        logger.warning("Telegram Login — חסר hash בנתונים")
+        return False
+
+    # בדיקת תוקף auth_date — מונע replay attacks
+    auth_date = auth_data.get("auth_date")
+    if auth_date is None:
+        logger.warning("Telegram Login — חסר auth_date בנתונים")
+        return False
+
+    try:
+        auth_timestamp = int(auth_date)
+    except (ValueError, TypeError):
+        logger.warning("Telegram Login — auth_date לא תקין", extra_data={"auth_date": str(auth_date)})
+        return False
+
+    if time.time() - auth_timestamp > max_age_seconds:
+        logger.warning("Telegram Login — נתוני אימות פגי תוקף", extra_data={
+            "auth_date": auth_timestamp,
+            "max_age_seconds": max_age_seconds,
+        })
+        return False
+
+    # בניית data_check_string — כל השדות ממוינים (ללא hash)
+    check_pairs = sorted(
+        f"{k}={v}" for k, v in auth_data.items() if k != "hash"
+    )
+    data_check_string = "\n".join(check_pairs)
+
+    # secret_key = SHA256(bot_token)
+    secret_key = hashlib.sha256(settings.TELEGRAM_BOT_TOKEN.encode()).digest()
+
+    # HMAC-SHA256 — השוואה בטוחה מפני timing attacks
+    computed_hash = hmac.new(
+        secret_key, data_check_string.encode(), hashlib.sha256
+    ).hexdigest()
+
+    if not hmac.compare_digest(computed_hash, received_hash):
+        logger.warning("Telegram Login — hash לא תואם")
+        return False
+
+    logger.info("Telegram Login — אימות הצליח", extra_data={"telegram_id": auth_data.get("id")})
+    return True

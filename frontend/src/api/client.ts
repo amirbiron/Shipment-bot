@@ -7,7 +7,7 @@ const apiClient = axios.create({
 });
 
 // נתיבי auth שלא דורשים redirect ב-401
-const AUTH_PATHS = ["/auth/request-otp", "/auth/verify-otp"];
+const AUTH_PATHS = ["/auth/request-otp", "/auth/verify-otp", "/auth/telegram-login", "/auth/telegram-login-select-station"];
 
 // הוספת טוקן לכל בקשה
 apiClient.interceptors.request.use((config) => {
