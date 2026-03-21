@@ -31,3 +31,6 @@ openpyxl==3.1.5
 
 # JWT — פאנל ווב
 PyJWT>=2.7.0
+
+# Error Tracking — Sentry
+sentry-sdk[fastapi,celery,sqlalchemy]>=2.0.0

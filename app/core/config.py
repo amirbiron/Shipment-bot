@@ -247,6 +247,12 @@ class Settings(BaseSettings):
 
         return self
 
+    # Sentry — Error Tracking
+    SENTRY_DSN: str = ""  # DSN מפרויקט Sentry — ריק = Sentry מושבת
+    SENTRY_ENVIRONMENT: str = "production"  # production / staging / development
+    SENTRY_TRACES_SAMPLE_RATE: float = 0.1  # דגימת ביצועים: 10% מהבקשות
+    SENTRY_PROFILES_SAMPLE_RATE: float = 0.1  # דגימת profiling: 10%
+
     # ניהול תפקידים לאדמין — החלפת תפקיד לצורך בדיקות
     ADMIN_ROLE_SWITCH_ENABLED: bool = True
 

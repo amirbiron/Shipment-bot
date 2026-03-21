@@ -5,6 +5,10 @@ from celery import Celery
 from celery.schedules import crontab
 
 from app.core.config import settings
+from app.core.sentry import init_sentry
+
+# אתחול Sentry גם ב-Celery worker — לכידת שגיאות ב-tasks
+init_sentry()
 
 celery_app = Celery(
     "shipment_bot",
