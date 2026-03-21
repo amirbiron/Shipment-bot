@@ -147,7 +147,7 @@
       '<div id="qa-tg-section" style="display:none">' +
       '<div class="qa-divider">\u05d0\u05d5</div>' +
       '<button class="qa-btn-tg" id="qa-tg-login" style="width:100%">' +
-      "\u2708\uFE0F \u05db\u05e0\u05d9\u05e1\u05d4 \u05d3\u05e8\u05da Telegram</button>' +
+      "\u2708\uFE0F \u05db\u05e0\u05d9\u05e1\u05d4 \u05d3\u05e8\u05da Telegram</button>" +
       "</div>" +
       '<div id="qa-stations" class="qa-stations" style="display:none"></div>' +
       '<div class="qa-msg" id="qa-otp-msg"></div>' +
