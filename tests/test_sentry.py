@@ -54,6 +54,38 @@ class TestScrubPhones:
         assert "0539876543" not in result
         assert result.count("[REDACTED_PHONE]") == 2
 
+    @pytest.mark.unit
+    def test_scrub_israeli_landline(self) -> None:
+        """P1: כיסוי מספרי קווי ישראליים (03, 02, 04 וכו')"""
+        text = "משרד: 031234567"
+        result = _scrub_phones(text)
+        assert "031234567" not in result
+        assert "[REDACTED_PHONE]" in result
+
+    @pytest.mark.unit
+    def test_scrub_e164_international(self) -> None:
+        """P1: כיסוי E.164 בינלאומי (לא ישראלי)"""
+        text = "contact: +15551234567"
+        result = _scrub_phones(text)
+        assert "+15551234567" not in result
+        assert "[REDACTED_PHONE]" in result
+
+    @pytest.mark.unit
+    def test_scrub_e164_uk(self) -> None:
+        """P1: כיסוי מספר בריטי"""
+        text = "UK: +441234567890"
+        result = _scrub_phones(text)
+        assert "+441234567890" not in result
+        assert "[REDACTED_PHONE]" in result
+
+    @pytest.mark.unit
+    def test_scrub_972_without_plus(self) -> None:
+        """P1: כיסוי 972 ללא +"""
+        text = "וואטסאפ: 972501234567"
+        result = _scrub_phones(text)
+        assert "972501234567" not in result
+        assert "[REDACTED_PHONE]" in result
+
 
 class TestScrubDict:
     """בדיקות סינון מספרי טלפון ממילון"""
@@ -117,7 +149,7 @@ class TestBeforeSend:
         assert "0501234567" not in result["breadcrumbs"]["values"][0]["message"]
 
     @pytest.mark.unit
-    def test_scrubs_request_data(self) -> None:
+    def test_scrubs_request_data_dict(self) -> None:
         event = {
             "request": {
                 "data": {"phone": "0501234567"},
@@ -128,6 +160,45 @@ class TestBeforeSend:
             result = _before_send(event, {})
         assert "0501234567" not in result["request"]["data"]["phone"]
         assert "0501234567" not in result["request"]["headers"]["X-User"]
+
+    @pytest.mark.unit
+    def test_scrubs_request_data_string(self) -> None:
+        """Medium: סינון request.data כשהוא string (form-encoded / raw body)"""
+        event = {
+            "request": {
+                "data": "phone=0501234567&name=test",
+            }
+        }
+        with patch("app.core.sentry.get_correlation_id", return_value=""):
+            result = _before_send(event, {})
+        assert "0501234567" not in result["request"]["data"]
+        assert "[REDACTED_PHONE]" in result["request"]["data"]
+
+    @pytest.mark.unit
+    def test_scrubs_request_url(self) -> None:
+        """High: סינון מספרי טלפון מ-URL"""
+        event = {
+            "request": {
+                "url": "https://example.com/api/users/0501234567/deliver",
+            }
+        }
+        with patch("app.core.sentry.get_correlation_id", return_value=""):
+            result = _before_send(event, {})
+        assert "0501234567" not in result["request"]["url"]
+        assert "[REDACTED_PHONE]" in result["request"]["url"]
+
+    @pytest.mark.unit
+    def test_scrubs_request_query_string(self) -> None:
+        """High: סינון מספרי טלפון מ-query string"""
+        event = {
+            "request": {
+                "query_string": "phone=0501234567&action=send",
+            }
+        }
+        with patch("app.core.sentry.get_correlation_id", return_value=""):
+            result = _before_send(event, {})
+        assert "0501234567" not in result["request"]["query_string"]
+        assert "[REDACTED_PHONE]" in result["request"]["query_string"]
 
     @pytest.mark.unit
     def test_scrubs_message(self) -> None:
@@ -146,9 +217,35 @@ class TestBeforeSendTransaction:
         result = _before_send_transaction(event, {})
         assert "0501234567" not in result["transaction"]
 
+    @pytest.mark.unit
+    def test_scrubs_transaction_request_data(self) -> None:
+        """Medium: transaction events צריכים גם הם לעבור סינון request"""
+        event = {
+            "transaction": "POST /api/deliver",
+            "request": {
+                "url": "https://example.com/api/users/0501234567",
+                "data": {"contact": "0501234567"},
+            },
+        }
+        result = _before_send_transaction(event, {})
+        assert "0501234567" not in result["request"]["url"]
+        assert "0501234567" not in result["request"]["data"]["contact"]
+
+    @pytest.mark.unit
+    def test_scrubs_transaction_breadcrumbs(self) -> None:
+        """Medium: breadcrumbs ב-transaction events צריכים סינון"""
+        event = {
+            "transaction": "POST /api/deliver",
+            "breadcrumbs": {
+                "values": [{"message": "שליחה ל-0501234567"}]
+            },
+        }
+        result = _before_send_transaction(event, {})
+        assert "0501234567" not in result["breadcrumbs"]["values"][0]["message"]
+
 
 class TestTracesSampler:
-    """בדיקות ל-traces sampler — סינון health checks"""
+    """בדיקות ל-traces sampler — סינון health checks ושמירת parent decision"""
 
     @pytest.mark.unit
     def test_health_check_not_sampled(self) -> None:
@@ -165,6 +262,24 @@ class TestTracesSampler:
         ctx = {"transaction_context": {"name": "POST /api/deliveries"}}
         rate = _traces_sampler(ctx)
         assert rate > 0.0
+
+    @pytest.mark.unit
+    def test_parent_sampled_true_inherits(self) -> None:
+        """P2: שמירה על החלטת דגימה מ-parent transaction"""
+        ctx = {
+            "parent_sampled": True,
+            "transaction_context": {"name": "celery.task"},
+        }
+        assert _traces_sampler(ctx) == 1.0
+
+    @pytest.mark.unit
+    def test_parent_sampled_false_inherits(self) -> None:
+        """P2: כיבוד parent שהחליט לא לדגום"""
+        ctx = {
+            "parent_sampled": False,
+            "transaction_context": {"name": "celery.task"},
+        }
+        assert _traces_sampler(ctx) == 0.0
 
 
 class TestInitSentry:

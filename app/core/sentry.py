@@ -5,7 +5,7 @@ Sentry Error Tracking — אתחול וסינון PII
 - אתחול Sentry עם אינטגרציות FastAPI, Celery, SQLAlchemy
 - סינון מספרי טלפון מ-events (before_send)
 - העשרת events עם correlation ID
-- הגנת PII: הסרת מספרי טלפון מ-breadcrumbs, headers, ו-request data
+- הגנת PII: הסרת מספרי טלפון מ-breadcrumbs, headers, URL, query string ו-request data
 """
 import re
 
@@ -15,10 +15,17 @@ from app.core.logging import get_logger, get_correlation_id
 
 logger = get_logger(__name__)
 
-# ביטוי רגולרי לזיהוי מספרי טלפון ישראליים/בינלאומיים
-_PHONE_RE = re.compile(
-    r"(\+?972|0)[\s-]?([2-9]\d)[\s-]?(\d{3})[\s-]?(\d{4})"
-)
+# ביטויים רגולריים לזיהוי מספרי טלפון — מכסים את כל הפורמטים ש-PhoneNumberValidator מקבל:
+# 1. ישראלי מקומי: 0[23489|5x|7x]-xxx-xxxx
+# 2. ישראלי בינלאומי: (+972|972)[23489|5x|7x]-xxx-xxxx
+# 3. E.164 בינלאומי: +[1-9]xxxxxxx (7-15 ספרות כולל קוד מדינה)
+_PHONE_PATTERNS = [
+    # ישראלי — מקומי ובינלאומי (עם מפרידים אופציונליים)
+    r"(?:\+?972|0)[\s-]?(?:[23489]|5[0-8]|7[2-7])[\s-]?\d{3}[\s-]?\d{4}",
+    # E.164 בינלאומי (לא ישראלי) — +[קוד מדינה][מספר] (7-15 ספרות סה"כ)
+    r"\+[1-9]\d{6,14}",
+]
+_PHONE_RE = re.compile("|".join(_PHONE_PATTERNS))
 _PHONE_PLACEHOLDER = "[REDACTED_PHONE]"
 
 
@@ -47,6 +54,41 @@ def _scrub_dict(data: dict) -> dict:
     return scrubbed
 
 
+def _scrub_request_data(event: dict) -> None:
+    """סינון PII מכל שדות ה-request — data, headers, url, query_string"""
+    request_data = event.get("request", {})
+    if not request_data:
+        return
+
+    # סינון URL (מספרי טלפון ב-path)
+    if "url" in request_data and isinstance(request_data["url"], str):
+        request_data["url"] = _scrub_phones(request_data["url"])
+
+    # סינון query string
+    if "query_string" in request_data and isinstance(request_data["query_string"], str):
+        request_data["query_string"] = _scrub_phones(request_data["query_string"])
+
+    # סינון request body — יכול להיות dict (JSON) או string (form-encoded / raw)
+    if "data" in request_data:
+        if isinstance(request_data["data"], dict):
+            request_data["data"] = _scrub_dict(request_data["data"])
+        elif isinstance(request_data["data"], str):
+            request_data["data"] = _scrub_phones(request_data["data"])
+
+    # סינון headers
+    if "headers" in request_data and isinstance(request_data["headers"], dict):
+        request_data["headers"] = _scrub_dict(request_data["headers"])
+
+
+def _scrub_breadcrumbs(event: dict) -> None:
+    """סינון PII מ-breadcrumbs"""
+    for breadcrumb in event.get("breadcrumbs", {}).get("values", []):
+        if "message" in breadcrumb and isinstance(breadcrumb["message"], str):
+            breadcrumb["message"] = _scrub_phones(breadcrumb["message"])
+        if "data" in breadcrumb and isinstance(breadcrumb["data"], dict):
+            breadcrumb["data"] = _scrub_dict(breadcrumb["data"])
+
+
 def _before_send(event: dict, hint: dict) -> dict:
     """סינון PII והעשרת event לפני שליחה ל-Sentry"""
     # העשרה עם correlation ID
@@ -60,19 +102,9 @@ def _before_send(event: dict, hint: dict) -> dict:
             if "value" in exception_entry and isinstance(exception_entry["value"], str):
                 exception_entry["value"] = _scrub_phones(exception_entry["value"])
 
-    # סינון מספרי טלפון מ-breadcrumbs
-    for breadcrumb in event.get("breadcrumbs", {}).get("values", []):
-        if "message" in breadcrumb and isinstance(breadcrumb["message"], str):
-            breadcrumb["message"] = _scrub_phones(breadcrumb["message"])
-        if "data" in breadcrumb and isinstance(breadcrumb["data"], dict):
-            breadcrumb["data"] = _scrub_dict(breadcrumb["data"])
-
-    # סינון מספרי טלפון מ-request data
-    request_data = event.get("request", {})
-    if "data" in request_data and isinstance(request_data["data"], dict):
-        request_data["data"] = _scrub_dict(request_data["data"])
-    if "headers" in request_data and isinstance(request_data["headers"], dict):
-        request_data["headers"] = _scrub_dict(request_data["headers"])
+    # סינון מ-breadcrumbs, request data, URL, query string
+    _scrub_breadcrumbs(event)
+    _scrub_request_data(event)
 
     # סינון מ-message
     if "message" in event and isinstance(event["message"], str):
@@ -82,10 +114,14 @@ def _before_send(event: dict, hint: dict) -> dict:
 
 
 def _before_send_transaction(event: dict, hint: dict) -> dict:
-    """סינון PII מ-transactions (ביצועים)"""
+    """סינון PII מ-transactions (ביצועים) — כולל request data, breadcrumbs ו-URL"""
     # סינון מספרי טלפון מ-transaction name
     if "transaction" in event and isinstance(event["transaction"], str):
         event["transaction"] = _scrub_phones(event["transaction"])
+
+    # סינון PII מ-request data גם ב-transactions (לא רק ב-errors)
+    _scrub_request_data(event)
+    _scrub_breadcrumbs(event)
 
     return event
 
@@ -111,7 +147,7 @@ def init_sentry() -> None:
         # הסרת ערכים רגישים מ-request headers/cookies
         send_default_pii=False,
         # מידע על הגרסה לזיהוי regressions
-        release=f"shipment-bot@1.0.0",
+        release="shipment-bot@1.0.0",
         # מניעת שליחת health check transactions
         traces_sampler=_traces_sampler,
     )
@@ -126,8 +162,13 @@ def init_sentry() -> None:
 
 
 def _traces_sampler(sampling_context: dict) -> float:
-    """דגימה חכמה — מסנן health checks ונותן עדיפות לשגיאות"""
+    """דגימה חכמה — מסנן health checks ושומר על החלטת דגימה מ-parent"""
     from app.core.config import settings
+
+    # שמירה על החלטת דגימה מ-parent transaction — מונע פיצול traces
+    parent_sampled = sampling_context.get("parent_sampled")
+    if parent_sampled is not None:
+        return 1.0 if parent_sampled else 0.0
 
     transaction_context = sampling_context.get("transaction_context", {})
     name = transaction_context.get("name", "")
