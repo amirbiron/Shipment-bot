@@ -1653,27 +1653,11 @@ async def whatsapp_webhook(
 
                 from app.domain.services.admin_notification_service import (
                     AdminNotificationService,
-                    _parse_csv_setting,
                 )
 
-                sent = False
-                # ניסיון שליחה לקבוצת אדמינים בוואטסאפ
-                if settings.WHATSAPP_ADMIN_GROUP_ID:
-                    sent = await AdminNotificationService._send_whatsapp_admin_message(
-                        settings.WHATSAPP_ADMIN_GROUP_ID, forward_text
-                    )
-                # fallback: שליחה למנהלים פרטיים בוואטסאפ
-                if not sent:
-                    wa_admins = _parse_csv_setting(settings.WHATSAPP_ADMIN_NUMBERS)
-                    for admin_phone in wa_admins:
-                        sent = await AdminNotificationService._send_whatsapp_admin_message(
-                            admin_phone, forward_text
-                        ) or sent
-                # fallback: שליחה לקבוצת טלגרם
-                if not sent and settings.TELEGRAM_ADMIN_CHAT_ID:
-                    sent = await AdminNotificationService._send_telegram_message(
-                        settings.TELEGRAM_ADMIN_CHAT_ID, forward_text
-                    )
+                sent = await AdminNotificationService.forward_support_message(
+                    forward_text, user.id, prefer_telegram=False
+                )
 
                 if sent:
                     confirm_text = "✅ ההודעה נשלחה להנהלה. נחזור אליכם בהקדם!"
@@ -1681,10 +1665,6 @@ async def whatsapp_webhook(
                     confirm_text = (
                         "⚠️ לא הצלחנו להעביר את ההודעה כרגע.\n"
                         "אנא נסו שוב מאוחר יותר."
-                    )
-                    logger.error(
-                        "כשלון בהעברת פנייה להנהלה — אין יעד זמין",
-                        extra_data={"user_id": user.id},
                     )
 
                 background_tasks.add_task(

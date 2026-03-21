@@ -1155,3 +1155,100 @@ class AdminNotificationService:
                 exc_info=True,
             )
             return False
+
+    @staticmethod
+    async def forward_support_message(
+        forward_text: str,
+        user_id: int,
+        *,
+        prefer_telegram: bool = True,
+    ) -> bool:
+        """העברת הודעת תמיכה למנהלים עם fallback בין פלטפורמות.
+
+        Args:
+            forward_text: הטקסט המפורמט להעברה
+            user_id: מזהה המשתמש (ללוגים)
+            prefer_telegram: אם True — מתחיל מטלגרם, אחרת מוואטסאפ
+        """
+        sent = False
+
+        if prefer_telegram:
+            # טלגרם ראשון → וואטסאפ fallback
+            if settings.TELEGRAM_ADMIN_CHAT_ID:
+                sent = await AdminNotificationService._send_telegram_message(
+                    settings.TELEGRAM_ADMIN_CHAT_ID, forward_text
+                )
+            if not sent:
+                tg_admins = (
+                    _parse_csv_setting(settings.TELEGRAM_ADMIN_CHAT_IDS)
+                    if settings.TELEGRAM_ADMIN_CHAT_IDS
+                    else []
+                )
+                for admin_id in tg_admins:
+                    sent = (
+                        await AdminNotificationService._send_telegram_message(
+                            admin_id, forward_text
+                        )
+                        or sent
+                    )
+            if not sent and settings.WHATSAPP_ADMIN_GROUP_ID:
+                sent = await AdminNotificationService._send_whatsapp_admin_message(
+                    settings.WHATSAPP_ADMIN_GROUP_ID, forward_text
+                )
+            if not sent:
+                wa_admins = (
+                    _parse_csv_setting(settings.WHATSAPP_ADMIN_NUMBERS)
+                    if settings.WHATSAPP_ADMIN_NUMBERS
+                    else []
+                )
+                for admin_phone in wa_admins:
+                    sent = (
+                        await AdminNotificationService._send_whatsapp_admin_message(
+                            admin_phone, forward_text
+                        )
+                        or sent
+                    )
+        else:
+            # וואטסאפ ראשון → טלגרם fallback
+            if settings.WHATSAPP_ADMIN_GROUP_ID:
+                sent = await AdminNotificationService._send_whatsapp_admin_message(
+                    settings.WHATSAPP_ADMIN_GROUP_ID, forward_text
+                )
+            if not sent:
+                wa_admins = (
+                    _parse_csv_setting(settings.WHATSAPP_ADMIN_NUMBERS)
+                    if settings.WHATSAPP_ADMIN_NUMBERS
+                    else []
+                )
+                for admin_phone in wa_admins:
+                    sent = (
+                        await AdminNotificationService._send_whatsapp_admin_message(
+                            admin_phone, forward_text
+                        )
+                        or sent
+                    )
+            if not sent and settings.TELEGRAM_ADMIN_CHAT_ID:
+                sent = await AdminNotificationService._send_telegram_message(
+                    settings.TELEGRAM_ADMIN_CHAT_ID, forward_text
+                )
+            if not sent:
+                tg_admins = (
+                    _parse_csv_setting(settings.TELEGRAM_ADMIN_CHAT_IDS)
+                    if settings.TELEGRAM_ADMIN_CHAT_IDS
+                    else []
+                )
+                for admin_id in tg_admins:
+                    sent = (
+                        await AdminNotificationService._send_telegram_message(
+                            admin_id, forward_text
+                        )
+                        or sent
+                    )
+
+        if not sent:
+            logger.error(
+                "כשלון בהעברת פנייה להנהלה — אין יעד זמין",
+                extra_data={"user_id": user_id},
+            )
+
+        return sent

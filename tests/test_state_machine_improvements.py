@@ -493,3 +493,52 @@ class TestContextCleanup:
         assert "remove_dispatcher_name" not in context
         # מפתח אחר צריך להישאר
         assert context.get("other_key") == "should_remain"
+
+
+# ============================================================================
+# תיקון באג: דגל support_prompt_shown לא מנוקה בחזרה מתמיכה
+# ============================================================================
+
+
+class TestSupportContextCleanup:
+    """בדיקה שדגל support_prompt_shown מנוקה בחזרה מתמיכה"""
+
+    @pytest.mark.asyncio
+    async def test_support_back_clears_prompt_shown_flag(
+        self, db_session, approved_courier
+    ):
+        """חזרה מתמיכה מנקה את support_prompt_shown כדי שהכניסה הבאה תציג הנחיות"""
+        handler = CourierStateHandler(db_session, platform="telegram")
+        state_manager = StateManager(db_session)
+
+        # כניסה לתמיכה — מציג הנחיות ושומר דגל
+        await state_manager.force_state(
+            approved_courier.id,
+            "telegram",
+            CourierState.MENU.value,
+            {},
+        )
+        response, new_state = await handler.handle_message(
+            approved_courier, "❓ תמיכה", None
+        )
+        assert new_state == CourierState.SUPPORT.value
+
+        # שליפת context — הדגל נשמר
+        context = await state_manager.get_context(approved_courier.id, "telegram")
+        assert context.get("support_prompt_shown") is True
+
+        # חזרה לתפריט מתמיכה
+        await state_manager.force_state(
+            approved_courier.id,
+            "telegram",
+            CourierState.SUPPORT.value,
+            {"support_prompt_shown": True},
+        )
+        response, new_state = await handler.handle_message(
+            approved_courier, "🔙 חזרה לתפריט", None
+        )
+        assert new_state == CourierState.MENU.value
+
+        # בדיקה שהדגל נוקה — הכניסה הבאה צריכה להציג הנחיות
+        context = await state_manager.get_context(approved_courier.id, "telegram")
+        assert context.get("support_prompt_shown") is None

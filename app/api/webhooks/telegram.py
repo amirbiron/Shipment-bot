@@ -2211,26 +2211,11 @@ async def telegram_webhook(
 
         from app.domain.services.admin_notification_service import (
             AdminNotificationService,
-            _parse_csv_setting,
         )
 
-        sent = False
-        if settings.TELEGRAM_ADMIN_CHAT_ID:
-            sent = await AdminNotificationService._send_telegram_message(
-                settings.TELEGRAM_ADMIN_CHAT_ID, forward_text
-            )
-        if not sent:
-            tg_admins = _parse_csv_setting(
-                settings.TELEGRAM_ADMIN_CHAT_IDS
-            ) if settings.TELEGRAM_ADMIN_CHAT_IDS else []
-            for admin_id in tg_admins:
-                sent = await AdminNotificationService._send_telegram_message(
-                    admin_id, forward_text
-                ) or sent
-        if not sent and settings.WHATSAPP_ADMIN_GROUP_ID:
-            sent = await AdminNotificationService._send_whatsapp_admin_message(
-                settings.WHATSAPP_ADMIN_GROUP_ID, forward_text
-            )
+        sent = await AdminNotificationService.forward_support_message(
+            forward_text, user.id, prefer_telegram=True
+        )
 
         if sent:
             confirm_text = "✅ ההודעה נשלחה להנהלה. נחזור אליכם בהקדם!"
@@ -2238,10 +2223,6 @@ async def telegram_webhook(
             confirm_text = (
                 "⚠️ לא הצלחנו להעביר את ההודעה כרגע.\n"
                 "אנא נסו שוב מאוחר יותר."
-            )
-            logger.error(
-                "כשלון בהעברת פנייה להנהלה — אין יעד זמין",
-                extra_data={"user_id": user.id},
             )
 
         confirm_response = MessageResponse(

@@ -538,3 +538,106 @@ async def test_deposit_notification_default_platform_is_telegram(monkeypatch):
     assert "Telegram ID: 999" in sent_msg
     mock_fwd.assert_called_once()
 
+
+# ==================== forward_support_message ====================
+
+
+@pytest.mark.unit
+async def test_forward_support_message_prefer_telegram_sends_to_tg_first(monkeypatch):
+    """כשמעדיפים טלגרם — שולח לטלגרם ראשון ולא ממשיך לוואטסאפ"""
+    monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_ID", "tg-admin")
+    monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_IDS", "")
+    monkeypatch.setattr(settings, "WHATSAPP_ADMIN_GROUP_ID", "wa-group")
+    monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "")
+
+    tg_mock = AsyncMock(return_value=True)
+    wa_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr(AdminNotificationService, "_send_telegram_message", tg_mock)
+    monkeypatch.setattr(AdminNotificationService, "_send_whatsapp_admin_message", wa_mock)
+
+    result = await AdminNotificationService.forward_support_message(
+        "הודעת בדיקה", user_id=1, prefer_telegram=True
+    )
+
+    assert result is True
+    tg_mock.assert_called_once_with("tg-admin", "הודעת בדיקה")
+    wa_mock.assert_not_called()
+
+
+@pytest.mark.unit
+async def test_forward_support_message_prefer_whatsapp_sends_to_wa_first(monkeypatch):
+    """כשמעדיפים וואטסאפ — שולח לוואטסאפ ראשון ולא ממשיך לטלגרם"""
+    monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_ID", "tg-admin")
+    monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_IDS", "")
+    monkeypatch.setattr(settings, "WHATSAPP_ADMIN_GROUP_ID", "wa-group")
+    monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "")
+
+    tg_mock = AsyncMock(return_value=True)
+    wa_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr(AdminNotificationService, "_send_telegram_message", tg_mock)
+    monkeypatch.setattr(AdminNotificationService, "_send_whatsapp_admin_message", wa_mock)
+
+    result = await AdminNotificationService.forward_support_message(
+        "הודעת בדיקה", user_id=1, prefer_telegram=False
+    )
+
+    assert result is True
+    wa_mock.assert_called_once_with("wa-group", "הודעת בדיקה")
+    tg_mock.assert_not_called()
+
+
+@pytest.mark.unit
+async def test_forward_support_message_falls_back_on_failure(monkeypatch):
+    """אם טלגרם נכשל — עובר לוואטסאפ"""
+    monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_ID", "tg-admin")
+    monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_IDS", "")
+    monkeypatch.setattr(settings, "WHATSAPP_ADMIN_GROUP_ID", "wa-group")
+    monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "")
+
+    tg_mock = AsyncMock(return_value=False)
+    wa_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr(AdminNotificationService, "_send_telegram_message", tg_mock)
+    monkeypatch.setattr(AdminNotificationService, "_send_whatsapp_admin_message", wa_mock)
+
+    result = await AdminNotificationService.forward_support_message(
+        "הודעה", user_id=1, prefer_telegram=True
+    )
+
+    assert result is True
+    tg_mock.assert_called_once()
+    wa_mock.assert_called_once()
+
+
+@pytest.mark.unit
+async def test_forward_support_message_all_fail_returns_false(monkeypatch):
+    """כשכל הערוצים נכשלים — מחזיר False"""
+    monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_ID", "")
+    monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_IDS", "")
+    monkeypatch.setattr(settings, "WHATSAPP_ADMIN_GROUP_ID", "")
+    monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "")
+
+    result = await AdminNotificationService.forward_support_message(
+        "הודעה", user_id=1, prefer_telegram=True
+    )
+
+    assert result is False
+
+
+@pytest.mark.unit
+async def test_forward_support_message_csv_fallback_admins(monkeypatch):
+    """כש-primary נכשל — מנסה מנהלים מתוך CSV"""
+    monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_ID", "")
+    monkeypatch.setattr(settings, "TELEGRAM_ADMIN_CHAT_IDS", "admin1,admin2")
+    monkeypatch.setattr(settings, "WHATSAPP_ADMIN_GROUP_ID", "")
+    monkeypatch.setattr(settings, "WHATSAPP_ADMIN_NUMBERS", "")
+
+    tg_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr(AdminNotificationService, "_send_telegram_message", tg_mock)
+
+    result = await AdminNotificationService.forward_support_message(
+        "הודעה", user_id=1, prefer_telegram=True
+    )
+
+    assert result is True
+    assert tg_mock.call_count == 2
+

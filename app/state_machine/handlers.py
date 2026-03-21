@@ -1468,7 +1468,12 @@ class CourierStateHandler:
     ):
         """Handle support requests — העברת הודעה להנהלה"""
         if "חזרה" in message or "תפריט" in message:
-            return await self._handle_menu(user, "תפריט", context, None)
+            # ניקוי דגל תמיכה כדי שהכניסה הבאה תציג הנחיות מחדש
+            menu_response, menu_state, menu_ctx = await self._handle_menu(
+                user, "תפריט", context, None
+            )
+            menu_ctx["support_prompt_shown"] = None
+            return menu_response, menu_state, menu_ctx
 
         # כניסה ראשונה מהתפריט — הצגת הנחיות
         # משתמשים ב-context flag כדי להבדיל בין כניסה ראשונה לבין הודעת תמיכה
@@ -1486,9 +1491,7 @@ class CourierStateHandler:
         # העברת ההודעה להנהלה
         from app.domain.services.admin_notification_service import (
             AdminNotificationService,
-            _parse_csv_setting,
         )
-        from app.core.config import settings
         from app.core.validation import PhoneNumberValidator
 
         user_name = user.full_name or user.name or "לא צוין"
@@ -1503,42 +1506,9 @@ class CourierStateHandler:
             f"{message}"
         )
 
-        sent = False
-        if settings.TELEGRAM_ADMIN_CHAT_ID:
-            sent = await AdminNotificationService._send_telegram_message(
-                settings.TELEGRAM_ADMIN_CHAT_ID, forward_text
-            )
-        if not sent:
-            tg_admins = (
-                _parse_csv_setting(settings.TELEGRAM_ADMIN_CHAT_IDS)
-                if settings.TELEGRAM_ADMIN_CHAT_IDS
-                else []
-            )
-            for admin_id in tg_admins:
-                sent = (
-                    await AdminNotificationService._send_telegram_message(
-                        admin_id, forward_text
-                    )
-                    or sent
-                )
-        if not sent and settings.WHATSAPP_ADMIN_GROUP_ID:
-            sent = await AdminNotificationService._send_whatsapp_admin_message(
-                settings.WHATSAPP_ADMIN_GROUP_ID, forward_text
-            )
-        # fallback: שליחה למנהלים פרטיים בוואטסאפ
-        if not sent:
-            wa_admins = (
-                _parse_csv_setting(settings.WHATSAPP_ADMIN_NUMBERS)
-                if settings.WHATSAPP_ADMIN_NUMBERS
-                else []
-            )
-            for admin_phone in wa_admins:
-                sent = (
-                    await AdminNotificationService._send_whatsapp_admin_message(
-                        admin_phone, forward_text
-                    )
-                    or sent
-                )
+        sent = await AdminNotificationService.forward_support_message(
+            forward_text, user.id, prefer_telegram=True
+        )
 
         if sent:
             confirm_text = "✅ ההודעה נשלחה להנהלה. נחזור אליכם בהקדם!"
@@ -1546,10 +1516,6 @@ class CourierStateHandler:
             confirm_text = (
                 "⚠️ לא הצלחנו להעביר את ההודעה כרגע.\n"
                 "אנא נסו שוב מאוחר יותר."
-            )
-            logger.error(
-                "כשלון בהעברת פנייה להנהלה — אין יעד זמין",
-                extra_data={"user_id": user.id},
             )
 
         response = MessageResponse(
