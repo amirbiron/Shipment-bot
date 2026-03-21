@@ -3,8 +3,9 @@ Admin Notification Service - Notify admins about courier events
 """
 import base64
 import mimetypes
+from html import escape as html_escape
 import httpx
-from typing import Optional
+from typing import Any, Optional
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -19,6 +20,31 @@ logger = get_logger(__name__)
 def _parse_csv_setting(value: str) -> list[str]:
     """פירוק הגדרת CSV למערך ערכים נקיים"""
     return [v.strip() for v in value.split(",") if v.strip()]
+
+
+def _format_telegram_contact(
+    chat_id: str,
+    username: str | None = None,
+    *,
+    html: bool = False,
+) -> str:
+    """פורמט פרטי קשר לטלגרם — @username אם יש, אחרת לינק לצ'אט.
+
+    Args:
+        chat_id: מזהה הצ'אט/משתמש בטלגרם
+        username: שם משתמש בטלגרם (ללא @)
+        html: אם True — פורמט HTML לטלגרם, אחרת plain text לוואטסאפ
+    """
+    if username:
+        if html:
+            safe_user = html_escape(username)
+            safe_id = html_escape(str(chat_id))
+            return f'@{safe_user} (<a href="tg://user?id={safe_id}">פתח צ\'אט</a>)'
+        return f"@{username}"
+    if html:
+        safe_id = html_escape(str(chat_id))
+        return f'<a href="tg://user?id={safe_id}">פתח צ\'אט בטלגרם</a> (ID: {safe_id})'
+    return f"טלגרם ID: {chat_id}"
 
 
 class AdminNotificationService:
@@ -47,6 +73,7 @@ class AdminNotificationService:
         vehicle_category: Optional[str] = None,
         selfie_file_id: Optional[str] = None,
         vehicle_photo_file_id: Optional[str] = None,
+        telegram_username: Optional[str] = None,
     ) -> bool:
         """
         שליחת "כרטיס נהג" למנהלים בפרטי לאישור [שלב 2].
@@ -118,9 +145,11 @@ class AdminNotificationService:
             selfie_status = _status("selfie", "✗")
             vehicle_status = _status("vehicle", "✗")
 
-            # קישור יצירת קשר - לינק לפרופיל בטלגרם או מספר טלפון בוואטסאפ
+            # קישור יצירת קשר - @username בטלגרם או מספר טלפון בוואטסאפ
             if platform == "telegram":
-                wa_contact_line = f"טלגרם ID: {phone_or_chat_id}"
+                wa_contact_line = _format_telegram_contact(
+                    phone_or_chat_id, telegram_username, html=False
+                )
             else:
                 wa_contact_line = phone_or_chat_id
 
@@ -200,9 +229,11 @@ class AdminNotificationService:
             safe_service_area = TextSanitizer.sanitize_for_html(service_area)
             safe_vehicle_display = TextSanitizer.sanitize_for_html(vehicle_display)
 
-            # קישור יצירת קשר - לינק לפרופיל בטלגרם או מספר טלפון בוואטסאפ
+            # קישור יצירת קשר - @username בטלגרם או מספר טלפון בוואטסאפ
             if platform == "telegram":
-                contact_line = f'<a href="tg://user?id={phone_or_chat_id}">פתח צ\'אט בטלגרם</a> (ID: {phone_or_chat_id})'
+                contact_line = _format_telegram_contact(
+                    phone_or_chat_id, telegram_username, html=True
+                )
             else:
                 contact_line = TextSanitizer.sanitize_for_html(phone_or_chat_id)
 
@@ -284,6 +315,7 @@ class AdminNotificationService:
         phone_or_chat_id: str,
         selfie_file_id: Optional[str] = None,
         id_file_id: Optional[str] = None,
+        telegram_username: Optional[str] = None,
     ) -> bool:
         """
         שליחת כרטיס אימות נהג למנהלים בפרטי לאישור.
@@ -313,9 +345,8 @@ class AdminNotificationService:
             safe_dress = TextSanitizer.sanitize_for_html(dress_display)
 
             if platform == "telegram":
-                contact_line = (
-                    f'<a href="tg://user?id={phone_or_chat_id}">פתח צ\'אט בטלגרם</a>'
-                    f" (ID: {phone_or_chat_id})"
+                contact_line = _format_telegram_contact(
+                    phone_or_chat_id, telegram_username, html=True
                 )
             else:
                 contact_line = TextSanitizer.sanitize_for_html(phone_or_chat_id)
@@ -371,7 +402,9 @@ class AdminNotificationService:
 
         if wa_targets:
             if platform == "telegram":
-                wa_contact_line = f"טלגרם ID: {phone_or_chat_id}"
+                wa_contact_line = _format_telegram_contact(
+                    phone_or_chat_id, telegram_username, html=False
+                )
             else:
                 wa_contact_line = phone_or_chat_id
 
@@ -575,6 +608,7 @@ class AdminNotificationService:
         contact_identifier: str,
         screenshot_file_id: str,
         platform: str = "telegram",
+        telegram_username: Optional[str] = None,
     ) -> bool:
         """Notify admin about deposit request.
 
@@ -585,7 +619,9 @@ class AdminNotificationService:
 
         # תווית ליצירת קשר לפי פלטפורמה
         if platform == "telegram":
-            contact_line = f"Telegram ID: {contact_identifier}"
+            contact_line = _format_telegram_contact(
+                contact_identifier, telegram_username, html=True
+            )
         else:
             contact_line = f"WhatsApp: {contact_identifier}"
 
@@ -1155,3 +1191,97 @@ class AdminNotificationService:
                 exc_info=True,
             )
             return False
+
+    @staticmethod
+    async def forward_support_message(
+        forward_text: str,
+        user_id: int,
+        *,
+        prefer_telegram: bool = True,
+    ) -> bool:
+        """העברת הודעת תמיכה למנהלים עם fallback בין פלטפורמות.
+
+        סדר הניסיון: קבוצה ראשית בפלטפורמה מועדפת → אדמינים בודדים →
+        קבוצה ראשית בפלטפורמה שנייה → אדמינים בודדים.
+
+        Args:
+            forward_text: הטקסט המפורמט להעברה (plain text — ללא HTML escape)
+            user_id: מזהה המשתמש (ללוגים)
+            prefer_telegram: אם True — מתחיל מטלגרם, אחרת מוואטסאפ
+        """
+        import html as html_mod
+
+        # טלגרם דורש escape כי parse_mode=HTML; וואטסאפ מקבל plain text
+        tg_text = html_mod.escape(forward_text)
+
+        # שלבי שליחה לכל פלטפורמה: (קבוצה ראשית, רשימת אדמינים בודדים)
+        tg_steps = AdminNotificationService._build_platform_steps(
+            primary_target=settings.TELEGRAM_ADMIN_CHAT_ID,
+            csv_setting=settings.TELEGRAM_ADMIN_CHAT_IDS,
+            send_fn=AdminNotificationService._send_telegram_message,
+            forward_text=tg_text,
+        )
+        wa_steps = AdminNotificationService._build_platform_steps(
+            primary_target=settings.WHATSAPP_ADMIN_GROUP_ID,
+            csv_setting=settings.WHATSAPP_ADMIN_NUMBERS,
+            send_fn=AdminNotificationService._send_whatsapp_admin_message,
+            forward_text=forward_text,
+        )
+
+        if prefer_telegram:
+            steps = tg_steps + wa_steps
+        else:
+            steps = wa_steps + tg_steps
+
+        sent = False
+        for step in steps:
+            if not sent:
+                sent = await step()
+
+        if not sent:
+            logger.error(
+                "כשלון בהעברת פנייה להנהלה — אין יעד זמין",
+                extra_data={"user_id": user_id},
+            )
+
+        return sent
+
+    @staticmethod
+    def _build_platform_steps(
+        primary_target: str | None,
+        csv_setting: str | None,
+        send_fn: Any,
+        forward_text: str,
+    ) -> list[Any]:
+        """בניית רשימת שלבי שליחה לפלטפורמה אחת.
+
+        מחזיר רשימת coroutine factories: קבוצה ראשית ראשונה, אחריה
+        פונקציה שמנסה את כל האדמינים הבודדים מ-CSV.
+        """
+        steps: list[Any] = []
+
+        if primary_target:
+
+            async def _send_primary(
+                _target: str = primary_target,
+            ) -> bool:
+                return await send_fn(_target, forward_text)
+
+            steps.append(_send_primary)
+
+        csv_admins = (
+            _parse_csv_setting(csv_setting) if csv_setting else []
+        )
+        if csv_admins:
+
+            async def _send_csv_admins(
+                _admins: list[str] = csv_admins,
+            ) -> bool:
+                result = False
+                for admin_id in _admins:
+                    result = await send_fn(admin_id, forward_text) or result
+                return result
+
+            steps.append(_send_csv_admins)
+
+        return steps

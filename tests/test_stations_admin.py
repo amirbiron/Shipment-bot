@@ -55,10 +55,10 @@ class TestStationCreationRequiresAdmin:
         assert data["is_active"] is True
 
     @pytest.mark.asyncio
-    async def test_create_station_duplicate_owner_rejected(
+    async def test_create_station_duplicate_owner_allowed(
         self, test_client, user_factory, db_session,
     ):
-        """יצירת תחנה למשתמש שכבר יש לו — 400"""
+        """יצירת תחנה נוספת למשתמש שכבר יש לו — מותר (מולטי-תחנות)"""
         user = await user_factory(
             phone_number="+972501234567",
             role=UserRole.STATION_OWNER,
@@ -75,7 +75,9 @@ class TestStationCreationRequiresAdmin:
             json={"name": "תחנה נוספת", "owner_phone": "0501234567"},
             headers={"X-Admin-API-Key": _TEST_ADMIN_KEY},
         )
-        assert response.status_code == 400
+        assert response.status_code == 200
+        data = response.json()
+        assert data["name"] == "תחנה נוספת"
 
 
 class TestListStations:

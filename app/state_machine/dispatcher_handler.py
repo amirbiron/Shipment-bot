@@ -47,6 +47,13 @@ class DispatcherStateHandler:
         self.station_service = StationService(db)
         self.delivery_service = DeliveryService(db)
 
+    # מיפוי prefix של state → שם זרימה בעברית
+    _FLOW_NAMES: dict[str, str] = {
+        "ADD_SHIPMENT": "הוספת משלוח",
+        "MANUAL_CHARGE": "חיוב ידני",
+        "POST_RIDE": "פרסום נסיעה",
+    }
+
     # מפתחות קונטקסט של הוספת משלוח — מנוקים בחזרה ל-MENU
     _SHIPMENT_CONTEXT_KEYS = {
         "pickup_city",
@@ -91,6 +98,72 @@ class DispatcherStateHandler:
             return False
         return True
 
+    def _is_known_multi_step_flow_state(self, state: str) -> bool:
+        """בודק אם המצב שייך לזרימה רב-שלבית מוכרת (עם handler רשום).
+
+        שימוש: יירוט כפתורי תפריט — רק ב-states מוכרים עם handler,
+        לא ב-states לא מוכרים שצריכים ניתוב ל-_handle_unknown.
+        """
+        if not self._is_multi_step_flow_state(state):
+            return False
+        # בדיקה שיש handler רשום — states לא מוכרים ילכו ל-_handle_unknown
+        handlers = {
+            DispatcherState.ADD_SHIPMENT_PICKUP_CITY.value,
+            DispatcherState.ADD_SHIPMENT_PICKUP_STREET.value,
+            DispatcherState.ADD_SHIPMENT_PICKUP_NUMBER.value,
+            DispatcherState.ADD_SHIPMENT_DROPOFF_CITY.value,
+            DispatcherState.ADD_SHIPMENT_DROPOFF_STREET.value,
+            DispatcherState.ADD_SHIPMENT_DROPOFF_NUMBER.value,
+            DispatcherState.ADD_SHIPMENT_DROPOFF_APARTMENT.value,
+            DispatcherState.ADD_SHIPMENT_DESCRIPTION.value,
+            DispatcherState.ADD_SHIPMENT_FEE.value,
+            DispatcherState.ADD_SHIPMENT_CONFIRM.value,
+            DispatcherState.MANUAL_CHARGE_DRIVER_NAME.value,
+            DispatcherState.MANUAL_CHARGE_AMOUNT.value,
+            DispatcherState.MANUAL_CHARGE_DESCRIPTION.value,
+            DispatcherState.MANUAL_CHARGE_CONFIRM.value,
+            DispatcherState.POST_RIDE_ORIGIN.value,
+            DispatcherState.POST_RIDE_DESTINATION.value,
+            DispatcherState.POST_RIDE_SEATS.value,
+            DispatcherState.POST_RIDE_PRICE.value,
+            DispatcherState.POST_RIDE_CONFIRM.value,
+        }
+        return state in handlers
+
+    def _get_current_flow_name(self, state: str) -> str:
+        """מחזיר את שם הזרימה הנוכחית בעברית לפי ה-state"""
+        if not state.startswith("DISPATCHER."):
+            return "הפעולה הנוכחית"
+        suffix = state[len("DISPATCHER."):]
+        for prefix, name in self._FLOW_NAMES.items():
+            if suffix.startswith(prefix):
+                return name
+        return "הפעולה הנוכחית"
+
+    # טקסטים מלאים של כפתורי התפריט — להתאמה מדויקת בלבד
+    _MENU_BUTTON_TEXTS: dict[str, tuple[str, str]] = {
+        "➕ הוספת משלוח": ("add_shipment", "הוספת משלוח"),
+        "📦 משלוחים פעילים": ("view_active", "צפייה במשלוחים פעילים"),
+        "📋 היסטוריית משלוחים": ("view_history", "צפייה בהיסטוריה"),
+        "💳 חיוב ידני": ("manual_charge", "חיוב ידני"),
+        "🚗 פרסום נסיעה": ("post_ride", "פרסום נסיעה"),
+        "🛣 נסיעות פעילות": ("view_rides", "צפייה בנסיעות פעילות"),
+        # הערה: "🔙 חזרה לתפריט ראשי" לא כלול כאן בכוונה —
+        # כפתור זה מטופל בשכבת ה-webhook (telegram.py) שמנתבת לתפריט התפקיד הנכון
+    }
+
+    def _detect_menu_action(self, message: str) -> tuple[str, str] | None:
+        """מזהה אם ההודעה תואמת כפתור תפריט.
+
+        משתמש בהתאמה מדויקת לטקסט הכפתור כדי למנוע יירוט של קלט חופשי.
+        מחזיר (מזהה_פעולה, שם_פעולה) או None.
+        """
+        msg = message.strip()
+        result = self._MENU_BUTTON_TEXTS.get(msg)
+        if result is not None:
+            return result
+        return None
+
     async def handle_message(
         self, user: User, message: str, photo_file_id: str = None
     ) -> Tuple[MessageResponse, str]:
@@ -98,6 +171,68 @@ class DispatcherStateHandler:
         platform = self.platform or user.platform
         current_state = await self.state_manager.get_current_state(user.id, platform)
         context = await self.state_manager.get_context(user.id, platform)
+
+        # טיפול בתשובה לשאלת ביטול זרימה
+        pending_action = context.get("pending_menu_action")
+        if pending_action and self._is_known_multi_step_flow_state(current_state):
+            msg = message.strip()
+            if msg.startswith("כן,"):
+                # המשתמש אישר ביטול — חזרה לתפריט ושליחת הפעולה החדשה
+                # ניקוי context של הזרימה + pending_menu_action
+                context_update = {"pending_menu_action": None}
+                response, new_state, ctx = await self._show_menu(user, context)
+                context_update.update(ctx)
+                # ננקה את הקונטקסט של הזרימה הנוכחית
+                keys_to_clean = (
+                    self._SHIPMENT_CONTEXT_KEYS
+                    | self._MANUAL_CHARGE_CONTEXT_KEYS
+                    | self._POST_RIDE_CONTEXT_KEYS
+                )
+                clean_context = {
+                    k: v for k, v in context.items() if k not in keys_to_clean
+                }
+                clean_context.update(context_update)
+                await self.state_manager.force_state(
+                    user.id, platform, DispatcherState.MENU.value, clean_context
+                )
+                # הפעלת הפעולה החדשה ישירות דרך _handle_menu
+                return await self.handle_message(
+                    user, pending_action, photo_file_id
+                )
+
+            # המשתמש בחר להמשיך בזרימה — ניקוי pending
+            await self.state_manager.update_context(
+                user.id, platform, "pending_menu_action", None
+            )
+            # לחיצה על כפתור "לא, אמשיך" — הודעה ידידותית + הנחיית השלב
+            if msg.startswith("לא,"):
+                flow_name = self._get_current_flow_name(current_state)
+                response = MessageResponse(
+                    f"👍 ממשיכים ב{flow_name}.\n\n"
+                    "אנא הזן את הנתון המבוקש:"
+                )
+                return response, current_state
+            # טקסט חופשי — המשתמש הזין נתון בפועל, ממשיכים ל-handler למטה
+
+        # זיהוי לחיצה על כפתור תפריט בזמן זרימה רב-שלבית
+        if self._is_known_multi_step_flow_state(current_state):
+            menu_action = self._detect_menu_action(message)
+            if menu_action is not None:
+                action_id, action_name = menu_action
+                flow_name = self._get_current_flow_name(current_state)
+                # שמירת הפעולה המבוקשת בקונטקסט
+                await self.state_manager.update_context(
+                    user.id, platform, "pending_menu_action", message.strip()
+                )
+                response = MessageResponse(
+                    f"נראה שניסית להתחיל פעולה חדשה ({action_name}).\n"
+                    f"האם לבטל את {flow_name}?",
+                    keyboard=[
+                        [f"לא, אמשיך ב{flow_name}"],
+                        [f"כן, בטל את {flow_name}"],
+                    ],
+                )
+                return response, current_state
 
         handler = self._get_handler(current_state)
         response, new_state, context_update = await handler(user, message, context)
@@ -110,6 +245,7 @@ class DispatcherStateHandler:
                 self._SHIPMENT_CONTEXT_KEYS
                 | self._MANUAL_CHARGE_CONTEXT_KEYS
                 | self._POST_RIDE_CONTEXT_KEYS
+                | {"pending_menu_action"}
             )
             clean_context = {k: v for k, v in context.items() if k not in keys_to_clean}
             if context_update:
@@ -956,25 +1092,68 @@ class DispatcherStateHandler:
         }
 
         text = "🛣 <b>נסיעות פעילות</b>\n\n"
+        keyboard: list[list[str]] = []
         for ride in rides[:10]:
             status_text = status_map.get(ride.status, ride.status)
             text += (
                 f"#{ride.id} | {status_text}\n"
-                f"  📍 {escape(ride.origin_city)} → {escape(ride.destination_city)}\n"
+                f"  📍 מ-{escape(ride.origin_city)} ל-{escape(ride.destination_city)}\n"
                 f"  👥 {ride.seats} מק' | 💰 {ride.price:.0f} ₪\n\n"
             )
+            # כפתור ביטול רק לנסיעות פתוחות
+            if ride.status == DispatcherRideStatus.OPEN.value:
+                keyboard.append(
+                    [f"❌ ביטול #{ride.id}"]
+                )
 
-        response = MessageResponse(text, keyboard=[["🔙 חזרה לתפריט סדרן"]])
+        # הצגת הנחיית ביטול רק אם יש נסיעות פתוחות עם כפתור ביטול
+        if any(r.status == DispatcherRideStatus.OPEN.value for r in rides[:10]):
+            text += "לביטול נסיעה, לחצו על הכפתור המתאים."
+        keyboard.append(["🔙 חזרה לתפריט סדרן"])
+
+        response = MessageResponse(text, keyboard=keyboard)
         return response, DispatcherState.VIEW_POSTED_RIDES.value, {}
 
     async def _handle_view_posted_rides(
         self, user: User, message: str, context: dict
     ) -> Tuple[MessageResponse, str, dict]:
-        """צפייה בנסיעות שפרסם הסדרן"""
+        """צפייה בנסיעות שפרסם הסדרן + ביטול נסיעה"""
         if "חזרה" in message:
             return await self._show_menu(user, context)
 
+        # ביטול נסיעה — כפתור "❌ ביטול #123"
+        cancel_match = re.match(r"❌\s*ביטול\s*#(\d+)", message)
+        if cancel_match:
+            ride_id = int(cancel_match.group(1))
+            return await self._cancel_ride(user, ride_id, context)
+
         return await self._show_posted_rides(user, context)
+
+    async def _cancel_ride(
+        self, user: User, ride_id: int, context: dict
+    ) -> Tuple[MessageResponse, str, dict]:
+        """ביטול נסיעה פעילה — ביטול אטומי בלבד (ללא pre-read שגורם ל-stale identity map)"""
+        # cancel_dispatcher_ride בודק קיום + סטטוס + בעלות אטומית אחרי נעילת שורה
+        cancelled = await self.station_service.cancel_dispatcher_ride(
+            ride_id, station_id=self.station_id
+        )
+        if not cancelled:
+            response = MessageResponse(
+                "❌ לא ניתן לבטל את הנסיעה — ייתכן שכבר נתפסה או בוטלה.",
+                keyboard=[["🔙 חזרה לתפריט סדרן"]],
+            )
+            return response, DispatcherState.VIEW_POSTED_RIDES.value, {}
+
+        logger.info(
+            "נסיעה בוטלה ע\"י סדרן",
+            extra_data={"ride_id": ride_id, "user_id": user.id},
+        )
+
+        response = MessageResponse(
+            f"✅ נסיעה #{ride_id} בוטלה בהצלחה.",
+            keyboard=[["🔙 חזרה לתפריט סדרן"]],
+        )
+        return response, DispatcherState.VIEW_POSTED_RIDES.value, {}
 
     # ==================== Unknown ====================
 

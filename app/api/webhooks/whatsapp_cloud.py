@@ -27,6 +27,7 @@ from app.api.webhooks.whatsapp import (
     send_whatsapp_message,
     send_welcome_message,
     _route_to_role_menu_wa,
+    _reset_role_state_wa,
     _sender_fallback_wa,
     handle_admin_private_command,
     _is_whatsapp_admin_any,
@@ -708,33 +709,22 @@ async def _route_message_to_handler(
             )
             return response.text, new_state
 
+        # plain text — ה-escape לטלגרם מתבצע ב-forward_support_message
+        # מספר טלפון מלא — כדי שהאדמין יוכל ליצור קשר חזרה
         user_name = user.full_name or user.name or "לא צוין"
         forward_text = (
             f"📨 פנייה מ-{user_name}\n"
-            f"({PhoneNumberValidator.mask(reply_to)})\n\n"
+            f"({reply_to})\n\n"
             f"{text or '(הודעה ריקה)'}"
         )
 
         from app.domain.services.admin_notification_service import (
             AdminNotificationService,
-            _parse_csv_setting,
         )
 
-        sent = False
-        if settings.WHATSAPP_ADMIN_GROUP_ID:
-            sent = await AdminNotificationService._send_whatsapp_admin_message(
-                settings.WHATSAPP_ADMIN_GROUP_ID, forward_text
-            )
-        if not sent:
-            wa_admins = _parse_csv_setting(settings.WHATSAPP_ADMIN_NUMBERS)
-            for admin_phone in wa_admins:
-                sent = await AdminNotificationService._send_whatsapp_admin_message(
-                    admin_phone, forward_text
-                ) or sent
-        if not sent and settings.TELEGRAM_ADMIN_CHAT_ID:
-            sent = await AdminNotificationService._send_telegram_message(
-                settings.TELEGRAM_ADMIN_CHAT_ID, forward_text
-            )
+        sent = await AdminNotificationService.forward_support_message(
+            forward_text, user.id, prefer_telegram=False
+        )
 
         if sent:
             confirm_text = "✅ ההודעה נשלחה להנהלה. נחזור אליכם בהקדם!"
@@ -743,13 +733,14 @@ async def _route_message_to_handler(
                 "⚠️ לא הצלחנו להעביר את ההודעה כרגע.\n"
                 "אנא נסו שוב מאוחר יותר."
             )
-            logger.error(
-                "כשלון בהעברת פנייה להנהלה — אין יעד זמין",
-                extra_data={"user_id": user.id},
-            )
 
-        background_tasks.add_task(send_whatsapp_message, reply_to, confirm_text)
-        return confirm_text, None
+        background_tasks.add_task(
+            send_whatsapp_message, reply_to, confirm_text,
+            [["🔙 חזרה לתפריט"]],
+        )
+        # חזרה לתפריט המתאים לתפקיד המשתמש — רק איפוס state
+        _menu_state = await _reset_role_state_wa(user, db, state_manager)
+        return confirm_text, _menu_state
 
     # בעל תחנה
     if user.role == UserRole.STATION_OWNER:

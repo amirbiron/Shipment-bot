@@ -644,6 +644,31 @@ async def run_migration_014(conn: AsyncConnection) -> None:
     """))
 
 
+async def run_migration_015(conn: AsyncConnection) -> None:
+    """מיגרציה 015 — הוספת עמודות תפוגה למשלוחים + username לטלגרם.
+
+    שינויים:
+    - deliveries.expires_at — זמן תפוגה לביטול אוטומטי של משלוחים שלא נתפסו
+    - deliveries.expiry_warning_sent — האם נשלחה התראה לפני ביטול
+    - users.telegram_username — @username בטלגרם לזיהוי בהודעות אדמין
+    """
+    await conn.execute(text("""
+        ALTER TABLE deliveries
+            ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP,
+            ADD COLUMN IF NOT EXISTS expiry_warning_sent TIMESTAMP;
+    """))
+
+    await conn.execute(text("""
+        CREATE INDEX IF NOT EXISTS ix_deliveries_expires_at
+        ON deliveries(expires_at);
+    """))
+
+    await conn.execute(text("""
+        ALTER TABLE users
+            ADD COLUMN IF NOT EXISTS telegram_username VARCHAR(100);
+    """))
+
+
 async def run_all_migrations(conn: AsyncConnection) -> None:
     """הרצת כל המיגרציות ברצף (ללא ALTER TYPE — ראה add_enum_values)."""
     logger.info("Running migration 001...")
@@ -674,3 +699,5 @@ async def run_all_migrations(conn: AsyncConnection) -> None:
     await run_migration_013(conn)
     logger.info("Running migration 014...")
     await run_migration_014(conn)
+    logger.info("Running migration 015...")
+    await run_migration_015(conn)

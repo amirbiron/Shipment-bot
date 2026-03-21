@@ -722,7 +722,7 @@ class TestDriverSearchHandler:
 
         # צעד 2: בחירת חיפוש למחיקה
         response, new_state = await handler.handle_message(
-            user, f"🗑 1. 📍 → ירושלים"
+            user, f"🗑 1. 📍 ירושלים"
         )
         assert "נמחק" in response.text
 

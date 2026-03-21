@@ -58,3 +58,6 @@ export const telegramLoginSelectStation = (
   apiClient
     .post(`/auth/telegram-login-select-station?station_id=${stationId}`, authData)
     .then((r) => r.data);
+
+export const switchStation = (stationId: number): Promise<TokenResponse> =>
+  apiClient.post("/auth/switch-station", { station_id: stationId }).then((r) => r.data);
