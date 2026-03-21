@@ -5,6 +5,7 @@ export type { ActionResponse };
 
 export interface TokenResponse {
   access_token: string;
+  refresh_token: string;
   token_type: string;
   station_id: number;
   station_name: string;

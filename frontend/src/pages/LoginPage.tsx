@@ -109,7 +109,7 @@ export default function LoginPage() {
     setLoading(true);
     try {
       const result = await verifyOtp(phone, otp);
-      login(result.access_token, result.station_id, result.station_name);
+      login(result.access_token, result.refresh_token, result.station_id, result.station_name);
       navigate("/", { replace: true });
     } catch (err) {
       if (axios.isAxiosError(err)) {
@@ -152,16 +152,16 @@ export default function LoginPage() {
             }>;
             if (stations.length === 1) {
               const finalResult = await telegramLoginSelectStation(data, stations[0].station_id);
-              login(finalResult.access_token, finalResult.station_id, finalResult.station_name);
+              login(finalResult.access_token, finalResult.refresh_token, finalResult.station_id, finalResult.station_name);
               navigate("/", { replace: true });
             } else {
               // TODO: הצגת בורר תחנות — כרגע בוחר את הראשונה
               const finalResult = await telegramLoginSelectStation(data, stations[0].station_id);
-              login(finalResult.access_token, finalResult.station_id, finalResult.station_name);
+              login(finalResult.access_token, finalResult.refresh_token, finalResult.station_id, finalResult.station_name);
               navigate("/", { replace: true });
             }
           } else {
-            login(result.access_token, result.station_id, result.station_name);
+            login(result.access_token, result.refresh_token, result.station_id, result.station_name);
             navigate("/", { replace: true });
           }
         } catch (err) {

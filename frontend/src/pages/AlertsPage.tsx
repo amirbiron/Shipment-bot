@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatDateTime } from "@/lib/format";
+import StatusBadge from "@/components/shared/StatusBadge";
 import {
   Bell,
   BellRing,
@@ -42,13 +43,35 @@ const ALERT_TYPE_CONFIG: Record<
   uncollected_shipment: { icon: Clock, variant: "warning", label: "לא נאסף" },
 };
 
-function AlertCard({ alert }: { alert: AlertItem }) {
+// מיפוי סוג התראה לסטטוס משלוח — לחישוב הסטטוס העדכני
+const ALERT_TYPE_TO_STATUS: Record<string, string> = {
+  delivery_created: "open",
+  delivery_captured: "captured",
+  delivery_delivered: "delivered",
+  delivery_cancelled: "cancelled",
+};
+
+// סדר עדיפות סטטוסים — ערך גבוה יותר = סטטוס מתקדם יותר
+const STATUS_PRIORITY: Record<string, number> = {
+  open: 0,
+  pending_approval: 1,
+  captured: 2,
+  in_progress: 3,
+  delivered: 4,
+  cancelled: 5,
+};
+
+function AlertCard({ alert, currentStatus }: { alert: AlertItem; currentStatus?: string }) {
   const config = ALERT_TYPE_CONFIG[alert.type] || {
     icon: Bell,
     variant: "secondary" as const,
     label: alert.type,
   };
   const Icon = config.icon;
+
+  // הצגת סטטוס עדכני רק אם שונה מהסטטוס שההתראה מייצגת
+  const alertImpliedStatus = ALERT_TYPE_TO_STATUS[alert.type];
+  const showCurrentStatus = currentStatus && alertImpliedStatus && currentStatus !== alertImpliedStatus;
 
   return (
     <div className="flex items-start gap-3 p-3 rounded-lg border border-border bg-white">
@@ -58,6 +81,7 @@ function AlertCard({ alert }: { alert: AlertItem }) {
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
           <Badge variant={config.variant}>{config.label}</Badge>
+          {showCurrentStatus && <StatusBadge status={currentStatus} />}
           <span className="text-xs text-muted-foreground">
             {formatDateTime(alert.timestamp)}
           </span>
@@ -159,11 +183,14 @@ export default function AlertsPage() {
   };
 
   // שילוב התראות חיות + היסטוריה (מנקה כפילויות לפי timestamp+type)
-  const allAlerts: AlertItem[] = (() => {
+  // + חישוב סטטוס עדכני לכל משלוח
+  const { allAlerts, deliveryStatusMap } = (() => {
     const historyAlerts = history?.alerts ?? [];
     const combined = [...liveAlerts, ...historyAlerts];
     const seen = new Set<string>();
-    return combined
+    const statusMap = new Map<number, string>();
+
+    const deduped = combined
       .filter((a) => {
         const key = `${a.station_id}-${a.type}-${a.timestamp}`;
         if (seen.has(key)) return false;
@@ -171,6 +198,20 @@ export default function AlertsPage() {
         return true;
       })
       .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+    // חישוב הסטטוס העדכני ביותר לכל משלוח
+    for (const alert of deduped) {
+      const deliveryId = alert.data?.delivery_id as number | undefined;
+      const status = ALERT_TYPE_TO_STATUS[alert.type];
+      if (deliveryId == null || !status) continue;
+
+      const existing = statusMap.get(deliveryId);
+      if (!existing || (STATUS_PRIORITY[status] ?? 0) > (STATUS_PRIORITY[existing] ?? 0)) {
+        statusMap.set(deliveryId, status);
+      }
+    }
+
+    return { allAlerts: deduped, deliveryStatusMap: statusMap };
   })();
 
   return (
@@ -269,9 +310,17 @@ export default function AlertsPage() {
             </div>
           ) : (
             <div className="space-y-2 max-h-[600px] overflow-y-auto">
-              {allAlerts.map((alert, i) => (
-                <AlertCard key={`${alert.type}-${alert.timestamp}-${i}`} alert={alert} />
-              ))}
+              {allAlerts.map((alert, i) => {
+                const deliveryId = alert.data?.delivery_id as number | undefined;
+                const currentStatus = deliveryId != null ? deliveryStatusMap.get(deliveryId) : undefined;
+                return (
+                  <AlertCard
+                    key={`${alert.type}-${alert.timestamp}-${i}`}
+                    alert={alert}
+                    currentStatus={currentStatus}
+                  />
+                );
+              })}
             </div>
           )}
         </CardContent>
