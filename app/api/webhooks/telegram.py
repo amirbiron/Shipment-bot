@@ -1320,6 +1320,23 @@ from app.api.webhooks._admin_context import (
 )
 
 
+def _is_telegram_admin_id(telegram_user_id: str | None) -> bool:
+    """בדיקה אם telegram_user_id שייך לאדמין — לפי הגדרות TELEGRAM_ADMIN_CHAT_IDS.
+
+    משמש כ-fallback כשה-admin context נמחק ואין דרך אחרת לזהות אדמין.
+    """
+    if not telegram_user_id:
+        return False
+    admin_ids: set[str] = {
+        cid.strip()
+        for cid in settings.TELEGRAM_ADMIN_CHAT_IDS.split(",")
+        if cid.strip()
+    }
+    if settings.TELEGRAM_ADMIN_CHAT_ID:
+        admin_ids.add(settings.TELEGRAM_ADMIN_CHAT_ID)
+    return telegram_user_id in admin_ids
+
+
 @router.post(
     "/webhook",
     summary="Webhook - Telegram (קבלת עדכונים נכנסים)",
@@ -1941,7 +1958,18 @@ async def telegram_webhook(
             if user.approval_status != ApprovalStatus.APPROVED:
                 # בדיקה: אם אדמין מחליף תפקיד — מחזירים לתפריט אדמין
                 _start_ctx = await state_manager.get_context(user.id, "telegram")
-                if _start_ctx.get("original_role") == "admin":
+                _is_admin_ctx = _start_ctx.get("original_role") == "admin"
+                # fallback: context אבד — מזהים לפי TELEGRAM_ADMIN_CHAT_IDS
+                _is_admin_by_id = (
+                    not _is_admin_ctx
+                    and _is_telegram_admin_id(str(user.id))
+                )
+                if _is_admin_ctx or _is_admin_by_id:
+                    if _is_admin_by_id:
+                        logger.info(
+                            "שחזור אדמין ב-/start לפי TELEGRAM_ADMIN_CHAT_IDS — context אבד",
+                            extra_data={"user_id": user.id},
+                        )
                     response, new_state = await _restore_admin_role_and_route(
                         user, db, state_manager, "telegram"
                     )
@@ -1971,7 +1999,17 @@ async def telegram_webhook(
         ):
             # בדיקה: אם אדמין מחליף תפקיד — מחזירים לתפריט אדמין
             _hash_ctx = await state_manager.get_context(user.id, "telegram")
-            if _hash_ctx.get("original_role") == "admin":
+            _is_admin_ctx = _hash_ctx.get("original_role") == "admin"
+            # fallback: context אבד — מזהים לפי TELEGRAM_ADMIN_CHAT_IDS
+            _is_admin_by_id = not _is_admin_ctx and _is_telegram_admin_id(
+                str(user.id)
+            )
+            if _is_admin_ctx or _is_admin_by_id:
+                if _is_admin_by_id:
+                    logger.info(
+                        "שחזור אדמין ב-# לפי TELEGRAM_ADMIN_CHAT_IDS — context אבד",
+                        extra_data={"user_id": user.id},
+                    )
                 response, new_state = await _restore_admin_role_and_route(
                     user, db, state_manager, "telegram"
                 )
@@ -2017,7 +2055,19 @@ async def telegram_webhook(
     # חזרה לאדמין — אדמין שהחליף תפקיד רוצה לחזור
     if "חזרה לאדמין" in text:
         context = await state_manager.get_context(user.id, "telegram")
-        if context.get("original_role") == "admin":
+        _is_admin_ctx = context.get("original_role") == "admin"
+        # fallback: אם ה-context נמחק, מזהים אדמין לפי TELEGRAM_ADMIN_CHAT_IDS
+        _is_admin_by_id = (
+            not _is_admin_ctx
+            and user.role != UserRole.ADMIN
+            and _is_telegram_admin_id(str(user.id))
+        )
+        if _is_admin_ctx or _is_admin_by_id:
+            if _is_admin_by_id:
+                logger.info(
+                    "שחזור אדמין לפי TELEGRAM_ADMIN_CHAT_IDS — context אבד",
+                    extra_data={"user_id": user.id},
+                )
             response, new_state = await _restore_admin_role_and_route(
                 user, db, state_manager, "telegram"
             )
@@ -2242,7 +2292,10 @@ async def telegram_webhook(
                         user.id, state_manager, new_state,
                         _dm_admin_keys, "telegram",
                     )
-                if _dm_admin_keys and _dm_admin_keys.get("original_role") == "admin":
+                if (
+                    (_dm_admin_keys and _dm_admin_keys.get("original_role") == "admin")
+                    or _is_telegram_admin_id(str(user.id))
+                ):
                     _inject_admin_return_button(response)
                 _queue_response_send(background_tasks, send_chat_id, response)
                 return {"ok": True, "new_state": new_state}
@@ -2294,7 +2347,10 @@ async def telegram_webhook(
             )
             # הוספת כפתור "חזרה לאדמין" אם נדרש
             _disp_ctx = await state_manager.get_context(user.id, "telegram")
-            if _disp_ctx.get("original_role") == "admin":
+            if (
+                _disp_ctx.get("original_role") == "admin"
+                or _is_telegram_admin_id(str(user.id))
+            ):
                 _inject_admin_return_button(response)
             _queue_response_send(background_tasks, send_chat_id, response)
             return {"ok": True, "new_state": new_state}
@@ -2330,7 +2386,10 @@ async def telegram_webhook(
 
         # הוספת כפתור "חזרה לאדמין" אם נדרש
         _courier_ctx = await state_manager.get_context(user.id, "telegram")
-        if _courier_ctx.get("original_role") == "admin":
+        if (
+            _courier_ctx.get("original_role") == "admin"
+            or _is_telegram_admin_id(str(user.id))
+        ):
             _inject_admin_return_button(response)
         _queue_response_send(background_tasks, send_chat_id, response)
         return {"ok": True, "new_state": new_state}
@@ -2369,7 +2428,10 @@ async def telegram_webhook(
             _inject_admin_return_button(response)
         else:
             _driver_ctx = await state_manager.get_context(user.id, "telegram")
-            if _driver_ctx.get("original_role") == "admin":
+            if (
+                _driver_ctx.get("original_role") == "admin"
+                or _is_telegram_admin_id(str(user.id))
+            ):
                 _inject_admin_return_button(response)
         _queue_response_send(background_tasks, send_chat_id, response)
         return {"ok": True, "new_state": new_state}
@@ -2420,7 +2482,10 @@ async def telegram_webhook(
             )
             # הוספת כפתור "חזרה לאדמין" אם נדרש
             _sender_ctx = await state_manager.get_context(user.id, "telegram")
-            if _sender_ctx.get("original_role") == "admin":
+            if (
+                _sender_ctx.get("original_role") == "admin"
+                or _is_telegram_admin_id(str(user.id))
+            ):
                 _inject_admin_return_button(response)
             _queue_response_send(background_tasks, send_chat_id, response)
             return {"ok": True, "new_state": new_state}
@@ -2441,7 +2506,10 @@ async def telegram_webhook(
             )
             # הוספת כפתור "חזרה לאדמין" אם נדרש
             _sender_ctx2 = await state_manager.get_context(user.id, "telegram")
-            if _sender_ctx2.get("original_role") == "admin":
+            if (
+                _sender_ctx2.get("original_role") == "admin"
+                or _is_telegram_admin_id(str(user.id))
+            ):
                 _inject_admin_return_button(response)
             _queue_response_send(background_tasks, send_chat_id, response)
             return {"ok": True, "new_state": new_state}
