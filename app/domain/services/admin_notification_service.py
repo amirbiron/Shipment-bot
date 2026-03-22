@@ -735,7 +735,7 @@ class AdminNotificationService:
         # שליחה לקבוצת ניהול בטלגרם (ללא כפתורים — בקבוצה כפתורי inline לא עובדים)
         if settings.TELEGRAM_ADMIN_CHAT_ID and settings.TELEGRAM_ADMIN_CHAT_ID not in tg_admin_ids:
             group_msg = (
-                message + f"\n\n✅ לאישור: <code>אשר_מנוי {user_id} {months}</code>"
+                message + "\n\n✅ לאישור — לחצו על כפתור האישור בהודעה הפרטית של הבוט."
             )
             group_sent = await AdminNotificationService._send_telegram_message(
                 settings.TELEGRAM_ADMIN_CHAT_ID, group_msg
