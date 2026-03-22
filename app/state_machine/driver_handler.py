@@ -1921,40 +1921,17 @@ class DriverStateHandler:
 
     @staticmethod
     def _parse_subscription_choice(text: str) -> int | None:
-        """
-        מיפוי בחירת חבילה לחודשים — מעוגן לפורמט הכפתורים בלבד.
-
-        מתאים רק לטקסטים של כפתורים מוגדרים ("📦 חודש אחד", "📦 חודשיים" וכו').
-        טקסט חופשי שמכיל ספרות (כמו "16") לא יתפרש בטעות.
-        """
-        # התאמה מדויקת לטקסט כפתור
-        _CHOICE_MAP = {
-            "📦 3 חודשים": 3,
-            "📦 חודשיים": 2,
-            "📦 חודש אחד": 1,
-        }
-        for label, months in _CHOICE_MAP.items():
-            if text == label:
-                return months
-
-        # fallback — מילות מפתח ייחודיות (לא ספרות בודדות)
-        if "3 חודשים" in text:
-            return 3
-        if "חודשיים" in text:
-            return 2
-        if "חודש אחד" in text:
-            return 1
-        return None
+        """מיפוי בחירת חבילה לחודשים — מעוגן לפורמט הכפתורים."""
+        from app.domain.services.driver_subscription_service import (
+            parse_subscription_choice,
+        )
+        return parse_subscription_choice(text)
 
     @staticmethod
     def _months_to_label(months: int) -> str:
         """מיפוי מספר חודשים לתווית"""
-        labels = {
-            1: "חודש אחד",
-            2: "חודשיים",
-            3: "3 חודשים",
-        }
-        return labels.get(months, f"{months} חודשים")
+        from app.domain.services.driver_subscription_service import months_to_label
+        return months_to_label(months)
 
     # ==================== fallback ====================
 

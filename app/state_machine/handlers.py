@@ -1438,7 +1438,7 @@ class CourierStateHandler:
             months=months,
             months_label=months_label,
             screenshot_file_id=photo_file_id,
-            platform="telegram",
+            platform=self.platform,
             role="courier",
         )
 
@@ -1457,107 +1457,49 @@ class CourierStateHandler:
     @staticmethod
     def _parse_courier_subscription_choice(text: str) -> int | None:
         """מיפוי בחירת חבילת מנוי לשליח"""
-        _CHOICE_MAP = {
-            "📦 3 חודשים": 3,
-            "📦 חודשיים": 2,
-            "📦 חודש אחד": 1,
-        }
-        for label, months in _CHOICE_MAP.items():
-            if text == label:
-                return months
-
-        if "3 חודשים" in text:
-            return 3
-        if "חודשיים" in text:
-            return 2
-        if "חודש אחד" in text:
-            return 1
-        return None
+        from app.domain.services.driver_subscription_service import (
+            parse_subscription_choice,
+        )
+        return parse_subscription_choice(text)
 
     @staticmethod
     def _courier_months_to_label(months: int) -> str:
         """מיפוי מספר חודשים לתווית"""
-        labels = {
-            1: "חודש אחד",
-            2: "חודשיים",
-            3: "3 חודשים",
-        }
-        return labels.get(months, f"{months} חודשים")
+        from app.domain.services.driver_subscription_service import months_to_label
+        return months_to_label(months)
 
     # ==================== Settings ====================
 
     async def _handle_change_area(
         self, user: User, message: str, context: dict, photo_file_id: str
     ):
-        """Handle area change — ולידציה מול רשימת ערים מוכרת"""
+        """Handle area change"""
         if "חזרה" in message or "תפריט" in message:
             return await self._handle_menu(user, "תפריט", context, None)
 
-        from app.domain.services.city_abbreviation_service import CITY_ABBREVIATIONS
-
-        # רשימת ערים תקינות (שמות מלאים)
-        valid_cities = sorted(set(CITY_ABBREVIATIONS.values()))
-
-        # בחירת אזור מהרשימה
+        # Check if this is a new area being set
         if context.get("changing_area"):
-            new_area = message.strip()
-
-            # בדיקה מול רשימת הערים — התאמה מדויקת או חלקית
-            matched_city = None
-            for city in valid_cities:
-                if new_area == city:
-                    matched_city = city
-                    break
-            if matched_city is None:
-                # ניסיון התאמה חלקית (קיצור)
-                resolved = CITY_ABBREVIATIONS.get(new_area)
-                if resolved:
-                    matched_city = resolved
-
-            if matched_city is not None:
-                user.service_area = matched_city
+            from app.core.validation import TextSanitizer
+            new_area = TextSanitizer.sanitize(message.strip())
+            if len(new_area) >= 2:
+                user.service_area = new_area
                 await self.db.commit()
 
-                safe_area = escape(matched_city)
+                safe_area = escape(new_area)
                 response = MessageResponse(
                     f"✅ האזור עודכן בהצלחה!\n\nהאזור החדש: <b>{safe_area}</b>",
                     keyboard=[["🔙 חזרה לתפריט"]],
                 )
                 return response, CourierState.MENU.value, {"changing_area": False}
 
-            # קלט לא תקין — הצגת הודעת שגיאה עם הערים הזמינות
-            cities_text = "، ".join(valid_cities[:15])
-            response = MessageResponse(
-                "❌ האזור שהוזן לא מוכר.\n\n"
-                f"אזורים זמינים (דוגמאות):\n{cities_text}\n\n"
-                "בחר אזור מהרשימה למטה, או הקלד שם עיר:",
-                keyboard=self._build_area_keyboard(valid_cities),
-            )
-            return response, CourierState.CHANGE_AREA.value, {}
-
         safe_area = escape(user.service_area) if user.service_area else "לא הוגדר"
         response = MessageResponse(
             f"📍 <b>הגדרות אזור</b>\n\n"
             f"האזור הנוכחי שלך: <b>{safe_area}</b>\n\n"
-            "בחר אזור מהרשימה:",
-            keyboard=self._build_area_keyboard(valid_cities),
+            "לשינוי האזור, הקלד את האזור החדש.",
+            keyboard=[["🔙 חזרה לתפריט"]],
         )
         return response, CourierState.CHANGE_AREA.value, {"changing_area": True}
-
-    @staticmethod
-    def _build_area_keyboard(cities: list[str]) -> list[list[str]]:
-        """בניית מקלדת כפתורים לבחירת אזור"""
-        keyboard: list[list[str]] = []
-        row: list[str] = []
-        for city in cities:
-            row.append(city)
-            if len(row) == 3:
-                keyboard.append(row)
-                row = []
-        if row:
-            keyboard.append(row)
-        keyboard.append(["🔙 חזרה לתפריט"])
-        return keyboard
 
     async def _handle_view_history(
         self, user: User, message: str, context: dict, photo_file_id: str
