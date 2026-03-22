@@ -27,6 +27,13 @@ SUBSCRIPTION_MONTH_DAYS = 30
 # ימים לפני תפוגה לשליחת תזכורת
 REMINDER_DAYS_BEFORE = 1
 
+# מחירון מנויים (ש"ח לפני מע"מ)
+SUBSCRIPTION_PRICES: dict[int, int] = {
+    1: 80,    # חודש אחד
+    2: 160,   # חודשיים
+    3: 240,   # 3 חודשים
+}
+
 
 class DriverSubscriptionService:
     """שירות מנוי נהג — הפעלה, רכישה, בדיקת תקינות ותזכורות"""

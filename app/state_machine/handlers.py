@@ -1296,7 +1296,7 @@ class CourierStateHandler:
             )
         if "תמיכה" in message or "עזרה" in message:
             return await self._handle_support(user, message, context, photo_file_id)
-        if "הפקדה" in message or "טעינה" in message:
+        if "הפקדה" in message or "טעינה" in message or "מנוי" in message:
             return await self._handle_deposit_request(
                 user, message, context, photo_file_id
             )
@@ -1313,7 +1313,7 @@ class CourierStateHandler:
         keyboard = [
             ["💰 מצב הארנק", "📍 הגדרות אזור"],
             ["📦 היסטוריית עבודות", "📦 משלוח פעיל"],
-            ["💳 הפקדה", "❓ תמיכה"],
+            ["💳 מנוי", "❓ תמיכה"],
         ]
 
         # אם הנהג הוא סדרן - מוסיפים כפתור בולט לתפריט סדרן
@@ -1351,84 +1351,213 @@ class CourierStateHandler:
             "💵 יתרה נוכחית: <b>0.00 ₪</b>\n"
             f"📊 מסגרת אשראי: {settings.DEFAULT_CREDIT_LIMIT:.2f} ₪\n"
             f"🎯 נותר עד לחסימה: {-settings.DEFAULT_CREDIT_LIMIT:.2f} ₪\n\n"
-            "לטעינת הארנק, לחץ על 'הפקדה'.",
-            keyboard=[["💳 הפקדה"], ["🔙 חזרה לתפריט"]],
+            "לרכישת מנוי, לחץ על 'מנוי'.",
+            keyboard=[["💳 מנוי"], ["🔙 חזרה לתפריט"]],
         )
         return response, CourierState.VIEW_WALLET.value, {}
 
     async def _handle_deposit_request(
         self, user: User, message: str, context: dict, photo_file_id: str
     ):
-        """Handle deposit request [3.2]"""
+        """Handle deposit/subscription request [3.2]"""
         if "חזרה" in message or "תפריט" in message:
             return await self._handle_menu(user, "תפריט", context, None)
 
+        # בחירת חבילת מנוי
+        months = self._parse_courier_subscription_choice(message)
+        if months is not None:
+            from app.domain.services.driver_subscription_service import (
+                SUBSCRIPTION_PRICES,
+            )
+            from app.core.config import settings
+
+            months_label = self._courier_months_to_label(months)
+            price = SUBSCRIPTION_PRICES.get(months, 0)
+            paybox_number = settings.PAYBOX_PHONE_NUMBER or "לא הוגדר"
+
+            response = MessageResponse(
+                f"💳 <b>תשלום מנוי — {months_label}</b>\n\n"
+                f"💰 מחיר: <b>{price} ש\"ח + מע\"מ</b>\n\n"
+                f"📱 <b>מספר פייבוקס לתשלום:</b>\n"
+                f"<code>{paybox_number}</code>\n\n"
+                "לאחר התשלום, שלח צילום מסך של אישור התשלום.",
+                keyboard=[["❌ ביטול"]],
+            )
+            return response, CourierState.DEPOSIT_UPLOAD.value, {
+                "subscription_months": str(months),
+            }
+
+        # תפריט בחירת חבילה
         response = MessageResponse(
-            "💳 <b>טעינת ארנק</b>\n\n"
-            "לטעינת הארנק, בצע העברה לאחד מהאמצעים הבאים:\n\n"
-            "📱 <b>ביט:</b> 050-1234567\n"
-            "📱 <b>פייבוקס:</b> 050-1234567\n"
-            "🏦 <b>העברה בנקאית:</b>\n"
-            "   בנק: לאומי (10)\n"
-            "   סניף: 800\n"
-            "   חשבון: 12345678\n\n"
-            "לאחר ההעברה, שלח צילום מסך של אישור ההעברה.",
-            keyboard=[["🔙 חזרה לתפריט"]],
+            "💳 <b>רכישת מנוי</b>\n\n"
+            "📦 <b>חבילות זמינות:</b>\n"
+            "• חודש אחד — 80 ש\"ח + מע\"מ\n"
+            "• חודשיים — 160 ש\"ח + מע\"מ\n"
+            "• 3 חודשים — 240 ש\"ח + מע\"מ\n\n"
+            "בחר חבילה לרכישה:",
+            keyboard=[
+                ["📦 חודש אחד"],
+                ["📦 חודשיים"],
+                ["📦 3 חודשים"],
+                ["🔙 חזרה לתפריט"],
+            ],
         )
-        return response, CourierState.DEPOSIT_UPLOAD.value, {}
+        return response, CourierState.DEPOSIT_REQUEST.value, {}
 
     async def _handle_deposit_upload(
         self, user: User, message: str, context: dict, photo_file_id: str
     ):
-        """Handle deposit screenshot upload"""
-        if "חזרה" in message or "תפריט" in message:
+        """Handle subscription payment screenshot upload"""
+        if "ביטול" in message or "חזרה" in message or "תפריט" in message:
             return await self._handle_menu(user, "תפריט", context, None)
 
         if not photo_file_id:
             response = MessageResponse(
-                "📸 אנא שלח צילום מסך של אישור ההעברה, או לחץ 'חזרה לתפריט'.",
-                keyboard=[["🔙 חזרה לתפריט"]],
+                "📸 אנא שלח צילום מסך של אישור התשלום, או לחץ 'ביטול'.",
+                keyboard=[["❌ ביטול"]],
             )
             return response, CourierState.DEPOSIT_UPLOAD.value, {}
 
+        # שליחת התראה לאדמין עם כפתור אישור
+        months_str = context.get("subscription_months", "1")
+        try:
+            months = int(months_str)
+        except (ValueError, TypeError):
+            months = 1
+
+        months_label = self._courier_months_to_label(months)
+
+        from app.domain.services.admin_notification_service import (
+            AdminNotificationService,
+        )
+
+        full_name = user.full_name or user.name or "לא צוין"
+        await AdminNotificationService.notify_subscription_payment(
+            user_id=user.id,
+            full_name=full_name,
+            months=months,
+            months_label=months_label,
+            screenshot_file_id=photo_file_id,
+            platform="telegram",
+            role="courier",
+        )
+
         response = MessageResponse(
-            "<b>בקשת ההפקדה התקבלה!</b>\n\n"
-            "הבקשה הועברה למנהל לאישור.\n"
-            "היתרה תתעדכן לאחר אישור ההפקדה.\n\n"
+            "✅ <b>אישור התשלום התקבל!</b>\n\n"
+            f"📦 חבילה: {months_label}\n\n"
+            "הבקשה הועברה לאישור הנהלה.\n"
+            "המנוי ייפתח לאחר אישור התשלום.\n\n"
             "⏳ זמן טיפול: עד 24 שעות.",
             keyboard=[["🔙 חזרה לתפריט"]],
         )
-        return response, CourierState.MENU.value, {"deposit_screenshot": photo_file_id}
+        return response, CourierState.MENU.value, {
+            "subscription_months": None,
+        }
+
+    @staticmethod
+    def _parse_courier_subscription_choice(text: str) -> int | None:
+        """מיפוי בחירת חבילת מנוי לשליח"""
+        _CHOICE_MAP = {
+            "📦 3 חודשים": 3,
+            "📦 חודשיים": 2,
+            "📦 חודש אחד": 1,
+        }
+        for label, months in _CHOICE_MAP.items():
+            if text == label:
+                return months
+
+        if "3 חודשים" in text:
+            return 3
+        if "חודשיים" in text:
+            return 2
+        if "חודש אחד" in text:
+            return 1
+        return None
+
+    @staticmethod
+    def _courier_months_to_label(months: int) -> str:
+        """מיפוי מספר חודשים לתווית"""
+        labels = {
+            1: "חודש אחד",
+            2: "חודשיים",
+            3: "3 חודשים",
+        }
+        return labels.get(months, f"{months} חודשים")
 
     # ==================== Settings ====================
 
     async def _handle_change_area(
         self, user: User, message: str, context: dict, photo_file_id: str
     ):
-        """Handle area change"""
+        """Handle area change — ולידציה מול רשימת ערים מוכרת"""
         if "חזרה" in message or "תפריט" in message:
             return await self._handle_menu(user, "תפריט", context, None)
 
-        # Check if this is a new area being set
+        from app.domain.services.city_abbreviation_service import CITY_ABBREVIATIONS
+
+        # רשימת ערים תקינות (שמות מלאים)
+        valid_cities = sorted(set(CITY_ABBREVIATIONS.values()))
+
+        # בחירת אזור מהרשימה
         if context.get("changing_area"):
             new_area = message.strip()
-            if len(new_area) >= 2:
-                user.service_area = new_area
+
+            # בדיקה מול רשימת הערים — התאמה מדויקת או חלקית
+            matched_city = None
+            for city in valid_cities:
+                if new_area == city:
+                    matched_city = city
+                    break
+            if matched_city is None:
+                # ניסיון התאמה חלקית (קיצור)
+                resolved = CITY_ABBREVIATIONS.get(new_area)
+                if resolved:
+                    matched_city = resolved
+
+            if matched_city is not None:
+                user.service_area = matched_city
                 await self.db.commit()
 
+                safe_area = escape(matched_city)
                 response = MessageResponse(
-                    f"האזור עודכן בהצלחה!\n\nהאזור החדש: <b>{new_area}</b>",
+                    f"✅ האזור עודכן בהצלחה!\n\nהאזור החדש: <b>{safe_area}</b>",
                     keyboard=[["🔙 חזרה לתפריט"]],
                 )
                 return response, CourierState.MENU.value, {"changing_area": False}
 
+            # קלט לא תקין — הצגת הודעת שגיאה עם הערים הזמינות
+            cities_text = "، ".join(valid_cities[:15])
+            response = MessageResponse(
+                "❌ האזור שהוזן לא מוכר.\n\n"
+                f"אזורים זמינים (דוגמאות):\n{cities_text}\n\n"
+                "בחר אזור מהרשימה למטה, או הקלד שם עיר:",
+                keyboard=self._build_area_keyboard(valid_cities),
+            )
+            return response, CourierState.CHANGE_AREA.value, {}
+
+        safe_area = escape(user.service_area) if user.service_area else "לא הוגדר"
         response = MessageResponse(
             f"📍 <b>הגדרות אזור</b>\n\n"
-            f"האזור הנוכחי שלך: <b>{user.service_area or 'לא הוגדר'}</b>\n\n"
-            "לשינוי האזור, הקלד את האזור החדש.",
-            keyboard=[["🔙 חזרה לתפריט"]],
+            f"האזור הנוכחי שלך: <b>{safe_area}</b>\n\n"
+            "בחר אזור מהרשימה:",
+            keyboard=self._build_area_keyboard(valid_cities),
         )
         return response, CourierState.CHANGE_AREA.value, {"changing_area": True}
+
+    @staticmethod
+    def _build_area_keyboard(cities: list[str]) -> list[list[str]]:
+        """בניית מקלדת כפתורים לבחירת אזור"""
+        keyboard: list[list[str]] = []
+        row: list[str] = []
+        for city in cities:
+            row.append(city)
+            if len(row) == 3:
+                keyboard.append(row)
+                row = []
+        if row:
+            keyboard.append(row)
+        keyboard.append(["🔙 חזרה לתפריט"])
+        return keyboard
 
     async def _handle_view_history(
         self, user: User, message: str, context: dict, photo_file_id: str

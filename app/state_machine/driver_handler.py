@@ -1791,18 +1791,16 @@ class DriverStateHandler:
             "💳 <b>מנוי iDriver</b>\n\n"
             f"{status_text}\n\n"
             "📦 <b>חבילות זמינות:</b>\n"
-            "• חודש אחד — 1 חודש\n"
-            "• 3 חודשים — 3 חודשים\n"
-            "• 6 חודשים — 6 חודשים\n"
-            "• שנתי — 12 חודשים\n\n"
+            "• חודש אחד — 80 ש\"ח + מע\"מ\n"
+            "• חודשיים — 160 ש\"ח + מע\"מ\n"
+            "• 3 חודשים — 240 ש\"ח + מע\"מ\n\n"
             "בחר חבילה לרכישה:"
         )
 
         keyboard = [
             ["📦 חודש אחד"],
+            ["📦 חודשיים"],
             ["📦 3 חודשים"],
-            ["📦 6 חודשים"],
-            ["📦 שנתי"],
             ["🔙 חזרה לתפריט"],
         ]
 
@@ -1828,24 +1826,30 @@ class DriverStateHandler:
                 text="❌ בחירה לא תקינה. אנא בחר חבילה מהרשימה:",
                 keyboard=[
                     ["📦 חודש אחד"],
+                    ["📦 חודשיים"],
                     ["📦 3 חודשים"],
-                    ["📦 6 חודשים"],
-                    ["📦 שנתי"],
                     ["🔙 חזרה לתפריט"],
                 ],
             )
             return response, DriverState.SUBSCRIPTION_VIEW.value, {}
 
-        # מעבר לאישור רכישה
+        # מעבר לתשלום — הצגת פרטי PayBox
+        from app.domain.services.driver_subscription_service import SUBSCRIPTION_PRICES
+        from app.core.config import settings
+
         months_label = self._months_to_label(months)
+        price = SUBSCRIPTION_PRICES.get(months, 0)
+        paybox_number = settings.PAYBOX_PHONE_NUMBER or "לא הוגדר"
+
         response = MessageResponse(
             text=(
-                f"💳 <b>אישור רכישת מנוי</b>\n\n"
-                f"חבילה: {months_label}\n\n"
-                f"האם לאשר את הרכישה?"
+                f"💳 <b>תשלום מנוי — {months_label}</b>\n\n"
+                f"💰 מחיר: <b>{price} ש\"ח + מע\"מ</b>\n\n"
+                f"📱 <b>מספר פייבוקס לתשלום:</b>\n"
+                f"<code>{paybox_number}</code>\n\n"
+                "לאחר התשלום, שלח צילום מסך של אישור התשלום."
             ),
             keyboard=[
-                [f"✅ אישור רכישה — {months_label}"],
                 ["❌ ביטול"],
             ],
         )
@@ -1859,62 +1863,48 @@ class DriverStateHandler:
         self, user: User, message: str, context: dict, **kwargs: object
     ) -> Tuple[MessageResponse, str, dict]:
         """
-        מצב אישור רכישת מנוי — ביצוע הרכישה או ביטול.
+        מצב תשלום מנוי — קבלת צילום מסך תשלום או ביטול.
         """
         msg = message.strip()
+        photo_file_id: str | None = kwargs.get("photo_file_id")
 
         # ביטול
         if "ביטול" in msg or "חזרה" in msg:
             return await self._build_subscription_view(user)
 
-        # אישור רכישה
-        if "אישור" in msg:
+        # קבלת צילום מסך תשלום
+        if photo_file_id:
             months_str = context.get("subscription_months", "1")
             try:
                 months = int(months_str)
             except (ValueError, TypeError):
                 months = 1
 
-            try:
-                profile = await self.subscription_service.purchase_subscription(
-                    user.id, months
-                )
-            except NotFoundException:
-                logger.error(
-                    "פרופיל לא נמצא ברכישת מנוי",
-                    extra_data={"user_id": user.id},
-                )
-                response = MessageResponse(
-                    text="❌ שגיאה ברכישה: לא נמצא פרופיל נהג. פנה לתמיכה.",
-                    keyboard=[["🔙 חזרה לתפריט"]],
-                )
-                return response, DriverState.SUBSCRIPTION_VIEW.value, {
-                    "subscription_months": None,
-                }
-            except ValidationException as e:
-                logger.warning(
-                    "כשלון ולידציה ברכישת מנוי",
-                    extra_data={"user_id": user.id, "error": e.message},
-                )
-                response = MessageResponse(
-                    text=f"❌ שגיאה ברכישה: {e.message}",
-                    keyboard=[["🔙 חזרה לתפריט"]],
-                )
-                return response, DriverState.SUBSCRIPTION_VIEW.value, {
-                    "subscription_months": None,
-                }
-
-            expires_str = ""
-            if profile.subscription_expires_at:
-                expires_str = profile.subscription_expires_at.strftime("%d/%m/%Y")
-
             months_label = self._months_to_label(months)
+
+            # שליחת התראה לאדמין עם כפתור אישור
+            from app.domain.services.admin_notification_service import (
+                AdminNotificationService,
+            )
+
+            full_name = user.full_name or user.name or "לא צוין"
+            await AdminNotificationService.notify_subscription_payment(
+                user_id=user.id,
+                full_name=full_name,
+                months=months,
+                months_label=months_label,
+                screenshot_file_id=photo_file_id,
+                platform=self.platform,
+                role="driver",
+            )
+
             response = MessageResponse(
                 text=(
-                    "✅ <b>הרכישה בוצעה בהצלחה!</b>\n\n"
-                    f"📦 חבילה: {months_label}\n"
-                    f"📅 תוקף עד: {expires_str}\n\n"
-                    "🎉 אפשר להמשיך לחפש נסיעות!"
+                    "✅ <b>אישור התשלום התקבל!</b>\n\n"
+                    f"📦 חבילה: {months_label}\n\n"
+                    "הבקשה הועברה לאישור הנהלה.\n"
+                    "המנוי ייפתח לאחר אישור התשלום.\n\n"
+                    "⏳ זמן טיפול: עד 24 שעות."
                 ),
                 keyboard=[["🔙 חזרה לתפריט"]],
             )
@@ -1922,22 +1912,25 @@ class DriverStateHandler:
                 "subscription_months": None,
             }
 
-        # ברירת מחדל — חזרה לתצוגת מנוי
-        return await self._build_subscription_view(user)
+        # לא נשלחה תמונה — בקשה לצילום מסך
+        response = MessageResponse(
+            text="📸 אנא שלח צילום מסך של אישור התשלום, או לחץ 'ביטול'.",
+            keyboard=[["❌ ביטול"]],
+        )
+        return response, DriverState.SUBSCRIPTION_PURCHASE.value, {}
 
     @staticmethod
     def _parse_subscription_choice(text: str) -> int | None:
         """
         מיפוי בחירת חבילה לחודשים — מעוגן לפורמט הכפתורים בלבד.
 
-        מתאים רק לטקסטים של כפתורים מוגדרים ("📦 חודש אחד", "📦 3 חודשים" וכו').
+        מתאים רק לטקסטים של כפתורים מוגדרים ("📦 חודש אחד", "📦 חודשיים" וכו').
         טקסט חופשי שמכיל ספרות (כמו "16") לא יתפרש בטעות.
         """
         # התאמה מדויקת לטקסט כפתור
         _CHOICE_MAP = {
-            "📦 שנתי": 12,
-            "📦 6 חודשים": 6,
             "📦 3 חודשים": 3,
+            "📦 חודשיים": 2,
             "📦 חודש אחד": 1,
         }
         for label, months in _CHOICE_MAP.items():
@@ -1945,12 +1938,10 @@ class DriverStateHandler:
                 return months
 
         # fallback — מילות מפתח ייחודיות (לא ספרות בודדות)
-        if "שנתי" in text:
-            return 12
-        if "6 חודשים" in text:
-            return 6
         if "3 חודשים" in text:
             return 3
+        if "חודשיים" in text:
+            return 2
         if "חודש אחד" in text:
             return 1
         return None
@@ -1960,9 +1951,8 @@ class DriverStateHandler:
         """מיפוי מספר חודשים לתווית"""
         labels = {
             1: "חודש אחד",
+            2: "חודשיים",
             3: "3 חודשים",
-            6: "6 חודשים",
-            12: "שנתי (12 חודשים)",
         }
         return labels.get(months, f"{months} חודשים")
 
