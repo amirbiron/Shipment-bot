@@ -265,6 +265,11 @@ class PyWaProvider(BaseWhatsAppProvider):
 
     # ── שליחת הודעות ──
 
+    # סף לפיצול הודעה אינטראקטיבית: אם גוף הטקסט ארוך מזה,
+    # נשלח קודם הודעת טקסט רגילה ואז הודעה אינטראקטיבית קצרה עם כפתורים.
+    # WhatsApp חותך את תצוגת גוף ההודעה האינטראקטיבית אחרי ~3-4 שורות.
+    _INTERACTIVE_BODY_SPLIT_THRESHOLD = 120
+
     async def send_text(
         self,
         to: str,
@@ -275,6 +280,10 @@ class PyWaProvider(BaseWhatsAppProvider):
 
         הטקסט נשלח as-is — אם הקלט מכיל HTML, הקורא אחראי
         לקרוא ל-format_text() לפני השליחה.
+
+        כשהטקסט ארוך והודעה אינטראקטיבית נדרשת (כפתורים/רשימה),
+        מפצלת לשתי הודעות: טקסט רגיל + הודעה אינטראקטיבית קצרה.
+        זה מונע חיתוך תצוגה ב-WhatsApp.
         """
         to = self.normalize_phone(to)
         phone_masked = PhoneNumberValidator.mask(to)
@@ -285,25 +294,63 @@ class PyWaProvider(BaseWhatsAppProvider):
         if buttons is None:
             list_message = self._build_list_message(keyboard)
 
+        interactive = buttons or list_message
+
         # fallback טקסטואלי רק אם גם כפתורים וגם רשימה לא מתאימים
         text_suffix = ""
-        if buttons is None and list_message is None:
+        if interactive is None:
             text_suffix = self._keyboard_to_text_instructions(keyboard)
         final_text = text + text_suffix
 
+        # פיצול: אם יש כפתורים אינטראקטיביים והטקסט ארוך, שולחים קודם
+        # הודעת טקסט רגילה עם כל התוכן, ואז הודעה אינטראקטיבית קצרה עם כפתורים.
+        need_split = (
+            interactive is not None
+            and len(final_text) > self._INTERACTIVE_BODY_SPLIT_THRESHOLD
+        )
+
         client = self._get_client()
 
-        async def _send_single() -> None:
-            await client.send_message(
-                to=to,
-                text=final_text,
-                buttons=buttons or list_message,
-            )
+        if need_split:
+            # שלב 1: הודעת טקסט רגילה עם כל התוכן
+            async def _send_text_only() -> None:
+                await client.send_message(to=to, text=final_text)
 
-        async def _send_with_retry() -> None:
-            await self._execute_with_retry("send_text", phone_masked, _send_single)
+            async def _send_text_with_retry() -> None:
+                await self._execute_with_retry(
+                    "send_text (body)", phone_masked, _send_text_only
+                )
 
-        await self._circuit_breaker.execute(_send_with_retry)
+            await self._circuit_breaker.execute(_send_text_with_retry)
+
+            # שלב 2: הודעה אינטראקטיבית קצרה עם כפתורים
+            async def _send_buttons_only() -> None:
+                await client.send_message(
+                    to=to,
+                    text="בחר אפשרות:",
+                    buttons=interactive,
+                )
+
+            async def _send_buttons_with_retry() -> None:
+                await self._execute_with_retry(
+                    "send_text (buttons)", phone_masked, _send_buttons_only
+                )
+
+            await self._circuit_breaker.execute(_send_buttons_with_retry)
+        else:
+            async def _send_single() -> None:
+                await client.send_message(
+                    to=to,
+                    text=final_text,
+                    buttons=interactive,
+                )
+
+            async def _send_with_retry() -> None:
+                await self._execute_with_retry(
+                    "send_text", phone_masked, _send_single
+                )
+
+            await self._circuit_breaker.execute(_send_with_retry)
 
     async def send_media(
         self,

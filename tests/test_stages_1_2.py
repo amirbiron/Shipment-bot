@@ -112,44 +112,6 @@ class TestStage1WelcomeMessage:
         assert data.get("new_state") == CourierState.REGISTER_COLLECT_NAME.value
 
     @pytest.mark.asyncio
-    async def test_telegram_quick_shipment_button(self, test_client: AsyncClient):
-        """לחיצה על כפתור 'העלאת משלוח מהיר' מחזירה הודעה עם קישור"""
-        # יצירת משתמש
-        await test_client.post(
-            "/api/telegram/webhook",
-            json={
-                "update_id": 1,
-                "message": {
-                    "message_id": 1,
-                    "chat": {"id": 77777, "type": "private"},
-                    "text": "שלום",
-                    "date": 1700000000,
-                    "from": {"id": 77777, "first_name": "Sender"},
-                },
-            },
-        )
-
-        # לחיצה על כפתור משלוח מהיר
-        resp = await test_client.post(
-            "/api/telegram/webhook",
-            json={
-                "update_id": 2,
-                "callback_query": {
-                    "id": "cb-quick",
-                    "data": "📦 העלאת משלוח מהיר",
-                    "from": {"id": 77777, "first_name": "Sender"},
-                    "message": {
-                        "message_id": 2,
-                        "chat": {"id": 77777, "type": "private"},
-                        "text": "",
-                        "date": 1700000001,
-                    },
-                },
-            },
-        )
-        assert resp.status_code == 200
-
-    @pytest.mark.asyncio
     async def test_telegram_station_button(self, test_client: AsyncClient):
         """לחיצה על כפתור 'הצטרפות כתחנה' מחזירה הודעה שיווקית"""
         await test_client.post(

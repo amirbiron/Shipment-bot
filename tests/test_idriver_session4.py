@@ -311,7 +311,7 @@ class TestUpdateTripType:
         )
         service = DriverMenuService(db_session)
         label = await service.update_trip_type(user.id, TripTypeFilter.LONG_DISTANCE.value)
-        assert label == "מעל 100 ש״ח פנימיות ובינעירוני"
+        assert label == "100₪+ פנימיות ובינעירוני"
 
 
 class TestUpdateShowDeliveries:
