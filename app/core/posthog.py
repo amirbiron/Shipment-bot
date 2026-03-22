@@ -110,6 +110,8 @@ def identify_user(
 ) -> None:
     """זיהוי משתמש ב-PostHog עם מאפיינים (role, platform וכו').
 
+    משתמש ב-set() (PostHog SDK v6+) להגדרת מאפייני משתמש.
+
     Args:
         distinct_id: מזהה ייחודי של המשתמש (user_id כ-string)
         properties: מאפייני המשתמש (למשל role, platform)
@@ -119,7 +121,7 @@ def identify_user(
 
     try:
         safe_properties = _scrub_properties(properties) if properties else {}
-        _posthog_client.identify(
+        _posthog_client.set(
             distinct_id=distinct_id,
             properties=safe_properties,
         )

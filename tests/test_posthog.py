@@ -175,7 +175,7 @@ class TestIdentifyUser:
 
         try:
             identify_user("user_1", {"role": "courier", "platform": "telegram"})
-            mock_client.identify.assert_called_once_with(
+            mock_client.set.assert_called_once_with(
                 distinct_id="user_1",
                 properties={"role": "courier", "platform": "telegram"},
             )

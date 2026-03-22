@@ -36,4 +36,4 @@ PyJWT>=2.7.0
 sentry-sdk[fastapi,celery,sqlalchemy]>=2.0.0
 
 # Product Analytics — PostHog
-posthog>=3.0.0
+posthog>=6.0.0
