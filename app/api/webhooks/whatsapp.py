@@ -449,7 +449,7 @@ async def send_whatsapp_message(
         provider = get_whatsapp_group_provider()
     else:
         provider = get_whatsapp_provider()
-    formatted_text = _append_branding(provider.format_text(text), bool(keyboard))
+    formatted_text = provider.format_text(text)
     try:
         await provider.send_text(to=phone_number, text=formatted_text, keyboard=keyboard)
     except Exception as exc:
@@ -473,7 +473,7 @@ async def send_whatsapp_message_raising(
         provider = get_whatsapp_group_provider()
     else:
         provider = get_whatsapp_provider()
-    formatted_text = _append_branding(provider.format_text(text), bool(keyboard))
+    formatted_text = provider.format_text(text)
     await provider.send_text(to=phone_number, text=formatted_text, keyboard=keyboard)
 
 
@@ -1165,7 +1165,8 @@ async def send_welcome_message(phone_number: str):
         ["🏪 הצטרפות כתחנה"],
         ["📞 פנייה לניהול"],
     ]
-    await send_whatsapp_message(phone_number, welcome_text, keyboard)
+    branded_text = _append_branding(welcome_text, has_keyboard=True)
+    await send_whatsapp_message(phone_number, branded_text, keyboard)
 
 
 @router.post(
