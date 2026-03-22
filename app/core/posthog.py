@@ -19,18 +19,10 @@ _posthog_client: Any = None
 
 
 def _scrub_properties(properties: dict[str, Any]) -> dict[str, Any]:
-    """מיסוך מספרי טלפון מנתוני אירועים — משתמש באותו regex כמו sentry.py"""
-    from app.core.sentry import _scrub_phones, _scrub_dict
+    """מיסוך מספרי טלפון מנתוני אירועים — מאציל ל-_scrub_dict של sentry.py שמטפל בכל הטיפוסים"""
+    from app.core.sentry import _scrub_dict
 
-    scrubbed: dict[str, Any] = {}
-    for key, val in properties.items():
-        if isinstance(val, str):
-            scrubbed[key] = _scrub_phones(val)
-        elif isinstance(val, dict):
-            scrubbed[key] = _scrub_dict(val)
-        else:
-            scrubbed[key] = val
-    return scrubbed
+    return _scrub_dict(properties)
 
 
 def init_posthog() -> None:
@@ -50,7 +42,7 @@ def init_posthog() -> None:
         from posthog import Posthog
 
         _posthog_client = Posthog(
-            api_key=settings.POSTHOG_PROJECT_TOKEN,
+            project_api_key=settings.POSTHOG_PROJECT_TOKEN,
             host=settings.POSTHOG_HOST,
             debug=settings.DEBUG,
             # שליחת אירועים ב-batch — ביצועים טובים יותר

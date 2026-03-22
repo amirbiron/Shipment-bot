@@ -39,6 +39,13 @@ class TestScrubProperties:
         assert result == props
 
     @pytest.mark.unit
+    def test_scrub_phone_in_list_value(self) -> None:
+        props = {"recipients": ["0501234567", "some text"]}
+        result = _scrub_properties(props)
+        assert "0501234567" not in str(result)
+        assert result["recipients"][1] == "some text"
+
+    @pytest.mark.unit
     def test_numeric_values_preserved(self) -> None:
         props = {"count": 5, "fee": 10.0, "active": True}
         result = _scrub_properties(props)
