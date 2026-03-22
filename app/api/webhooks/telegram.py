@@ -115,8 +115,6 @@ def _compact_callback_data_fallback(button_text: str) -> str | None:
     # כפתורי תפריט שולח / שיווק
     if "הצטרפות למנוי" in text:
         return "הצטרפות למנוי"
-    if "העלאת משלוח מהיר" in text:
-        return "העלאת משלוח מהיר"
     if "פנייה לניהול" in text:
         return "פנייה לניהול"
     if "הצטרפות כתחנה" in text:
@@ -682,22 +680,6 @@ async def _handle_sender_join_as_driver(
     return response, new_state
 
 
-async def _handle_sender_fast_shipment() -> MessageResponse:
-    """קישור חיצוני לקבוצת WhatsApp - העלאת משלוח מהיר."""
-    if settings.WHATSAPP_GROUP_LINK:
-        msg_text = (
-            "📦 <b>העלאת משלוח מהיר</b>\n\n"
-            "להעלאת משלוח מהיר, הצטרפו לקבוצת WhatsApp שלנו:\n"
-            f"{settings.WHATSAPP_GROUP_LINK}"
-        )
-    else:
-        msg_text = (
-            "📦 <b>העלאת משלוח מהיר</b>\n\n"
-            "להעלאת משלוח מהיר, פנו להנהלה לקבלת קישור לקבוצת WhatsApp."
-        )
-    return MessageResponse(msg_text)
-
-
 def _static_sender_button(
     response_factory: Callable[[], Awaitable[MessageResponse]],
 ) -> _SenderButtonHandler:
@@ -744,7 +726,6 @@ async def _handle_sender_admin_contact() -> MessageResponse:
     return MessageResponse(admin_text)
 
 
-_sender_button_fast_shipment = _static_sender_button(_handle_sender_fast_shipment)
 _sender_button_station_signup = _static_sender_button(_handle_sender_station_signup)
 
 
@@ -758,8 +739,6 @@ _SENDER_BUTTON_ROUTES: list[tuple[str, _SenderButtonHandler]] = [
     # הצטרפות כנהג (iDriver)
     ("הצטרפות כנהג", _handle_sender_join_as_driver),
     ("נהג", _handle_sender_join_as_driver),
-    ("העלאת משלוח מהיר", _sender_button_fast_shipment),
-    ("משלוח מהיר", _sender_button_fast_shipment),
     ("הצטרפות כתחנה", _sender_button_station_signup),
     ("תחנה", _sender_button_station_signup),
     # "פנייה לניהול" מטופל ב-handler גלובלי (לפני ניתוב לפי תפקיד) — פתוח לכל התפקידים
@@ -1174,7 +1153,6 @@ async def send_welcome_message(chat_id: str):
     keyboard = [
         ["🚚 הצטרפות למנוי וקבלת משלוחים"],
         ["🚗 הצטרפות כנהג"],
-        ["📦 העלאת משלוח מהיר"],
         ["🏪 הצטרפות כתחנה"],
         ["📞 פנייה לניהול"],
     ]

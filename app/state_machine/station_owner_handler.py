@@ -176,6 +176,7 @@ class StationOwnerStateHandler:
                 ["💰 ארנק תחנה", "📊 דוח גבייה"],
                 ["🚫 רשימה שחורה", "⚙️ הגדרות קבוצות"],
                 ["🏪 הגדרות תחנה"],
+                ["📞 פנייה לניהול"],
             ],
         )
         return response, StationOwnerState.MENU.value, {}

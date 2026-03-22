@@ -128,7 +128,7 @@ class TestGetMainMenu:
         text, keyboard = await service.get_main_menu(user.id)
 
         assert "פרטי 4 מקומות" in text
-        assert "מעל 100" in text
+        assert "100₪+" in text
         assert "לא" in text  # show_deliveries=False
 
     @pytest.mark.asyncio
@@ -311,7 +311,7 @@ class TestUpdateTripType:
         )
         service = DriverMenuService(db_session)
         label = await service.update_trip_type(user.id, TripTypeFilter.LONG_DISTANCE.value)
-        assert label == "מעל 100 ש״ח פנימיות ובינעירוני"
+        assert label == "100₪+ פנימיות ובינעירוני"
 
 
 class TestUpdateShowDeliveries:
