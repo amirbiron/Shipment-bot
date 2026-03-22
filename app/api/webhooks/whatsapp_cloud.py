@@ -642,22 +642,6 @@ async def _route_message_to_handler(
             )
             return response.text, new_state
 
-        # העלאת משלוח מהיר
-        if "העלאת משלוח מהיר" in text or "משלוח מהיר" in text:
-            if settings.WHATSAPP_GROUP_LINK:
-                msg_text = (
-                    "📦 העלאת משלוח מהיר\n\n"
-                    "להעלאת משלוח מהיר, הצטרפו לקבוצת WhatsApp שלנו:\n"
-                    f"{settings.WHATSAPP_GROUP_LINK}"
-                )
-            else:
-                msg_text = (
-                    "📦 העלאת משלוח מהיר\n\n"
-                    "להעלאת משלוח מהיר, פנו להנהלה לקבלת קישור לקבוצת WhatsApp."
-                )
-            background_tasks.add_task(send_whatsapp_message, reply_to, msg_text)
-            return msg_text, None
-
         # הצטרפות כתחנה
         if "הצטרפות כתחנה" in text or "תחנה" in text:
             station_text = (

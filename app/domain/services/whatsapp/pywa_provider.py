@@ -162,7 +162,7 @@ class PyWaProvider(BaseWhatsAppProvider):
         buttons = []
         for label in all_labels:
             # כפתור Cloud API — title עד 20 תווים (תצוגה), callback_data שלם
-            title = label[:20]
+            title = label[:19] + "…" if len(label) > 20 else label
             buttons.append(
                 pywa_types.Button(title=title, callback_data=label)
             )
@@ -220,9 +220,10 @@ class PyWaProvider(BaseWhatsAppProvider):
 
         rows = []
         for label in all_labels:
+            title = label[:23] + "…" if len(label) > 24 else label
             rows.append(
                 pywa_types.SectionRow(
-                    title=label[:24],
+                    title=title,
                     callback_data=label,
                 )
             )
@@ -268,7 +269,7 @@ class PyWaProvider(BaseWhatsAppProvider):
     # סף לפיצול הודעה אינטראקטיבית: אם גוף הטקסט ארוך מזה,
     # נשלח קודם הודעת טקסט רגילה ואז הודעה אינטראקטיבית קצרה עם כפתורים.
     # WhatsApp חותך את תצוגת גוף ההודעה האינטראקטיבית אחרי ~3-4 שורות.
-    _INTERACTIVE_BODY_SPLIT_THRESHOLD = 120
+    _INTERACTIVE_BODY_SPLIT_THRESHOLD = 60
 
     async def send_text(
         self,

@@ -1137,7 +1137,6 @@ async def send_welcome_message(phone_number: str):
     keyboard = [
         ["🚚 הצטרפות למנוי וקבלת משלוחים"],
         ["🚗 הצטרפות כנהג"],
-        ["📦 העלאת משלוח מהיר"],
         ["🏪 הצטרפות כתחנה"],
         ["📞 פנייה לניהול"],
     ]
@@ -1620,27 +1619,6 @@ async def whatsapp_webhook(
                     )
                     continue
 
-                if ("העלאת משלוח מהיר" in text or "משלוח מהיר" in text) and (
-                    user.role in (UserRole.SENDER, UserRole.ADMIN) or _admin_root_menu
-                ):
-                    # קישור חיצוני לקבוצת WhatsApp
-                    if settings.WHATSAPP_GROUP_LINK:
-                        msg_text = (
-                            "📦 העלאת משלוח מהיר\n\n"
-                            "להעלאת משלוח מהיר, הצטרפו לקבוצת WhatsApp שלנו:\n"
-                            f"{settings.WHATSAPP_GROUP_LINK}"
-                        )
-                    else:
-                        msg_text = (
-                            "📦 העלאת משלוח מהיר\n\n"
-                            "להעלאת משלוח מהיר, פנו להנהלה לקבלת קישור לקבוצת WhatsApp."
-                        )
-                    background_tasks.add_task(send_whatsapp_message, reply_to, msg_text)
-                    responses.append(
-                        {"from": sender_id, "response": msg_text, "new_state": None}
-                    )
-                    continue
-    
                 if ("הצטרפות כתחנה" in text or "תחנה" in text) and (
                     user.role in (UserRole.SENDER, UserRole.ADMIN) or _admin_root_menu
                 ):
