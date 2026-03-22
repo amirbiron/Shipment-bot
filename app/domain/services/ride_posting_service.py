@@ -363,24 +363,38 @@ class RidePostingService:
             f"{message}"
         )
 
+        # שליפת כל הנהגים בשאילתה אחת במקום N+1
+        result = await self._db.execute(
+            select(User.id, User.telegram_chat_id, User.phone_number, User.platform)
+            .where(User.id.in_(driver_user_ids))
+        )
+        drivers = result.all()
+
         sent_count = 0
-        for uid in driver_user_ids:
+        for driver in drivers:
             try:
-                result = await self._db.execute(
-                    select(User.telegram_chat_id).where(User.id == uid)
-                )
-                telegram_chat_id = result.scalar_one_or_none()
-                if not telegram_chat_id:
-                    continue
+                if driver.telegram_chat_id:
+                    from app.api.webhooks.telegram import send_telegram_message
 
-                from app.api.webhooks.telegram import send_telegram_message
+                    await send_telegram_message(
+                        str(driver.telegram_chat_id), notification_text
+                    )
+                    sent_count += 1
+                elif (
+                    driver.phone_number
+                    and not driver.phone_number.startswith("tg:")
+                    and not driver.phone_number.endswith("@g.us")
+                ):
+                    from app.api.webhooks.whatsapp import send_whatsapp_message
 
-                await send_telegram_message(str(telegram_chat_id), notification_text)
-                sent_count += 1
+                    await send_whatsapp_message(
+                        driver.phone_number, notification_text
+                    )
+                    sent_count += 1
             except Exception as e:
                 logger.error(
                     "כשלון בשליחת התראת נסיעה תואמת לנהג",
-                    extra_data={"user_id": uid, "error": str(e)},
+                    extra_data={"user_id": driver.id, "error": str(e)},
                     exc_info=True,
                 )
 
