@@ -426,13 +426,13 @@ def _is_group_target(identifier: str) -> bool:
     return identifier.endswith("@g.us")
 
 
-_WHATSAPP_BRANDING = "iDriver 🤖 – מסדר לך את הדרך"
+_WHATSAPP_BRANDING = "איי דרייבר 🤖 – מסדר לך את הדרך"
 
 
 def _append_branding(text: str, has_keyboard: bool) -> str:
     """הוספת שורת מיתוג לכל הודעת WhatsApp."""
     if has_keyboard:
-        return f"{text}\n\n_{_WHATSAPP_BRANDING}_"
+        return f"{text}\n\n*{_WHATSAPP_BRANDING}*"
     return f"{text}\n\n```{_WHATSAPP_BRANDING}```"
 
 
