@@ -23,6 +23,10 @@ from app.db.database import engine, Base
 from app.core.sentry import init_sentry
 init_sentry()
 
+# אתחול PostHog — מעקב אירועים ואנליטיקה
+from app.core.posthog import init_posthog
+init_posthog()
+
 # Setup logging before anything else
 setup_logging(
     level="DEBUG" if settings.DEBUG else "INFO",
@@ -208,6 +212,9 @@ async def startup() -> None:
 async def shutdown() -> None:
     """Cleanup on shutdown"""
     logger.info("Shutting down application")
+    # סגירת PostHog — שליחת אירועים שנותרו בתור
+    from app.core.posthog import shutdown_posthog
+    shutdown_posthog()
     # סגירת חיבור Redis
     from app.core.redis_client import close_redis
     await close_redis()
