@@ -128,7 +128,7 @@ class TestGetMainMenu:
         text, keyboard = await service.get_main_menu(user.id)
 
         assert "פרטי 4 מקומות" in text
-        assert "מעל 100" in text
+        assert "100₪+" in text
         assert "לא" in text  # show_deliveries=False
 
     @pytest.mark.asyncio
