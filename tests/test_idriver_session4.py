@@ -611,7 +611,7 @@ class TestDriverSettingsFlow:
         )
 
         assert new_state == DriverState.SETTINGS_VEHICLE_TYPE.value
-        assert "לא תקינה" in response.text
+        assert "לא זיהיתי" in response.text
 
     @pytest.mark.asyncio
     async def test_cancel_vehicle_type(

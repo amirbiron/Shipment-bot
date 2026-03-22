@@ -532,7 +532,7 @@ class TestDriverSubscriptionHandler:
         response, new_state = await handler.handle_message(user, "16")
 
         assert new_state == DriverState.SUBSCRIPTION_VIEW.value
-        assert "לא תקינה" in response.text
+        assert "לא זיהיתי" in response.text
 
     @pytest.mark.asyncio
     async def test_invalid_subscription_choice(self, db_session, user_factory):
@@ -549,7 +549,7 @@ class TestDriverSubscriptionHandler:
         response, new_state = await handler.handle_message(user, "אפשרות לא קיימת")
 
         assert new_state == DriverState.SUBSCRIPTION_VIEW.value
-        assert "לא תקינה" in response.text
+        assert "לא זיהיתי" in response.text
 
 
 # ============================================================================
