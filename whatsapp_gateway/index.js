@@ -779,14 +779,15 @@ app.post('/send', async (req, res) => {
                         console.log('checkNumberStatus failed:', statusError?.message || String(statusError));
                     }
 
-                    // הגבלות WhatsApp (בפועל עשויות להשתנות/להיות קשיחות יותר בגרסאות חדשות):
+                    // הגבלות WhatsApp:
                     // - buttonText עד ~20 תווים
                     // - title עד ~24 תווים
-                    // - description עד ~72 תווים
+                    // - description (גוף ההודעה) עד ~1024 תווים
                     // - row title עד ~24 תווים
+                    // - row description עד ~72 תווים
                     const safeButtonText = truncateByCodepoints('בחרו 👆', 20);
                     const safeTitle = truncateByCodepoints("משלוח בצ'יק", 24);
-                    const safeDescription = truncateByCodepoints(message, 72);
+                    const safeDescription = truncateByCodepoints(message, 1024);
 
                     result = await client.sendListMessage(listChatId, {
                         buttonText: safeButtonText,
