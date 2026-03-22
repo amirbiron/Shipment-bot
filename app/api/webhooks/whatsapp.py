@@ -453,6 +453,20 @@ async def send_whatsapp_message(
         )
 
 
+async def send_whatsapp_message_raising(
+    phone_number: str, text: str, keyboard: list = None
+) -> None:
+    """
+    שליחת הודעה דרך ספק WhatsApp הפעיל — מעלה exception בכשלון (לא fire-and-forget).
+    """
+    if _is_group_target(phone_number):
+        provider = get_whatsapp_group_provider()
+    else:
+        provider = get_whatsapp_provider()
+    formatted_text = provider.format_text(text)
+    await provider.send_text(to=phone_number, text=formatted_text, keyboard=keyboard)
+
+
 def _normalize_whatsapp_identifier(value: str) -> str:
     """נרמול מזהה וואטסאפ (מספר/מזהה) להשוואה עקבית"""
     if not value:

@@ -477,6 +477,43 @@ class DriverSearchService:
         )
         return result.scalar_one()
 
+    async def count_available_drivers_for_destinations(
+        self,
+        destination_cities: list[str],
+        exclude_user_id: int | None = None,
+    ) -> dict[str, int]:
+        """
+        ספירת נהגים ייחודיים עם חיפוש פעיל לכל יעד — שאילתה אחת במקום N+1.
+
+        Args:
+            destination_cities: רשימת ערי יעד
+            exclude_user_id: מזהה נהג להחרגה
+
+        Returns:
+            מילון {עיר_יעד: מספר_נהגים}
+        """
+        if not destination_cities:
+            return {}
+
+        conditions = [
+            DriverSearch.destination_city.in_(destination_cities),
+            DriverSearch.status == DriverSearchStatus.ACTIVE.value,
+        ]
+        if exclude_user_id is not None:
+            conditions.append(DriverSearch.user_id != exclude_user_id)
+
+        result = await self.db.execute(
+            select(
+                DriverSearch.destination_city,
+                func.count(func.distinct(DriverSearch.user_id)),
+            )
+            .where(*conditions)
+            .group_by(DriverSearch.destination_city)
+        )
+        counts = {row[0]: row[1] for row in result.all()}
+        # ערים ללא תוצאות מקבלות 0
+        return {city: counts.get(city, 0) for city in destination_cities}
+
     async def get_matching_driver_user_ids(
         self,
         origin_city: str | None,
@@ -488,17 +525,22 @@ class DriverSearchService:
 
         Args:
             origin_city: עיר מוצא (אופציונלי)
-            destination_city: עיר יעד (אופציונלי)
+            destination_city: עיר יעד (חובה — ללא יעד לא ניתן להתאים)
             exclude_user_id: מזהה נהג להחרגה (הנהג שפרסם)
 
         Returns:
             רשימת user_ids של נהגים תואמים
         """
+        if not destination_city:
+            logger.warning(
+                "get_matching_driver_user_ids נקרא ללא עיר יעד — מחזיר רשימה ריקה"
+            )
+            return []
+
         conditions = [
             DriverSearch.status == DriverSearchStatus.ACTIVE.value,
+            DriverSearch.destination_city == destination_city,
         ]
-        if destination_city:
-            conditions.append(DriverSearch.destination_city == destination_city)
         if origin_city:
             conditions.append(
                 (DriverSearch.origin_city == origin_city)

@@ -371,12 +371,15 @@ class RidePostingService:
         drivers = result.all()
 
         sent_count = 0
+        failed_count = 0
         for driver in drivers:
             try:
                 if driver.telegram_chat_id:
-                    from app.api.webhooks.telegram import send_telegram_message
+                    from app.api.webhooks.telegram import (
+                        send_telegram_message_raising,
+                    )
 
-                    await send_telegram_message(
+                    await send_telegram_message_raising(
                         str(driver.telegram_chat_id), notification_text
                     )
                     sent_count += 1
@@ -385,13 +388,16 @@ class RidePostingService:
                     and not driver.phone_number.startswith("tg:")
                     and not driver.phone_number.endswith("@g.us")
                 ):
-                    from app.api.webhooks.whatsapp import send_whatsapp_message
+                    from app.api.webhooks.whatsapp import (
+                        send_whatsapp_message_raising,
+                    )
 
-                    await send_whatsapp_message(
+                    await send_whatsapp_message_raising(
                         driver.phone_number, notification_text
                     )
                     sent_count += 1
             except Exception as e:
+                failed_count += 1
                 logger.error(
                     "כשלון בשליחת התראת נסיעה תואמת לנהג",
                     extra_data={"user_id": driver.id, "error": str(e)},
@@ -406,6 +412,7 @@ class RidePostingService:
                 "destination": posting.destination,
                 "total_drivers": len(driver_user_ids),
                 "sent_count": sent_count,
+                "failed_count": failed_count,
             },
         )
         return sent_count

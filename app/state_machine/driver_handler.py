@@ -1431,13 +1431,15 @@ class DriverStateHandler:
             )
             return response, DriverState.MENU.value, {}
 
-        # בניית רשימת חיפושים עם מספר נהגים פנויים לכל יעד
+        # בניית רשימת חיפושים עם מספר נהגים פנויים לכל יעד — שאילתה אחת במקום N+1
+        destination_cities = [s.destination_city for s in searches]
+        driver_counts = await self.search_service.count_available_drivers_for_destinations(
+            destination_cities, exclude_user_id=user.id
+        )
         search_lines = []
         for i, search in enumerate(searches, 1):
             summary = DriverSearchService.format_search_summary(search)
-            drivers_count = await self.search_service.count_available_drivers_for_destination(
-                search.destination_city, exclude_user_id=user.id
-            )
+            drivers_count = driver_counts.get(search.destination_city, 0)
             search_lines.append(f"{i}. {summary} — 🎲 {drivers_count} נהגים")
 
         searches_text = "\n".join(search_lines)
