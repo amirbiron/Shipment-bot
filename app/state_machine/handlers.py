@@ -1364,14 +1364,18 @@ class CourierStateHandler:
             return await self._handle_menu(user, "תפריט", context, None)
 
         # בחירת חבילת מנוי
-        months = self._parse_courier_subscription_choice(message)
+        from app.domain.services.driver_subscription_service import (
+            parse_subscription_choice,
+            months_to_label,
+        )
+        months = parse_subscription_choice(message)
         if months is not None:
             from app.domain.services.driver_subscription_service import (
                 SUBSCRIPTION_PRICES,
             )
             from app.core.config import settings
 
-            months_label = self._courier_months_to_label(months)
+            months_label = months_to_label(months)
             price = SUBSCRIPTION_PRICES.get(months, 0)
             paybox_number = settings.PAYBOX_PHONE_NUMBER or "לא הוגדר"
 
@@ -1416,7 +1420,7 @@ class CourierStateHandler:
                 "📸 אנא שלח צילום מסך של אישור התשלום, או לחץ 'ביטול'.",
                 keyboard=[["❌ ביטול"]],
             )
-            return response, CourierState.DEPOSIT_UPLOAD.value, {}
+            return response, CourierState.DEPOSIT_UPLOAD.value, None
 
         # שליחת התראה לאדמין עם כפתור אישור
         months_str = context.get("subscription_months", "1")
@@ -1425,7 +1429,8 @@ class CourierStateHandler:
         except (ValueError, TypeError):
             months = 1
 
-        months_label = self._courier_months_to_label(months)
+        from app.domain.services.driver_subscription_service import months_to_label
+        months_label = months_to_label(months)
 
         from app.domain.services.admin_notification_service import (
             AdminNotificationService,
@@ -1453,20 +1458,6 @@ class CourierStateHandler:
         return response, CourierState.MENU.value, {
             "subscription_months": None,
         }
-
-    @staticmethod
-    def _parse_courier_subscription_choice(text: str) -> int | None:
-        """מיפוי בחירת חבילת מנוי לשליח"""
-        from app.domain.services.driver_subscription_service import (
-            parse_subscription_choice,
-        )
-        return parse_subscription_choice(text)
-
-    @staticmethod
-    def _courier_months_to_label(months: int) -> str:
-        """מיפוי מספר חודשים לתווית"""
-        from app.domain.services.driver_subscription_service import months_to_label
-        return months_to_label(months)
 
     # ==================== Settings ====================
 

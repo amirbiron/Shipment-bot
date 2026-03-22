@@ -1820,7 +1820,11 @@ class DriverStateHandler:
             return await self._build_main_menu(user)
 
         # בחירת חבילה
-        months = self._parse_subscription_choice(msg)
+        from app.domain.services.driver_subscription_service import (
+            parse_subscription_choice,
+            months_to_label,
+        )
+        months = parse_subscription_choice(msg)
         if months is None:
             response = MessageResponse(
                 text="❌ בחירה לא תקינה. אנא בחר חבילה מהרשימה:",
@@ -1837,7 +1841,7 @@ class DriverStateHandler:
         from app.domain.services.driver_subscription_service import SUBSCRIPTION_PRICES
         from app.core.config import settings
 
-        months_label = self._months_to_label(months)
+        months_label = months_to_label(months)
         price = SUBSCRIPTION_PRICES.get(months, 0)
         paybox_number = settings.PAYBOX_PHONE_NUMBER or "לא הוגדר"
 
@@ -1880,7 +1884,8 @@ class DriverStateHandler:
             except (ValueError, TypeError):
                 months = 1
 
-            months_label = self._months_to_label(months)
+            from app.domain.services.driver_subscription_service import months_to_label
+            months_label = months_to_label(months)
 
             # שליחת התראה לאדמין עם כפתור אישור
             from app.domain.services.admin_notification_service import (
@@ -1917,21 +1922,7 @@ class DriverStateHandler:
             text="📸 אנא שלח צילום מסך של אישור התשלום, או לחץ 'ביטול'.",
             keyboard=[["❌ ביטול"]],
         )
-        return response, DriverState.SUBSCRIPTION_PURCHASE.value, {}
-
-    @staticmethod
-    def _parse_subscription_choice(text: str) -> int | None:
-        """מיפוי בחירת חבילה לחודשים — מעוגן לפורמט הכפתורים."""
-        from app.domain.services.driver_subscription_service import (
-            parse_subscription_choice,
-        )
-        return parse_subscription_choice(text)
-
-    @staticmethod
-    def _months_to_label(months: int) -> str:
-        """מיפוי מספר חודשים לתווית"""
-        from app.domain.services.driver_subscription_service import months_to_label
-        return months_to_label(months)
+        return response, DriverState.SUBSCRIPTION_PURCHASE.value, None
 
     # ==================== fallback ====================
 
