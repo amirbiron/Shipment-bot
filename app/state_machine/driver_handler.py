@@ -1386,7 +1386,7 @@ class DriverStateHandler:
         summary = DriverSearchService.format_search_summary(search)
         active_count = await self.search_service.get_active_search_count(user.id)
         available_drivers = await self.search_service.count_available_drivers_for_destination(
-            search.destination_city
+            search.destination_city, exclude_user_id=user.id
         )
 
         # שליפת חיפושים קיימים להצגה מתחת לאישור
@@ -1435,7 +1435,7 @@ class DriverStateHandler:
         for i, search in enumerate(searches, 1):
             summary = DriverSearchService.format_search_summary(search)
             drivers_count = await self.search_service.count_available_drivers_for_destination(
-                search.destination_city
+                search.destination_city, exclude_user_id=user.id
             )
             search_lines.append(f"{i}. {summary} — 🎲 {drivers_count} נהגים")
 

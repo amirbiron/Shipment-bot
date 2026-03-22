@@ -367,15 +367,15 @@ class RidePostingService:
         for uid in driver_user_ids:
             try:
                 result = await self._db.execute(
-                    select(User.telegram_id).where(User.id == uid)
+                    select(User.telegram_chat_id).where(User.id == uid)
                 )
-                telegram_id = result.scalar_one_or_none()
-                if not telegram_id:
+                telegram_chat_id = result.scalar_one_or_none()
+                if not telegram_chat_id:
                     continue
 
                 from app.api.webhooks.telegram import send_telegram_message
 
-                await send_telegram_message(str(telegram_id), notification_text)
+                await send_telegram_message(str(telegram_chat_id), notification_text)
                 sent_count += 1
             except Exception as e:
                 logger.error(

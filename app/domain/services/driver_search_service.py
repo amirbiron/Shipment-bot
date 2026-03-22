@@ -450,23 +450,30 @@ class DriverSearchService:
         return result.scalar_one_or_none()
 
     async def count_available_drivers_for_destination(
-        self, destination_city: str
+        self,
+        destination_city: str,
+        exclude_user_id: int | None = None,
     ) -> int:
         """
         ספירת נהגים ייחודיים עם חיפוש פעיל ליעד מסוים.
 
         Args:
             destination_city: עיר יעד
+            exclude_user_id: מזהה נהג להחרגה (הנהג המבקש)
 
         Returns:
             מספר נהגים פנויים עם חיפוש תואם
         """
+        conditions = [
+            DriverSearch.destination_city == destination_city,
+            DriverSearch.status == DriverSearchStatus.ACTIVE.value,
+        ]
+        if exclude_user_id is not None:
+            conditions.append(DriverSearch.user_id != exclude_user_id)
+
         result = await self.db.execute(
             select(func.count(func.distinct(DriverSearch.user_id)))
-            .where(
-                DriverSearch.destination_city == destination_city,
-                DriverSearch.status == DriverSearchStatus.ACTIVE.value,
-            )
+            .where(*conditions)
         )
         return result.scalar_one()
 
