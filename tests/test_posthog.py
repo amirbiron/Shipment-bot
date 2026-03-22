@@ -53,7 +53,7 @@ class TestInitPosthog:
         """PostHog לא מאותחל כש-API Key ריק"""
         with patch("app.core.posthog.logger") as mock_logger:
             _settings = MagicMock()
-            _settings.POSTHOG_API_KEY = ""
+            _settings.POSTHOG_PROJECT_TOKEN = ""
             with patch("app.core.config.settings", _settings):
                 init_posthog()
                 mock_logger.info.assert_called_once()
@@ -63,7 +63,7 @@ class TestInitPosthog:
     def test_init_success_with_api_key(self) -> None:
         """PostHog מאותחל בהצלחה כש-API Key מוגדר"""
         _settings = MagicMock()
-        _settings.POSTHOG_API_KEY = "phc_test_key"
+        _settings.POSTHOG_PROJECT_TOKEN = "phc_test_key"
         _settings.POSTHOG_HOST = "https://us.i.posthog.com"
         _settings.DEBUG = False
 

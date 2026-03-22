@@ -36,21 +36,21 @@ def _scrub_properties(properties: dict[str, Any]) -> dict[str, Any]:
 def init_posthog() -> None:
     """אתחול PostHog SDK — קריאה חד-פעמית בעלייה של FastAPI או Celery worker.
 
-    אם POSTHOG_API_KEY ריק, PostHog לא יאותחל ואין תופעות לוואי.
+    אם POSTHOG_PROJECT_TOKEN ריק, PostHog לא יאותחל ואין תופעות לוואי.
     """
     global _posthog_client
 
     from app.core.config import settings
 
-    if not settings.POSTHOG_API_KEY:
-        logger.info("POSTHOG_API_KEY לא מוגדר — PostHog מושבת")
+    if not settings.POSTHOG_PROJECT_TOKEN:
+        logger.info("POSTHOG_PROJECT_TOKEN לא מוגדר — PostHog מושבת")
         return
 
     try:
         from posthog import Posthog
 
         _posthog_client = Posthog(
-            api_key=settings.POSTHOG_API_KEY,
+            api_key=settings.POSTHOG_PROJECT_TOKEN,
             host=settings.POSTHOG_HOST,
             debug=settings.DEBUG,
             # שליחת אירועים ב-batch — ביצועים טובים יותר

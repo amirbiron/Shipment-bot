@@ -254,7 +254,7 @@ class Settings(BaseSettings):
     SENTRY_PROFILES_SAMPLE_RATE: float = 0.1  # דגימת profiling: 10%
 
     # PostHog — Product Analytics
-    POSTHOG_API_KEY: str = ""  # API Key מפרויקט PostHog — ריק = PostHog מושבת
+    POSTHOG_PROJECT_TOKEN: str = ""  # Project API Key (טוקן) מפרויקט PostHog — ריק = PostHog מושבת
     POSTHOG_HOST: str = "https://us.i.posthog.com"  # כתובת שרת PostHog (Cloud US / EU / self-hosted)
 
     # ניהול תפקידים לאדמין — החלפת תפקיד לצורך בדיקות
