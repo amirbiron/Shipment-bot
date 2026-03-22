@@ -253,6 +253,10 @@ class Settings(BaseSettings):
     SENTRY_TRACES_SAMPLE_RATE: float = 0.1  # דגימת ביצועים: 10% מהבקשות
     SENTRY_PROFILES_SAMPLE_RATE: float = 0.1  # דגימת profiling: 10%
 
+    # PostHog — Product Analytics
+    POSTHOG_API_KEY: str = ""  # API Key מפרויקט PostHog — ריק = PostHog מושבת
+    POSTHOG_HOST: str = "https://us.i.posthog.com"  # כתובת שרת PostHog (Cloud US / EU / self-hosted)
+
     # ניהול תפקידים לאדמין — החלפת תפקיד לצורך בדיקות
     ADMIN_ROLE_SWITCH_ENABLED: bool = True
 

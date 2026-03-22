@@ -34,3 +34,6 @@ PyJWT>=2.7.0
 
 # Error Tracking — Sentry
 sentry-sdk[fastapi,celery,sqlalchemy]>=2.0.0
+
+# Product Analytics — PostHog
+posthog>=3.0.0
