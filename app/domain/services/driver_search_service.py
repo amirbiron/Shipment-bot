@@ -449,6 +449,63 @@ class DriverSearchService:
         )
         return result.scalar_one_or_none()
 
+    async def count_available_drivers_for_destination(
+        self, destination_city: str
+    ) -> int:
+        """
+        ספירת נהגים ייחודיים עם חיפוש פעיל ליעד מסוים.
+
+        Args:
+            destination_city: עיר יעד
+
+        Returns:
+            מספר נהגים פנויים עם חיפוש תואם
+        """
+        result = await self.db.execute(
+            select(func.count(func.distinct(DriverSearch.user_id)))
+            .where(
+                DriverSearch.destination_city == destination_city,
+                DriverSearch.status == DriverSearchStatus.ACTIVE.value,
+            )
+        )
+        return result.scalar_one()
+
+    async def get_matching_driver_user_ids(
+        self,
+        origin_city: str | None,
+        destination_city: str | None,
+        exclude_user_id: int | None = None,
+    ) -> list[int]:
+        """
+        שליפת מזהי נהגים עם חיפושים פעילים תואמים למסלול נסיעה.
+
+        Args:
+            origin_city: עיר מוצא (אופציונלי)
+            destination_city: עיר יעד (אופציונלי)
+            exclude_user_id: מזהה נהג להחרגה (הנהג שפרסם)
+
+        Returns:
+            רשימת user_ids של נהגים תואמים
+        """
+        conditions = [
+            DriverSearch.status == DriverSearchStatus.ACTIVE.value,
+        ]
+        if destination_city:
+            conditions.append(DriverSearch.destination_city == destination_city)
+        if origin_city:
+            conditions.append(
+                (DriverSearch.origin_city == origin_city)
+                | (DriverSearch.origin_city == "")
+                | (DriverSearch.origin_city.is_(None))
+            )
+        if exclude_user_id is not None:
+            conditions.append(DriverSearch.user_id != exclude_user_id)
+
+        result = await self.db.execute(
+            select(func.distinct(DriverSearch.user_id)).where(*conditions)
+        )
+        return [row[0] for row in result.all()]
+
     @staticmethod
     def format_search_summary(
         search: DriverSearch, *, html_escape: bool = True

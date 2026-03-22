@@ -334,3 +334,64 @@ class RidePostingService:
         )
 
         return True, message, sent_count, len(groups)
+
+    async def notify_matching_drivers(
+        self,
+        posting: ParsedRidePosting,
+        driver_name: str,
+        driver_user_ids: list[int],
+    ) -> int:
+        """
+        שליחת הודעה פרטית לנהגים עם חיפושים תואמים למסלול הנסיעה.
+
+        Args:
+            posting: פרטי הנסיעה
+            driver_name: שם הנהג שפרסם
+            driver_user_ids: רשימת מזהי משתמשים לשליחה
+
+        Returns:
+            מספר הודעות שנשלחו בהצלחה
+        """
+        if not driver_user_ids:
+            return 0
+
+        from app.db.models.user import User
+
+        message = self.format_ride_message(posting, driver_name)
+        notification_text = (
+            f"🔔 <b>נסיעה תואמת לחיפוש שלך!</b>\n\n"
+            f"{message}"
+        )
+
+        sent_count = 0
+        for uid in driver_user_ids:
+            try:
+                result = await self._db.execute(
+                    select(User.telegram_id).where(User.id == uid)
+                )
+                telegram_id = result.scalar_one_or_none()
+                if not telegram_id:
+                    continue
+
+                from app.api.webhooks.telegram import send_telegram_message
+
+                await send_telegram_message(str(telegram_id), notification_text)
+                sent_count += 1
+            except Exception as e:
+                logger.error(
+                    "כשלון בשליחת התראת נסיעה תואמת לנהג",
+                    extra_data={"user_id": uid, "error": str(e)},
+                    exc_info=True,
+                )
+
+        logger.info(
+            "התראות נסיעה תואמת נשלחו לנהגים",
+            extra_data={
+                "driver_name": driver_name,
+                "origin": posting.origin,
+                "destination": posting.destination,
+                "total_drivers": len(driver_user_ids),
+                "sent_count": sent_count,
+            },
+        )
+        return sent_count
