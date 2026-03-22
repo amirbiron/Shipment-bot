@@ -384,7 +384,7 @@ class TestDriverSubscriptionHandler:
 
     @pytest.mark.asyncio
     async def test_subscription_purchase_flow(self, db_session, user_factory):
-        """זרימת רכישה מלאה — בחירת חבילה → אישור"""
+        """זרימת רכישה מלאה — בחירת חבילה → תשלום PayBox → צילום מסך"""
         user, _ = await _create_registered_driver(
             db_session, user_factory, phone="+972505008022"
         )
@@ -393,26 +393,33 @@ class TestDriverSubscriptionHandler:
         from app.state_machine.manager import StateManager
         sm = StateManager(db_session)
 
-        # שלב 1: מעבר לתצוגת מנוי
+        # שלב 1: בחירת חבילה מתצוגת מנוי
         await sm.force_state(user.id, "telegram", DriverState.SUBSCRIPTION_VIEW.value, {})
         response, new_state = await handler.handle_message(user, "📦 3 חודשים")
 
         assert new_state == DriverState.SUBSCRIPTION_PURCHASE.value
-        assert "אישור" in response.text
+        assert "פייבוקס" in response.text or "תשלום" in response.text
+        assert "240" in response.text  # מחיר 3 חודשים
 
-        # שלב 2: אישור רכישה
-        response, new_state = await handler.handle_message(user, "✅ אישור רכישה — 3 חודשים")
+        # שלב 2: שליחת צילום מסך תשלום
+        from unittest.mock import AsyncMock, patch
+
+        def _mock_notify():
+            return patch(
+                "app.domain.services.admin_notification_service.AdminNotificationService.notify_subscription_payment",
+                new_callable=AsyncMock,
+                return_value=True,
+            )
+
+        with _mock_notify() as mock_notify:
+            response, new_state = await handler.handle_message(
+                user, "", photo_file_id="test_screenshot_123"
+            )
 
         assert new_state == DriverState.MENU.value
-        assert "בוצעה בהצלחה" in response.text
-
-        # בדיקת עדכון DB
-        result = await db_session.execute(
-            select(DriverProfile).where(DriverProfile.user_id == user.id)
-        )
-        profile = result.scalar_one()
-        assert profile.subscription_status == DriverSubscriptionStatus.ACTIVE.value
-        assert profile.subscription_expires_at is not None
+        assert "התקבל" in response.text
+        assert "אישור הנהלה" in response.text or "אישור" in response.text
+        mock_notify.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_subscription_cancel(self, db_session, user_factory):

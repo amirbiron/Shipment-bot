@@ -63,6 +63,9 @@ class User(Base):
     # מיגרציה: ALTER TABLE users ADD COLUMN rejection_note TEXT;
     rejection_note = Column(Text, nullable=True)
     terms_accepted_at = Column(DateTime, nullable=True)
+    # מנוי שליח — תאריך תפוגה (עבור שליחים שרוכשים מנוי דרך PayBox)
+    # מיגרציה: ALTER TABLE users ADD COLUMN subscription_expires_at TIMESTAMP;
+    subscription_expires_at = Column(DateTime, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

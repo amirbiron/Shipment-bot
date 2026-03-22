@@ -672,6 +672,14 @@ async def run_migration_015(conn: AsyncConnection) -> None:
     """))
 
 
+async def run_migration_016(conn: AsyncConnection) -> None:
+    """מיגרציה 016 — הוספת subscription_expires_at לטבלת users (מנוי שליח)."""
+    await conn.execute(text("""
+        ALTER TABLE users
+            ADD COLUMN IF NOT EXISTS subscription_expires_at TIMESTAMP;
+    """))
+
+
 async def run_all_migrations(conn: AsyncConnection) -> None:
     """הרצת כל המיגרציות ברצף (ללא ALTER TYPE — ראה add_enum_values)."""
     logger.info("Running migration 001...")
@@ -704,3 +712,5 @@ async def run_all_migrations(conn: AsyncConnection) -> None:
     await run_migration_014(conn)
     logger.info("Running migration 015...")
     await run_migration_015(conn)
+    logger.info("Running migration 016...")
+    await run_migration_016(conn)

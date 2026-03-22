@@ -663,6 +663,98 @@ class AdminNotificationService:
         return success
 
     @staticmethod
+    async def notify_subscription_payment(
+        user_id: int,
+        full_name: str,
+        months: int,
+        months_label: str,
+        screenshot_file_id: str,
+        platform: str = "telegram",
+        role: str = "driver",
+    ) -> bool:
+        """העברת אישור תשלום מנוי לאדמין עם כפתור אישור.
+
+        Args:
+            user_id: מזהה המשתמש
+            full_name: שם מלא
+            months: מספר חודשים
+            months_label: תווית החבילה
+            screenshot_file_id: מזהה תמונת אישור התשלום
+            platform: פלטפורמה (telegram/whatsapp)
+            role: תפקיד (driver/courier)
+        """
+        from app.domain.services.driver_subscription_service import SUBSCRIPTION_PRICES
+
+        price = SUBSCRIPTION_PRICES.get(months, 0)
+        safe_name = TextSanitizer.sanitize_for_html(full_name)
+        role_label = "נהג" if role == "driver" else "שליח"
+
+        message = (
+            f"💳 <b>בקשת רכישת מנוי חדשה!</b>\n\n"
+            f"📋 <b>פרטים:</b>\n"
+            f"• תפקיד: {role_label}\n"
+            f"• שם: {safe_name}\n"
+            f"• User ID: {user_id}\n"
+            f"• פלטפורמה: {platform}\n\n"
+            f"📦 <b>חבילה:</b> {months_label}\n"
+            f"💰 <b>מחיר:</b> {price} ש\"ח + מע\"מ\n\n"
+            f"📸 צילום מסך תשלום: נשלח"
+        )
+
+        success = False
+
+        # שליחה למנהלים פרטיים בטלגרם
+        tg_admin_ids = _parse_csv_setting(settings.TELEGRAM_ADMIN_CHAT_IDS)
+        if not tg_admin_ids and settings.TELEGRAM_ADMIN_CHAT_ID:
+            tg_admin_ids = [settings.TELEGRAM_ADMIN_CHAT_ID]
+
+        inline_keyboard = [[
+            {
+                "text": "✅ אשר מנוי",
+                "callback_data": f"approve_subscription_{user_id}_{months}",
+            },
+        ]]
+
+        for admin_id in tg_admin_ids:
+            tg_sent = await AdminNotificationService._send_telegram_message_with_inline_keyboard(
+                admin_id, message, inline_keyboard
+            )
+            success = success or tg_sent
+
+            # העברת צילום מסך
+            if tg_sent and screenshot_file_id:
+                if platform == "telegram":
+                    await AdminNotificationService._forward_photo(
+                        admin_id, screenshot_file_id
+                    )
+                else:
+                    await AdminNotificationService._forward_whatsapp_photo_to_telegram(
+                        admin_id, screenshot_file_id
+                    )
+
+        # שליחה לקבוצת ניהול בטלגרם (ללא כפתורים — בקבוצה כפתורי inline לא עובדים)
+        if settings.TELEGRAM_ADMIN_CHAT_ID and settings.TELEGRAM_ADMIN_CHAT_ID not in tg_admin_ids:
+            group_msg = (
+                message + "\n\n✅ לאישור — לחצו על כפתור האישור בהודעה הפרטית של הבוט."
+            )
+            group_sent = await AdminNotificationService._send_telegram_message(
+                settings.TELEGRAM_ADMIN_CHAT_ID, group_msg
+            )
+            success = success or group_sent
+
+            if group_sent and screenshot_file_id:
+                if platform == "telegram":
+                    await AdminNotificationService._forward_photo(
+                        settings.TELEGRAM_ADMIN_CHAT_ID, screenshot_file_id
+                    )
+                else:
+                    await AdminNotificationService._forward_whatsapp_photo_to_telegram(
+                        settings.TELEGRAM_ADMIN_CHAT_ID, screenshot_file_id
+                    )
+
+        return success
+
+    @staticmethod
     async def notify_courier_approved(telegram_chat_id: str) -> bool:
         """Notify courier that they've been approved"""
         if not settings.TELEGRAM_BOT_TOKEN:

@@ -1668,6 +1668,120 @@ async def telegram_webhook(
             )
             return {"ok": True}
 
+    # שלב 3.5: טיפול בכפתורי אישור מנוי (מנהלים בלבד)
+    if event.is_callback:
+        sub_action = re.match(r"^approve_subscription_(\d+)_(\d+)$", text)
+        if sub_action:
+            clicker_id = telegram_user_id
+            admin_ids = {
+                cid.strip()
+                for cid in settings.TELEGRAM_ADMIN_CHAT_IDS.split(",")
+                if cid.strip()
+            }
+            if settings.TELEGRAM_ADMIN_CHAT_ID:
+                admin_ids.add(settings.TELEGRAM_ADMIN_CHAT_ID)
+
+            if clicker_id and clicker_id in admin_ids:
+                sub_user_id = int(sub_action.group(1))
+                sub_months = int(sub_action.group(2))
+
+                try:
+                    # חיפוש המשתמש לזיהוי תפקיד
+                    user_result = await db.execute(
+                        select(User).where(User.id == sub_user_id)
+                    )
+                    sub_user = user_result.scalar_one_or_none()
+                    if not sub_user:
+                        background_tasks.add_task(
+                            send_telegram_message,
+                            send_chat_id,
+                            f"❌ משתמש {sub_user_id} לא נמצא.",
+                        )
+                        return {"ok": True, "admin_action": "approve_subscription_user_not_found"}
+
+                    from app.domain.services.driver_subscription_service import (
+                        DriverSubscriptionService,
+                        SUBSCRIPTION_MONTH_DAYS,
+                    )
+                    from datetime import datetime, timedelta
+
+                    expires_str = ""
+
+                    if sub_user.role == UserRole.DRIVER:
+                        # נהג — שימוש בשירות מנוי קיים (DriverProfile)
+                        sub_service = DriverSubscriptionService(db)
+                        profile = await sub_service.purchase_subscription(
+                            sub_user_id, sub_months
+                        )
+                        if profile.subscription_expires_at:
+                            expires_str = profile.subscription_expires_at.strftime(
+                                "%d/%m/%Y"
+                            )
+                    else:
+                        # שליח / תפקיד אחר — עדכון subscription_expires_at על User
+                        now = datetime.utcnow()
+                        current_end = sub_user.subscription_expires_at
+                        if current_end is not None and current_end > now:
+                            start_from = current_end
+                        else:
+                            start_from = now
+                        new_end = start_from + timedelta(
+                            days=sub_months * SUBSCRIPTION_MONTH_DAYS
+                        )
+                        sub_user.subscription_expires_at = new_end
+                        sub_user.updated_at = now
+                        await db.commit()
+                        expires_str = new_end.strftime("%d/%m/%Y")
+
+                    background_tasks.add_task(
+                        send_telegram_message,
+                        send_chat_id,
+                        f"✅ מנוי אושר למשתמש {sub_user_id} — "
+                        f"{sub_months} חודשים (עד {expires_str})",
+                    )
+
+                    # הודעה למשתמש שהמנוי אושר
+                    tg_chat_id = sub_user.telegram_chat_id or (
+                        str(sub_user.id) if sub_user.platform == "telegram" else None
+                    )
+                    if tg_chat_id:
+                        background_tasks.add_task(
+                            send_telegram_message,
+                            tg_chat_id,
+                            f"🎉 <b>המנוי אושר!</b>\n\n"
+                            f"📦 חבילה: {sub_months} חודשים\n"
+                            f"📅 תוקף עד: {expires_str}\n\n"
+                            f"תודה! אפשר להמשיך לעבוד.",
+                        )
+                except Exception as e:
+                    logger.error(
+                        "כשלון באישור מנוי",
+                        extra_data={
+                            "user_id": sub_user_id,
+                            "months": sub_months,
+                            "error": str(e),
+                        },
+                        exc_info=True,
+                    )
+                    background_tasks.add_task(
+                        send_telegram_message,
+                        send_chat_id,
+                        f"❌ שגיאה באישור מנוי למשתמש {sub_user_id}: {e}",
+                    )
+
+                return {
+                    "ok": True,
+                    "admin_action": "approve_subscription",
+                    "user_id": sub_user_id,
+                    "months": sub_months,
+                }
+
+            logger.warning(
+                "Non-admin clicked subscription approval button",
+                extra_data={"clicker_id": clicker_id, "chat_id": send_chat_id},
+            )
+            return {"ok": True}
+
     # שלב 4: טיפול בכפתורי אישור/דחיית משלוח (סדרנים בלבד)
     if event.is_callback:
         delivery_action = re.match(r"^(approve|reject)_delivery_(\d+)$", text)

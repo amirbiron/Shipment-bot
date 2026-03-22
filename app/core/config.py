@@ -98,6 +98,9 @@ class Settings(BaseSettings):
     WHATSAPP_GROUP_LINK: str = ""  # קישור לקבוצת וואטסאפ להעלאת משלוח מהיר
     ADMIN_WHATSAPP_NUMBER: str = ""  # מספר וואטסאפ של המנהל הראשי לפנייה ישירה
 
+    # תשלום מנוי (PayBox)
+    PAYBOX_PHONE_NUMBER: str = ""  # מספר פייבוקס לתשלום מנויים
+
     # Telegram
     TELEGRAM_BOT_TOKEN: Optional[str] = None
     TELEGRAM_BOT_USERNAME: str = ""  # שם הבוט בטלגרם (בלי @) — נדרש ל-Telegram Login Widget

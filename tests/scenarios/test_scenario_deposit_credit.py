@@ -143,15 +143,22 @@ class TestDepositAndCredit:
             context={},
         )
 
-        # שלב 1: שליח שולח "💳 הפקדה" מתפריט — מצפים למעבר ל-DEPOSIT_UPLOAD
-        data = await send_tg(test_client, chat_id, "💳 הפקדה")
+        # שלב 1: שליח שולח "💳 מנוי" מתפריט — מצפים לתפריט חבילות (DEPOSIT_REQUEST)
+        data = await send_tg(test_client, chat_id, "💳 מנוי")
+        new_state = data.get("new_state", "")
+        assert new_state == CourierState.DEPOSIT_REQUEST.value, (
+            f"צפי: {CourierState.DEPOSIT_REQUEST.value}, בפועל: {new_state}"
+        )
+
+        # שלב 2: בחירת חבילה — מצפים למעבר ל-DEPOSIT_UPLOAD עם הנחיות PayBox
+        data = await send_tg(test_client, chat_id, "📦 חודש אחד")
         new_state = data.get("new_state", "")
         assert new_state == CourierState.DEPOSIT_UPLOAD.value, (
             f"צפי: {CourierState.DEPOSIT_UPLOAD.value}, בפועל: {new_state}"
         )
 
-        # שלב 2: שליח מעלה צילום מסך — מצפים לחזרה לתפריט (אחרי אישור הבקשה)
-        data = await send_tg_photo(test_client, chat_id, "deposit_screenshot")
+        # שלב 3: שליח מעלה צילום מסך תשלום — מצפים לחזרה לתפריט
+        data = await send_tg_photo(test_client, chat_id, "payment_screenshot")
         new_state = data.get("new_state", "")
         assert new_state == CourierState.MENU.value, (
             f"צפי: {CourierState.MENU.value}, בפועל: {new_state}"
