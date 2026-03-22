@@ -426,6 +426,16 @@ def _is_group_target(identifier: str) -> bool:
     return identifier.endswith("@g.us")
 
 
+_WHATSAPP_BRANDING = "iDriver 🤖 – מסדר לך את הדרך"
+
+
+def _append_branding(text: str, has_keyboard: bool) -> str:
+    """הוספת שורת מיתוג לכל הודעת WhatsApp."""
+    if has_keyboard:
+        return f"{text}\n\n_{_WHATSAPP_BRANDING}_"
+    return f"{text}\n\n```{_WHATSAPP_BRANDING}```"
+
+
 async def send_whatsapp_message(
     phone_number: str, text: str, keyboard: list = None
 ) -> None:
@@ -439,7 +449,7 @@ async def send_whatsapp_message(
         provider = get_whatsapp_group_provider()
     else:
         provider = get_whatsapp_provider()
-    formatted_text = provider.format_text(text)
+    formatted_text = _append_branding(provider.format_text(text), bool(keyboard))
     try:
         await provider.send_text(to=phone_number, text=formatted_text, keyboard=keyboard)
     except Exception as exc:
@@ -463,7 +473,7 @@ async def send_whatsapp_message_raising(
         provider = get_whatsapp_group_provider()
     else:
         provider = get_whatsapp_provider()
-    formatted_text = provider.format_text(text)
+    formatted_text = _append_branding(provider.format_text(text), bool(keyboard))
     await provider.send_text(to=phone_number, text=formatted_text, keyboard=keyboard)
 
 
