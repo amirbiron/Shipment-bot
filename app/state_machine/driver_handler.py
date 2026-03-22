@@ -1405,6 +1405,7 @@ class DriverStateHandler:
             text_parts.append(f"\n📋 <b>חיפושים מוגדרים:</b>\n{existing_list}\n")
 
         text_parts.append("\n💡 להוספת חיפוש נוסף - שלח 'פ &lt;יעד&gt;'")
+        text_parts.append("\n📋 לחזרה לתפריט שלח 'ת'")
 
         response = MessageResponse(
             text="".join(text_parts),
