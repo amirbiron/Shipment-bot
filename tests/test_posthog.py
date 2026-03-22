@@ -91,6 +91,20 @@ class TestInitPosthog:
         posthog_module._posthog_client = None
 
 
+    @pytest.mark.unit
+    def test_init_idempotent_does_not_create_second_client(self) -> None:
+        """קריאה חוזרת ל-init_posthog לא יוצרת client כפול"""
+        existing_client = MagicMock()
+        posthog_module._posthog_client = existing_client
+
+        try:
+            init_posthog()
+            # ה-client לא השתנה — לא נוצר חדש
+            assert posthog_module._posthog_client is existing_client
+        finally:
+            posthog_module._posthog_client = None
+
+
 class TestCaptureEvent:
     """בדיקות שליחת אירועים"""
 

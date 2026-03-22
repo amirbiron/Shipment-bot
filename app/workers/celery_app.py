@@ -11,7 +11,7 @@ from app.core.sentry import init_sentry
 init_sentry()
 
 # אתחול PostHog גם ב-Celery worker — מעקב אירועים מ-tasks
-from app.core.posthog import init_posthog
+from app.core.posthog import init_posthog, shutdown_posthog
 init_posthog()
 
 celery_app = Celery(
@@ -20,6 +20,14 @@ celery_app = Celery(
     backend=settings.CELERY_RESULT_BACKEND,
     include=["app.workers.tasks"]
 )
+
+
+# סגירת PostHog בכיבוי worker — שליחת אירועים שנותרו בתור
+from celery.signals import worker_shutdown  # noqa: E402
+
+@worker_shutdown.connect
+def _on_worker_shutdown(**kwargs: object) -> None:
+    shutdown_posthog()
 
 # Celery configuration
 celery_app.conf.update(

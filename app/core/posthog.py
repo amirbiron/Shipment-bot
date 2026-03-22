@@ -29,8 +29,13 @@ def init_posthog() -> None:
     """אתחול PostHog SDK — קריאה חד-פעמית בעלייה של FastAPI או Celery worker.
 
     אם POSTHOG_PROJECT_TOKEN ריק, PostHog לא יאותחל ואין תופעות לוואי.
+    idempotent — קריאה חוזרת לא תיצור client נוסף.
     """
     global _posthog_client
+
+    # הגנת idempotency — מונע יצירת client כפול ודליפת thread
+    if _posthog_client is not None:
+        return
 
     from app.core.config import settings
 
