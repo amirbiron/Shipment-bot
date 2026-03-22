@@ -346,7 +346,7 @@ class SenderStateHandler:
             return response, SenderState.MENU.value, {}
 
         response = MessageResponse(
-            "🤔 לא הבנתי. אנא בחרו פעולה מהתפריט:",
+            "🤔 לא הבנתי. נסו שוב מהתפריט:",
             keyboard=[
                 ["📦 המשלוחים שלי", "➕ משלוח חדש"],
                 ["🚚 הצטרפות למנוי וקבלת משלוחים"],
@@ -576,7 +576,7 @@ class SenderStateHandler:
                 extra_data={"user_id": user_id, "raw_input": repr(msg)},
             )
             response = MessageResponse(
-                "📍 אנא בחרו סוג משלוח:\n" "1. בתוך העיר\n" "2. מחוץ לעיר",
+                "📍 לאן המשלוח?\n" "1. בתוך העיר\n" "2. מחוץ לעיר",
                 keyboard=[["🏙️ בתוך העיר", "🚗 מחוץ לעיר"]],
             )
             return response, SenderState.DELIVERY_LOCATION.value, {}
@@ -641,9 +641,9 @@ class SenderStateHandler:
             return response, SenderState.DELIVERY_TIME.value, {"urgency": "later"}
 
         response = MessageResponse(
-            "⏱️ אנא בחרו דחיפות משלוח:\n"
+            "⏱️ מתי לשלוח?\n"
             "1. 🚀 מיידי - המשלוח יתבצע בהקדם\n"
-            "2. ☕ בנחת - תבחרו שעה מועדפת",
+            "2. ☕ בנחת - קביעת שעה מועדפת",
             keyboard=[["🚀 מיידי", "☕ בנחת"]],
         )
         return response, SenderState.DELIVERY_URGENCY.value, {}
@@ -812,7 +812,7 @@ class SenderStateHandler:
 
         # Invalid response
         response = MessageResponse(
-            "📋 אנא בחרו אישור או ביטול:\n" "1. ✅ אישור ושליחה\n" "2. ❌ ביטול",
+            "📋 לאשר את המשלוח?\n" "1. ✅ אישור ושליחה\n" "2. ❌ ביטול",
             keyboard=[["✅ אישור ושליחה", "❌ ביטול"]],
         )
         return response, SenderState.DELIVERY_CONFIRM.value, {}
@@ -1135,7 +1135,7 @@ class CourierStateHandler:
 
         if not category:
             response = MessageResponse(
-                "אנא בחר אחת מהאפשרויות:\n"
+                "🚗 בחירת סוג רכב:\n"
                 "1. 🚗 רכב 4 מקומות\n"
                 "2. 🚐 7 מקומות\n"
                 "3. 🛻 טנדר\n"

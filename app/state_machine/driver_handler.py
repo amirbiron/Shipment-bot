@@ -439,7 +439,7 @@ class DriverStateHandler:
 
         if not dress_code_value:
             response = MessageResponse(
-                text="❌ בחירה לא תקינה. אנא בחר מהרשימה:",
+                text="❌ לא זיהיתי. 👔 בחירת סוג לבוש:",
                 keyboard=_DRESS_CODE_KEYBOARD,
             )
             return response, DriverState.REGISTER_COLLECT_DRESS_CODE.value, {}
@@ -1042,7 +1042,7 @@ class DriverStateHandler:
             keyboard = [[label] for label in VEHICLE_TYPE_LABELS.values()]
             keyboard.append(["❌ ביטול"])
             response = MessageResponse(
-                text="❌ בחירה לא תקינה. אנא בחר מהרשימה:",
+                text="❌ לא זיהיתי. 🚗 בחירת סוג רכב:",
                 keyboard=keyboard,
             )
             return response, DriverState.SETTINGS_VEHICLE_TYPE.value, {}
@@ -1091,7 +1091,7 @@ class DriverStateHandler:
             keyboard = [[label] for label in TRIP_TYPE_LABELS.values()]
             keyboard.append(["❌ ביטול"])
             response = MessageResponse(
-                text="❌ בחירה לא תקינה. אנא בחר מהרשימה:",
+                text="❌ לא זיהיתי. 🛣️ בחירת סוג נסיעה:",
                 keyboard=keyboard,
             )
             return response, DriverState.SETTINGS_TRIP_TYPE.value, {}
@@ -1139,7 +1139,7 @@ class DriverStateHandler:
 
         if show is None:
             response = MessageResponse(
-                text="❌ בחירה לא תקינה. אנא בחר כן או לא:",
+                text="❌ לא זיהיתי. 📦 הצגת משלוחים — כן או לא?",
                 keyboard=[["✅ כן — הצג משלוחים"], ["❌ לא — ללא משלוחים"], ["❌ ביטול"]],
             )
             return response, DriverState.SETTINGS_SHOW_DELIVERIES.value, {}
@@ -1184,7 +1184,7 @@ class DriverStateHandler:
             keyboard = [[label] for label in TIMEFRAME_LABELS.values()]
             keyboard.append(["❌ ביטול"])
             response = MessageResponse(
-                text="❌ בחירה לא תקינה. אנא בחר מהרשימה:",
+                text="❌ לא זיהיתי. ⏰ בחירת טווח זמן:",
                 keyboard=keyboard,
             )
             return response, DriverState.SETTINGS_UPCOMING_TIMEFRAME.value, {}
@@ -1871,7 +1871,7 @@ class DriverStateHandler:
         months = parse_subscription_choice(msg)
         if months is None:
             response = MessageResponse(
-                text="❌ בחירה לא תקינה. אנא בחר חבילה מהרשימה:",
+                text="❌ לא זיהיתי. 📦 בחירת חבילת מנוי:",
                 keyboard=[
                     ["📦 חודש אחד"],
                     ["📦 חודשיים"],
