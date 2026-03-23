@@ -682,7 +682,7 @@ app.get('/health', async (req, res) => {
 
 // Send message endpoint
 app.post('/send', async (req, res) => {
-    const { phone, message, keyboard } = req.body;
+    const { phone, message, keyboard, footer } = req.body;
 
     console.log('Send request received - phone:', phone, 'message:', message?.substring(0, 50));
     console.log('Keyboard:', keyboard);
@@ -759,6 +759,7 @@ app.post('/send', async (req, res) => {
                     buttonText: { displayText: text },
                     buttonId: text  // Use text as buttonId for easier handling
                 }));
+                // sendButtons(chatId, title, buttons, description) — לא תומך ב-footer ישירות
                 result = await client.sendButtons(listChatId, 'בחרו אפשרות:', buttons, message);
                 console.log('Message sent with buttons (v1 format) to:', listChatId);
             } catch (btnError) {
@@ -789,7 +790,7 @@ app.post('/send', async (req, res) => {
                     const safeTitle = truncateByCodepoints("משלוח בצ'יק", 24);
                     const safeDescription = truncateByCodepoints(message, 1024);
 
-                    result = await client.sendListMessage(listChatId, {
+                    const listPayload = {
                         buttonText: safeButtonText,
                         title: safeTitle,
                         description: safeDescription,
@@ -802,7 +803,12 @@ app.post('/send', async (req, res) => {
                                 description: ''
                             }))
                         }]
-                    });
+                    };
+                    // footer — טקסט קטן ואפור מתחת לגוף ההודעה (עד 60 תווים)
+                    if (footer && typeof footer === 'string') {
+                        listPayload.footer = truncateByCodepoints(footer, 60);
+                    }
+                    result = await client.sendListMessage(listChatId, listPayload);
                     console.log('Message sent with list to:', listChatId, 'result:', {
                         id: result?.id,
                         ack: result?.ack,
