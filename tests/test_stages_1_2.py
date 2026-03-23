@@ -437,7 +437,7 @@ class TestStage2KYCHandlers:
         # שליחת טקסט לא חוקי
         response, new_state = await handler.handle_message(user, "מטוס", None)
         assert new_state == CourierState.REGISTER_COLLECT_VEHICLE_CATEGORY.value
-        assert "אפשרויות" in response.text or "בחר" in response.text
+        assert "סוג רכב" in response.text
 
     @pytest.mark.asyncio
     async def test_collect_vehicle_photo_requires_photo(self, db_session, user_factory):

@@ -625,7 +625,7 @@ class DispatcherStateHandler:
             return response, DispatcherState.MENU.value, {}
 
         response = MessageResponse(
-            "אנא בחר:\n" "1. ✅ אישור ושליחה\n" "2. ❌ ביטול",
+            "📦 לאשר שליחת המשלוח?\n" "1. ✅ אישור ושליחה\n" "2. ❌ ביטול",
             keyboard=[["✅ אישור ושליחה", "❌ ביטול"]],
         )
         return response, DispatcherState.ADD_SHIPMENT_CONFIRM.value, {}
@@ -829,7 +829,7 @@ class DispatcherStateHandler:
             return response, DispatcherState.MENU.value, {}
 
         response = MessageResponse(
-            "אנא בחר:\n" "1. ✅ אישור\n" "2. ❌ ביטול",
+            "💳 לאשר את החיוב?\n" "1. ✅ אישור\n" "2. ❌ ביטול",
             keyboard=[["✅ אישור", "❌ ביטול"]],
         )
         return response, DispatcherState.MANUAL_CHARGE_CONFIRM.value, {}
@@ -1033,7 +1033,7 @@ class DispatcherStateHandler:
             return response, DispatcherState.MENU.value, {}
 
         response = MessageResponse(
-            "אנא בחר:\n" "1. ✅ אישור ופרסום\n" "2. ❌ ביטול",
+            "🚗 לאשר פרסום הנסיעה?\n" "1. ✅ אישור ופרסום\n" "2. ❌ ביטול",
             keyboard=[["✅ אישור ופרסום", "❌ ביטול"]],
         )
         return response, DispatcherState.POST_RIDE_CONFIRM.value, {}

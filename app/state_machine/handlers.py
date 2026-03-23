@@ -346,7 +346,7 @@ class SenderStateHandler:
             return response, SenderState.MENU.value, {}
 
         response = MessageResponse(
-            "לא הבנתי. אנא בחרו אפשרות מהתפריט:",
+            "🤔 לא הבנתי. נסו שוב מהתפריט:",
             keyboard=[
                 ["📦 המשלוחים שלי", "➕ משלוח חדש"],
                 ["🚚 הצטרפות למנוי וקבלת משלוחים"],
@@ -576,7 +576,7 @@ class SenderStateHandler:
                 extra_data={"user_id": user_id, "raw_input": repr(msg)},
             )
             response = MessageResponse(
-                "אנא בחרו אפשרות:\n" "1. בתוך העיר\n" "2. מחוץ לעיר",
+                "📍 לאן המשלוח?\n" "1. בתוך העיר\n" "2. מחוץ לעיר",
                 keyboard=[["🏙️ בתוך העיר", "🚗 מחוץ לעיר"]],
             )
             return response, SenderState.DELIVERY_LOCATION.value, {}
@@ -641,9 +641,9 @@ class SenderStateHandler:
             return response, SenderState.DELIVERY_TIME.value, {"urgency": "later"}
 
         response = MessageResponse(
-            "אנא בחרו אפשרות:\n"
+            "⏱️ מתי לשלוח?\n"
             "1. 🚀 מיידי - המשלוח יתבצע בהקדם\n"
-            "2. ☕ בנחת - תבחרו שעה מועדפת",
+            "2. ☕ בנחת - קביעת שעה מועדפת",
             keyboard=[["🚀 מיידי", "☕ בנחת"]],
         )
         return response, SenderState.DELIVERY_URGENCY.value, {}
@@ -812,7 +812,7 @@ class SenderStateHandler:
 
         # Invalid response
         response = MessageResponse(
-            "אנא בחרו אפשרות:\n" "1. ✅ אישור ושליחה\n" "2. ❌ ביטול",
+            "📋 לאשר את המשלוח?\n" "1. ✅ אישור ושליחה\n" "2. ❌ ביטול",
             keyboard=[["✅ אישור ושליחה", "❌ ביטול"]],
         )
         return response, SenderState.DELIVERY_CONFIRM.value, {}
@@ -1021,7 +1021,7 @@ class CourierStateHandler:
 
         # שליח שנדחה/חדש — מתחיל רישום (מאפשר הגשה חוזרת)
         response = MessageResponse(
-            "ברוכים הבאים למערכת משלוח בצ'יק! 🚚\n\n"
+            "ברוכים הבאים למערכת iDriver • אי דרייבר! 🚗\n\n"
             "כדי להתחיל לקחת משלוחים, עלינו להכיר אותך.\n\n"
             "<b>שלב א' - שם מלא:</b>\n"
             "אנא הזן את שמך המלא כפי שמופיע בתעודת הזהות."
@@ -1135,7 +1135,7 @@ class CourierStateHandler:
 
         if not category:
             response = MessageResponse(
-                "אנא בחר אחת מהאפשרויות:\n"
+                "🚗 בחירת סוג רכב:\n"
                 "1. 🚗 רכב 4 מקומות\n"
                 "2. 🚐 7 מקומות\n"
                 "3. 🛻 טנדר\n"

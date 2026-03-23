@@ -1106,6 +1106,44 @@ async def send_telegram_message(
         )
 
 
+async def send_telegram_message_raising(
+    chat_id: str,
+    text: str,
+) -> None:
+    """שליחת הודעה דרך Telegram — מעלה exception בכשלון (לא fire-and-forget)."""
+    import httpx
+    from app.core.config import settings
+
+    if not settings.TELEGRAM_BOT_TOKEN:
+        raise ValueError("Telegram bot token not configured")
+
+    circuit_breaker = get_telegram_circuit_breaker()
+    url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
+
+    async def _send_inner() -> dict:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url,
+                json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+                timeout=30.0,
+            )
+            if response.status_code != 200:
+                raise TelegramError.from_response(
+                    "sendMessage",
+                    response,
+                    message=f"sendMessage returned status {response.status_code}",
+                )
+            data = response.json()
+            if not data.get("ok"):
+                raise TelegramError(
+                    "sendMessage returned ok=false",
+                    details={"response": data},
+                )
+            return data
+
+    await circuit_breaker.execute(_send_inner)
+
+
 async def answer_callback_query(callback_query_id: str, text: str = None) -> None:
     """Answer callback query to remove loading state with circuit breaker protection"""
     import httpx
@@ -1146,8 +1184,8 @@ async def answer_callback_query(callback_query_id: str, text: str = None) -> Non
 async def send_welcome_message(chat_id: str):
     """הודעת ברוכים הבאים ותפריט ראשי [שלב 1]"""
     welcome_text = (
-        "ברוכים הבאים ל<b>משלוח בצ'יק</b> 🚚\n"
-        "המערכת החכמה לשיתוף משלוחים.\n\n"
+        "ברוכים הבאים ל<b>iDriver • אי דרייבר</b> 🚗\n"
+        "המערכת החכמה לנהגים.\n\n"
         "איך נוכל לעזור היום?"
     )
     keyboard = [

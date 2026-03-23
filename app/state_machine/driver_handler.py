@@ -439,7 +439,7 @@ class DriverStateHandler:
 
         if not dress_code_value:
             response = MessageResponse(
-                text="❌ בחירה לא תקינה. אנא בחר מהרשימה:",
+                text="❌ לא זיהיתי. 👔 בחירת סוג לבוש:",
                 keyboard=_DRESS_CODE_KEYBOARD,
             )
             return response, DriverState.REGISTER_COLLECT_DRESS_CODE.value, {}
@@ -875,11 +875,29 @@ class DriverStateHandler:
             await self.ride_posting_service.post_ride(user, posting)
         )
 
+        # שליחת הודעות פרטיות לנהגים עם חיפושים תואמים למסלול
+        # נשלח גם כששליחה לקבוצות נכשלה — התראות פרטיות הן עניין נפרד
+        notified_count = 0
+        if total_groups > 0:
+            matching_ids = await self.search_service.get_matching_driver_user_ids(
+                origin_city=posting.origin,
+                destination_city=posting.destination,
+                exclude_user_id=user.id,
+            )
+            driver_name = user.full_name or user.name or "נהג"
+            notified_count = await self.ride_posting_service.notify_matching_drivers(
+                posting, driver_name, matching_ids
+            )
+
         if sent_count > 0:
+            notified_text = ""
+            if notified_count > 0:
+                notified_text = f"📨 נשלח ל-{notified_count} נהגים עם חיפוש תואם.\n"
             confirmation = (
                 f"✅ <b>הנסיעה פורסמה בהצלחה!</b>\n\n"
                 f"{message}\n"
-                f"📢 פורסם ב-{sent_count} קבוצות.\n\n"
+                f"📢 פורסם ב-{sent_count} קבוצות.\n"
+                f"{notified_text}\n"
                 f"📋 לחזרה לתפריט שלח 'ת'"
             )
         elif total_groups == 0:
@@ -893,10 +911,14 @@ class DriverStateHandler:
             )
         else:
             # נמצאו קבוצות אבל כל השליחות נכשלו
+            notified_text = ""
+            if notified_count > 0:
+                notified_text = f"📨 עם זאת, נשלח ל-{notified_count} נהגים עם חיפוש תואם.\n"
             confirmation = (
                 f"❌ <b>שגיאה בפרסום הנסיעה</b>\n\n"
                 f"{message}\n"
                 f"נמצאו {total_groups} קבוצות רלוונטיות אך השליחה נכשלה.\n"
+                f"{notified_text}"
                 f"נסה שוב מאוחר יותר.\n\n"
                 f"📋 לחזרה לתפריט שלח 'ת'"
             )
@@ -1025,7 +1047,7 @@ class DriverStateHandler:
             keyboard = [[label] for label in VEHICLE_TYPE_LABELS.values()]
             keyboard.append(["❌ ביטול"])
             response = MessageResponse(
-                text="❌ בחירה לא תקינה. אנא בחר מהרשימה:",
+                text="❌ לא זיהיתי. 🚗 בחירת סוג רכב:",
                 keyboard=keyboard,
             )
             return response, DriverState.SETTINGS_VEHICLE_TYPE.value, {}
@@ -1074,7 +1096,7 @@ class DriverStateHandler:
             keyboard = [[label] for label in TRIP_TYPE_LABELS.values()]
             keyboard.append(["❌ ביטול"])
             response = MessageResponse(
-                text="❌ בחירה לא תקינה. אנא בחר מהרשימה:",
+                text="❌ לא זיהיתי. 🛣️ בחירת סוג נסיעה:",
                 keyboard=keyboard,
             )
             return response, DriverState.SETTINGS_TRIP_TYPE.value, {}
@@ -1122,7 +1144,7 @@ class DriverStateHandler:
 
         if show is None:
             response = MessageResponse(
-                text="❌ בחירה לא תקינה. אנא בחר כן או לא:",
+                text="❌ לא זיהיתי. 📦 הצגת משלוחים — כן או לא?",
                 keyboard=[["✅ כן — הצג משלוחים"], ["❌ לא — ללא משלוחים"], ["❌ ביטול"]],
             )
             return response, DriverState.SETTINGS_SHOW_DELIVERIES.value, {}
@@ -1167,7 +1189,7 @@ class DriverStateHandler:
             keyboard = [[label] for label in TIMEFRAME_LABELS.values()]
             keyboard.append(["❌ ביטול"])
             response = MessageResponse(
-                text="❌ בחירה לא תקינה. אנא בחר מהרשימה:",
+                text="❌ לא זיהיתי. ⏰ בחירת טווח זמן:",
                 keyboard=keyboard,
             )
             return response, DriverState.SETTINGS_UPCOMING_TIMEFRAME.value, {}
@@ -1365,18 +1387,33 @@ class DriverStateHandler:
             )
             return response, DriverState.MENU.value, {}
 
-        # הצגת אישור + סיכום
+        # הצגת אישור + סיכום + מספר נהגים פנויים
         summary = DriverSearchService.format_search_summary(search)
         active_count = await self.search_service.get_active_search_count(user.id)
+        available_drivers = await self.search_service.count_available_drivers_for_destination(
+            search.destination_city, exclude_user_id=user.id
+        )
+
+        # שליפת חיפושים קיימים להצגה מתחת לאישור
+        all_searches = await self.search_service.get_active_searches(user.id)
+        existing_list = DriverSearchService.format_searches_list(all_searches)
+
+        text_parts = [
+            "✅ <b>החיפוש נכנס למערכת!</b>\n\n",
+            f"{summary}\n",
+            f"🎲 {available_drivers} נהגים פנויים\n\n",
+            "🔎 <b>סטטוס חיפוש:</b> המערכת סורקת כעת עשרות מקורות...\n\n",
+            f"📊 סה״כ חיפושים פעילים: {active_count}/{MAX_ACTIVE_SEARCHES_PER_USER}\n",
+        ]
+
+        if len(all_searches) > 1:
+            text_parts.append(f"\n📋 <b>חיפושים מוגדרים:</b>\n{existing_list}\n")
+
+        text_parts.append("\n💡 להוספת חיפוש נוסף - שלח 'פ &lt;יעד&gt;'")
+        text_parts.append("\n📋 לחזרה לתפריט שלח 'ת'")
 
         response = MessageResponse(
-            text=(
-                "✅ <b>חיפוש חדש נוסף!</b>\n\n"
-                f"{summary}\n\n"
-                f"📊 סה״כ חיפושים פעילים: {active_count}/{MAX_ACTIVE_SEARCHES_PER_USER}\n\n"
-                "💡 להוספת חיפוש נוסף - שלח 'פ &lt;יעד&gt;'\n"
-                "📋 לחזרה לתפריט שלח 'ת'"
-            ),
+            text="".join(text_parts),
             keyboard=[["🔍 חיפושים פעילים"], ["🔙 חזרה לתפריט"]],
         )
         return response, DriverState.MENU.value, {}
@@ -1384,9 +1421,8 @@ class DriverStateHandler:
     async def _build_search_view(
         self, user: User
     ) -> Tuple[MessageResponse, str, dict]:
-        """בניית תצוגת חיפושים פעילים — כולל נסיעות סדרן תואמות (סשן 9)"""
+        """בניית תצוגת חיפושים פעילים — כולל נהגים פנויים ונסיעות סדרן תואמות (סשן 9)"""
         searches = await self.search_service.get_active_searches(user.id)
-        searches_text = DriverSearchService.format_searches_list(searches)
 
         if not searches:
             response = MessageResponse(
@@ -1399,6 +1435,19 @@ class DriverStateHandler:
                 keyboard=[["🔙 חזרה לתפריט"]],
             )
             return response, DriverState.MENU.value, {}
+
+        # בניית רשימת חיפושים עם מספר נהגים פנויים לכל יעד — שאילתה אחת במקום N+1
+        destination_cities = [s.destination_city for s in searches]
+        driver_counts = await self.search_service.count_available_drivers_for_destinations(
+            destination_cities, exclude_user_id=user.id
+        )
+        search_lines = []
+        for i, search in enumerate(searches, 1):
+            summary = DriverSearchService.format_search_summary(search)
+            drivers_count = driver_counts.get(search.destination_city, 0)
+            search_lines.append(f"{i}. {summary} — 🎲 {drivers_count} נהגים")
+
+        searches_text = "\n".join(search_lines)
 
         # סשן 9: שליפת נסיעות סדרן תואמות לחיפושים הפעילים
         dispatcher_rides_text = await self._get_matching_dispatcher_rides(searches)
@@ -1827,7 +1876,7 @@ class DriverStateHandler:
         months = parse_subscription_choice(msg)
         if months is None:
             response = MessageResponse(
-                text="❌ בחירה לא תקינה. אנא בחר חבילה מהרשימה:",
+                text="❌ לא זיהיתי. 📦 בחירת חבילת מנוי:",
                 keyboard=[
                     ["📦 חודש אחד"],
                     ["📦 חודשיים"],

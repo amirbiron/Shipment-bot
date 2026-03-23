@@ -334,3 +334,85 @@ class RidePostingService:
         )
 
         return True, message, sent_count, len(groups)
+
+    async def notify_matching_drivers(
+        self,
+        posting: ParsedRidePosting,
+        driver_name: str,
+        driver_user_ids: list[int],
+    ) -> int:
+        """
+        שליחת הודעה פרטית לנהגים עם חיפושים תואמים למסלול הנסיעה.
+
+        Args:
+            posting: פרטי הנסיעה
+            driver_name: שם הנהג שפרסם
+            driver_user_ids: רשימת מזהי משתמשים לשליחה
+
+        Returns:
+            מספר הודעות שנשלחו בהצלחה
+        """
+        if not driver_user_ids:
+            return 0
+
+        from app.db.models.user import User
+
+        message = self.format_ride_message(posting, driver_name)
+        notification_text = (
+            f"🔔 <b>נסיעה תואמת לחיפוש שלך!</b>\n\n"
+            f"{message}"
+        )
+
+        # שליפת כל הנהגים בשאילתה אחת במקום N+1
+        result = await self._db.execute(
+            select(User.id, User.telegram_chat_id, User.phone_number)
+            .where(User.id.in_(driver_user_ids))
+        )
+        drivers = result.all()
+
+        sent_count = 0
+        failed_count = 0
+        for driver in drivers:
+            try:
+                if driver.telegram_chat_id:
+                    from app.api.webhooks.telegram import (
+                        send_telegram_message_raising,
+                    )
+
+                    await send_telegram_message_raising(
+                        str(driver.telegram_chat_id), notification_text
+                    )
+                    sent_count += 1
+                elif (
+                    driver.phone_number
+                    and not driver.phone_number.startswith("tg:")
+                    and not driver.phone_number.endswith("@g.us")
+                ):
+                    from app.api.webhooks.whatsapp import (
+                        send_whatsapp_message_raising,
+                    )
+
+                    await send_whatsapp_message_raising(
+                        driver.phone_number, notification_text
+                    )
+                    sent_count += 1
+            except Exception as e:
+                failed_count += 1
+                logger.error(
+                    "כשלון בשליחת התראת נסיעה תואמת לנהג",
+                    extra_data={"user_id": driver.id, "error": str(e)},
+                    exc_info=True,
+                )
+
+        logger.info(
+            "התראות נסיעה תואמת נשלחו לנהגים",
+            extra_data={
+                "driver_name": driver_name,
+                "origin": posting.origin,
+                "destination": posting.destination,
+                "total_drivers": len(driver_user_ids),
+                "sent_count": sent_count,
+                "failed_count": failed_count,
+            },
+        )
+        return sent_count

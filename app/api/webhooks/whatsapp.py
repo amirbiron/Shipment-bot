@@ -426,6 +426,16 @@ def _is_group_target(identifier: str) -> bool:
     return identifier.endswith("@g.us")
 
 
+_WHATSAPP_BRANDING = "אי דרייבר 🤖 – מסדר לך את הדרך"
+
+
+def _append_branding(text: str, has_keyboard: bool) -> str:
+    """הוספת שורת מיתוג לכל הודעת WhatsApp."""
+    if has_keyboard:
+        return f"{text}\n\n*{_WHATSAPP_BRANDING}*"
+    return f"{text}\n\n```{_WHATSAPP_BRANDING}```"
+
+
 async def send_whatsapp_message(
     phone_number: str, text: str, keyboard: list = None
 ) -> None:
@@ -451,6 +461,20 @@ async def send_whatsapp_message(
             },
             exc_info=True,
         )
+
+
+async def send_whatsapp_message_raising(
+    phone_number: str, text: str, keyboard: list = None
+) -> None:
+    """
+    שליחת הודעה דרך ספק WhatsApp הפעיל — מעלה exception בכשלון (לא fire-and-forget).
+    """
+    if _is_group_target(phone_number):
+        provider = get_whatsapp_group_provider()
+    else:
+        provider = get_whatsapp_provider()
+    formatted_text = provider.format_text(text)
+    await provider.send_text(to=phone_number, text=formatted_text, keyboard=keyboard)
 
 
 def _normalize_whatsapp_identifier(value: str) -> str:
@@ -1128,8 +1152,8 @@ async def _handle_courier_post_processing(
 async def send_welcome_message(phone_number: str):
     """הודעת ברוכים הבאים ותפריט ראשי [שלב 1]"""
     welcome_text = (
-        "ברוכים הבאים למשלוח בצ'יק 🚚\n"
-        "המערכת החכמה לשיתוף משלוחים.\n\n"
+        "ברוכים הבאים ל-iDriver • אי דרייבר 🚗\n"
+        "המערכת החכמה לנהגים.\n\n"
         "איך נוכל לעזור היום?\n\n"
         "בכל שלב תוכלו לחזור לתפריט הראשי על ידי הקשה של #"
     )
@@ -1141,7 +1165,8 @@ async def send_welcome_message(phone_number: str):
         ["🏪 הצטרפות כתחנה"],
         ["📞 פנייה לניהול"],
     ]
-    await send_whatsapp_message(phone_number, welcome_text, keyboard)
+    branded_text = _append_branding(welcome_text, has_keyboard=True)
+    await send_whatsapp_message(phone_number, branded_text, keyboard)
 
 
 @router.post(

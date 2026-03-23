@@ -375,7 +375,7 @@ class StationOwnerStateHandler:
             return response, StationOwnerState.MANAGE_OWNERS.value, {}
 
         response = MessageResponse(
-            "אנא בחר:\n✅ כן, הסר\n❌ ביטול",
+            "🗑️ לאשר הסרת הבעלים?\n✅ כן, הסר\n❌ ביטול",
             keyboard=[["✅ כן, הסר", "❌ ביטול"]],
         )
         return response, StationOwnerState.CONFIRM_REMOVE_OWNER.value, {}
@@ -519,7 +519,7 @@ class StationOwnerStateHandler:
             )
 
         response = MessageResponse(
-            "בחירה לא תקינה. אנא בחר מספר מהרשימה.", keyboard=[["🔙 חזרה"]]
+            "❌ לא זיהיתי. הזינו מספר סדרן מהרשימה.", keyboard=[["🔙 חזרה"]]
         )
         return response, StationOwnerState.REMOVE_DISPATCHER_SELECT.value, {}
 
@@ -548,7 +548,7 @@ class StationOwnerStateHandler:
             return response, StationOwnerState.MANAGE_DISPATCHERS.value, {}
 
         response = MessageResponse(
-            "אנא בחר:\n✅ כן, הסר\n❌ ביטול",
+            "🗑️ לאשר הסרת הסדרן?\n✅ כן, הסר\n❌ ביטול",
             keyboard=[["✅ כן, הסר", "❌ ביטול"]],
         )
         return response, StationOwnerState.CONFIRM_REMOVE_DISPATCHER.value, {}
@@ -636,7 +636,7 @@ class StationOwnerStateHandler:
         numbers = re.findall(r"\d+", message)
         if not numbers:
             response = MessageResponse(
-                f"אנא בחר אחוז עמלה מהכפתורים או הזן מספר בין {lo} ל-{hi}.",
+                f"💰 הזינו אחוז עמלה מהכפתורים או מספר בין {lo} ל-{hi}.",
                 keyboard=self._commission_rate_keyboard(),
             )
             return response, StationOwnerState.SET_COMMISSION_RATE.value, {}
@@ -870,7 +870,7 @@ class StationOwnerStateHandler:
             )
 
         response = MessageResponse(
-            "בחירה לא תקינה. אנא בחר מספר מהרשימה.", keyboard=[["🔙 חזרה"]]
+            "❌ לא זיהיתי. הזינו מספר מהרשימה.", keyboard=[["🔙 חזרה"]]
         )
         return response, StationOwnerState.REMOVE_BLACKLIST_SELECT.value, {}
 
@@ -899,7 +899,7 @@ class StationOwnerStateHandler:
             return response, StationOwnerState.VIEW_BLACKLIST.value, {}
 
         response = MessageResponse(
-            "אנא בחר:\n✅ כן, הסר\n❌ ביטול",
+            "🗑️ לאשר הסרה מהרשימה השחורה?\n✅ כן, הסר\n❌ ביטול",
             keyboard=[["✅ כן, הסר", "❌ ביטול"]],
         )
         return response, StationOwnerState.CONFIRM_REMOVE_BLACKLIST.value, {}
