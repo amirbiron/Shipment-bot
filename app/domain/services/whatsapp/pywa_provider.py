@@ -270,6 +270,7 @@ class PyWaProvider(BaseWhatsAppProvider):
         to: str,
         text: str,
         keyboard: Optional[list[list[str]]] = None,
+        footer: Optional[str] = None,
     ) -> None:
         """שליחת טקסט דרך Cloud API עם retry ו-circuit breaker.
 
@@ -291,13 +292,24 @@ class PyWaProvider(BaseWhatsAppProvider):
             text_suffix = self._keyboard_to_text_instructions(keyboard)
         final_text = text + text_suffix
 
+        # footer פעיל רק כשיש כפתורים אינטראקטיביים (לא fallback טקסטואלי).
+        # ב-fallback טקסטואלי — הוספת המיתוג לגוף הטקסט כקוד אינליין.
+        effective_buttons = buttons or list_message
+        if effective_buttons:
+            effective_footer = footer
+        else:
+            effective_footer = None
+            if footer:
+                final_text = f"{final_text}\n\n`{footer}`"
+
         client = self._get_client()
 
         async def _send_single() -> None:
             await client.send_message(
                 to=to,
                 text=final_text,
-                buttons=buttons or list_message,
+                buttons=effective_buttons,
+                footer=effective_footer,
             )
 
         async def _send_with_retry() -> None:

@@ -426,14 +426,12 @@ def _is_group_target(identifier: str) -> bool:
     return identifier.endswith("@g.us")
 
 
-_WHATSAPP_BRANDING = "אי דרייבר 🤖 – מסדר לך את הדרך"
+_WHATSAPP_BRANDING = "איי דרייבר 🤖 – מסדר לך את הדרך"
 
 
-def _append_branding(text: str, has_keyboard: bool) -> str:
-    """הוספת שורת מיתוג לכל הודעת WhatsApp."""
-    if has_keyboard:
-        return f"{text}\n\n*{_WHATSAPP_BRANDING}*"
-    return f"{text}\n\n```{_WHATSAPP_BRANDING}```"
+def _append_branding(text: str) -> str:
+    """הוספת שורת מיתוג בקוד אינליין לכל הודעת WhatsApp ללא כפתורים."""
+    return f"{text}\n\n`{_WHATSAPP_BRANDING}`"
 
 
 async def send_whatsapp_message(
@@ -443,15 +441,25 @@ async def send_whatsapp_message(
     שליחת הודעה דרך ספק WhatsApp הפעיל — ניתוב אוטומטי לפי סוג היעד.
     קבוצה (@g.us) → WPPConnect, פרטי → Cloud API (במצב hybrid) / WPPConnect (רגיל).
     ממיר תגי HTML לפורמט הספק לפני שליחה.
+    מוסיף מיתוג כ-footer (גופן קטן ואפור) כשיש כפתורים, או כטקסט רגיל כשאין.
     fire-and-forget: שגיאות נרשמות בלוג ולא נזרקות חזרה.
     """
     if _is_group_target(phone_number):
         provider = get_whatsapp_group_provider()
     else:
         provider = get_whatsapp_provider()
+
+    # כשיש כפתורים — footer מוצג בגופן קטן ואפור ע"י הפלטפורמה
+    # כשאין כפתורים — fallback: הוספה לגוף הטקסט
+    footer = _WHATSAPP_BRANDING if keyboard else None
+    if not keyboard:
+        text = _append_branding(text)
+
     formatted_text = provider.format_text(text)
     try:
-        await provider.send_text(to=phone_number, text=formatted_text, keyboard=keyboard)
+        await provider.send_text(
+            to=phone_number, text=formatted_text, keyboard=keyboard, footer=footer,
+        )
     except Exception as exc:
         logger.error(
             "כשלון בשליחת הודעת WhatsApp",
@@ -473,8 +481,15 @@ async def send_whatsapp_message_raising(
         provider = get_whatsapp_group_provider()
     else:
         provider = get_whatsapp_provider()
+
+    footer = _WHATSAPP_BRANDING if keyboard else None
+    if not keyboard:
+        text = _append_branding(text)
+
     formatted_text = provider.format_text(text)
-    await provider.send_text(to=phone_number, text=formatted_text, keyboard=keyboard)
+    await provider.send_text(
+        to=phone_number, text=formatted_text, keyboard=keyboard, footer=footer,
+    )
 
 
 def _normalize_whatsapp_identifier(value: str) -> str:
@@ -1152,7 +1167,7 @@ async def _handle_courier_post_processing(
 async def send_welcome_message(phone_number: str):
     """הודעת ברוכים הבאים ותפריט ראשי [שלב 1]"""
     welcome_text = (
-        "ברוכים הבאים ל-iDriver • אי דרייבר 🚗\n"
+        "ברוכים הבאים ל-*iDriver • איי דרייבר* 🚗\n"
         "המערכת החכמה לנהגים.\n\n"
         "איך נוכל לעזור היום?\n\n"
         "בכל שלב תוכלו לחזור לתפריט הראשי על ידי הקשה של #"
@@ -1165,8 +1180,8 @@ async def send_welcome_message(phone_number: str):
         ["🏪 הצטרפות כתחנה"],
         ["📞 פנייה לניהול"],
     ]
-    branded_text = _append_branding(welcome_text, has_keyboard=True)
-    await send_whatsapp_message(phone_number, branded_text, keyboard)
+    # הברנדינג מתווסף אוטומטית כ-footer ע"י send_whatsapp_message
+    await send_whatsapp_message(phone_number, welcome_text, keyboard)
 
 
 @router.post(
