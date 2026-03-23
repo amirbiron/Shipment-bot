@@ -292,9 +292,15 @@ class PyWaProvider(BaseWhatsAppProvider):
             text_suffix = self._keyboard_to_text_instructions(keyboard)
         final_text = text + text_suffix
 
-        # footer פעיל רק כשיש כפתורים אינטראקטיביים (לא fallback טקסטואלי)
+        # footer פעיל רק כשיש כפתורים אינטראקטיביים (לא fallback טקסטואלי).
+        # ב-fallback טקסטואלי — הוספת המיתוג לגוף הטקסט כקוד אינליין.
         effective_buttons = buttons or list_message
-        effective_footer = footer if effective_buttons else None
+        if effective_buttons:
+            effective_footer = footer
+        else:
+            effective_footer = None
+            if footer:
+                final_text = f"{final_text}\n\n`{footer}`"
 
         client = self._get_client()
 

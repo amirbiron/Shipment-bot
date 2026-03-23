@@ -429,11 +429,8 @@ def _is_group_target(identifier: str) -> bool:
 _WHATSAPP_BRANDING = "איי דרייבר 🤖 – מסדר לך את הדרך"
 
 
-def _append_branding(text: str, has_keyboard: bool) -> str:
-    """הוספת שורת מיתוג לכל הודעת WhatsApp — fallback טקסטואלי כשאין כפתורים."""
-    if has_keyboard:
-        return f"{text}\n\n*{_WHATSAPP_BRANDING}*"
-    # קוד אינליין — backtick בודד
+def _append_branding(text: str) -> str:
+    """הוספת שורת מיתוג בקוד אינליין לכל הודעת WhatsApp ללא כפתורים."""
     return f"{text}\n\n`{_WHATSAPP_BRANDING}`"
 
 
@@ -456,7 +453,7 @@ async def send_whatsapp_message(
     # כשאין כפתורים — fallback: הוספה לגוף הטקסט
     footer = _WHATSAPP_BRANDING if keyboard else None
     if not keyboard:
-        text = _append_branding(text, has_keyboard=False)
+        text = _append_branding(text)
 
     formatted_text = provider.format_text(text)
     try:
@@ -487,7 +484,7 @@ async def send_whatsapp_message_raising(
 
     footer = _WHATSAPP_BRANDING if keyboard else None
     if not keyboard:
-        text = _append_branding(text, has_keyboard=False)
+        text = _append_branding(text)
 
     formatted_text = provider.format_text(text)
     await provider.send_text(
