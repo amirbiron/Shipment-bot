@@ -426,14 +426,15 @@ def _is_group_target(identifier: str) -> bool:
     return identifier.endswith("@g.us")
 
 
-_WHATSAPP_BRANDING = "אי דרייבר 🤖 – מסדר לך את הדרך"
+_WHATSAPP_BRANDING = "איי דרייבר 🤖 – מסדר לך את הדרך"
 
 
 def _append_branding(text: str, has_keyboard: bool) -> str:
     """הוספת שורת מיתוג לכל הודעת WhatsApp — fallback טקסטואלי כשאין כפתורים."""
     if has_keyboard:
         return f"{text}\n\n*{_WHATSAPP_BRANDING}*"
-    return f"{text}\n\n```{_WHATSAPP_BRANDING}```"
+    # קוד אינליין — backtick בודד
+    return f"{text}\n\n`{_WHATSAPP_BRANDING}`"
 
 
 async def send_whatsapp_message(
@@ -1169,7 +1170,7 @@ async def _handle_courier_post_processing(
 async def send_welcome_message(phone_number: str):
     """הודעת ברוכים הבאים ותפריט ראשי [שלב 1]"""
     welcome_text = (
-        "ברוכים הבאים ל-iDriver • אי דרייבר 🚗\n"
+        "ברוכים הבאים ל-*iDriver • איי דרייבר* 🚗\n"
         "המערכת החכמה לנהגים.\n\n"
         "איך נוכל לעזור היום?\n\n"
         "בכל שלב תוכלו לחזור לתפריט הראשי על ידי הקשה של #"

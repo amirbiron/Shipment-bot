@@ -1184,7 +1184,7 @@ async def answer_callback_query(callback_query_id: str, text: str = None) -> Non
 async def send_welcome_message(chat_id: str):
     """הודעת ברוכים הבאים ותפריט ראשי [שלב 1]"""
     welcome_text = (
-        "ברוכים הבאים ל<b>iDriver • אי דרייבר</b> 🚗\n"
+        "ברוכים הבאים ל<b>iDriver • איי דרייבר</b> 🚗\n"
         "המערכת החכמה לנהגים.\n\n"
         "איך נוכל לעזור היום?"
     )
