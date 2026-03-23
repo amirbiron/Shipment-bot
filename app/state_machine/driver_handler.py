@@ -876,8 +876,9 @@ class DriverStateHandler:
         )
 
         # שליחת הודעות פרטיות לנהגים עם חיפושים תואמים למסלול
+        # נשלח גם כששליחה לקבוצות נכשלה — התראות פרטיות הן עניין נפרד
         notified_count = 0
-        if sent_count > 0:
+        if total_groups > 0:
             matching_ids = await self.search_service.get_matching_driver_user_ids(
                 origin_city=posting.origin,
                 destination_city=posting.destination,
@@ -910,10 +911,14 @@ class DriverStateHandler:
             )
         else:
             # נמצאו קבוצות אבל כל השליחות נכשלו
+            notified_text = ""
+            if notified_count > 0:
+                notified_text = f"📨 עם זאת, נשלח ל-{notified_count} נהגים עם חיפוש תואם.\n"
             confirmation = (
                 f"❌ <b>שגיאה בפרסום הנסיעה</b>\n\n"
                 f"{message}\n"
                 f"נמצאו {total_groups} קבוצות רלוונטיות אך השליחה נכשלה.\n"
+                f"{notified_text}"
                 f"נסה שוב מאוחר יותר.\n\n"
                 f"📋 לחזרה לתפריט שלח 'ת'"
             )

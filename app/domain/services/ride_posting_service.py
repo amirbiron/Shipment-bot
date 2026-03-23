@@ -365,7 +365,7 @@ class RidePostingService:
 
         # שליפת כל הנהגים בשאילתה אחת במקום N+1
         result = await self._db.execute(
-            select(User.id, User.telegram_chat_id, User.phone_number, User.platform)
+            select(User.id, User.telegram_chat_id, User.phone_number)
             .where(User.id.in_(driver_user_ids))
         )
         drivers = result.all()
