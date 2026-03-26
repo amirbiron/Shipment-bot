@@ -511,6 +511,9 @@ class DriverState(str, Enum):
     SEARCH_VIEW_ACTIVE = "DRIVER.SEARCH.VIEW_ACTIVE"
     SEARCH_MANAGE = "DRIVER.SEARCH.MANAGE"
 
+    # אישור פרסום נסיעה
+    RIDE_POSTING_CONFIRM = "DRIVER.RIDE_POSTING.CONFIRM"
+
     # זרימת מנוי (סשן 8)
     SUBSCRIPTION_VIEW = "DRIVER.SUBSCRIPTION.VIEW"
     SUBSCRIPTION_PURCHASE = "DRIVER.SUBSCRIPTION.PURCHASE"
@@ -543,6 +546,7 @@ DRIVER_TRANSITIONS: dict[DriverState, list[DriverState]] = {
         DriverState.SEARCH_VIEW_ACTIVE,
         DriverState.SEARCH_MANAGE,
         DriverState.SUBSCRIPTION_VIEW,
+        DriverState.RIDE_POSTING_CONFIRM,
     ],
 
     # הגדרות (סשן 4)
@@ -567,6 +571,9 @@ DRIVER_TRANSITIONS: dict[DriverState, list[DriverState]] = {
     DriverState.SEARCH_CREATE_TYPE: [DriverState.SEARCH_VIEW_ACTIVE, DriverState.MENU],
     DriverState.SEARCH_VIEW_ACTIVE: [DriverState.SEARCH_MANAGE, DriverState.SEARCH_CREATE_ORIGIN, DriverState.MENU],
     DriverState.SEARCH_MANAGE: [DriverState.SEARCH_VIEW_ACTIVE, DriverState.MENU],
+
+    # אישור פרסום נסיעה
+    DriverState.RIDE_POSTING_CONFIRM: [DriverState.MENU],
 
     # מנוי (סשן 8)
     DriverState.SUBSCRIPTION_VIEW: [DriverState.SUBSCRIPTION_PURCHASE, DriverState.MENU],
