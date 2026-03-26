@@ -760,7 +760,8 @@ app.post('/send', async (req, res) => {
                     buttonId: text  // Use text as buttonId for easier handling
                 }));
                 // sendButtons(chatId, title, buttons, description) — לא תומך ב-footer ישירות
-                result = await client.sendButtons(listChatId, (button_text || 'בחר אפשרות') + ':', buttons, message);
+                const btnTitle = button_text || 'בחר אפשרות:';
+                result = await client.sendButtons(listChatId, btnTitle, buttons, message);
                 console.log('Message sent with buttons (v1 format) to:', listChatId);
             } catch (btnError) {
                 console.log('sendButtons v1 failed:', btnError.message);
