@@ -169,7 +169,10 @@ class PyWaProvider(BaseWhatsAppProvider):
         return buttons
 
     @staticmethod
-    def _build_list_message(keyboard: list[list[str]] | None):
+    def _build_list_message(
+        keyboard: list[list[str]] | None,
+        button_text: str | None = None,
+    ):
         """המרת keyboard לרשימת בחירה אינטראקטיבית (SectionList).
 
         Cloud API תומך ב-Interactive List Message עם עד 10 פריטים.
@@ -228,7 +231,7 @@ class PyWaProvider(BaseWhatsAppProvider):
             )
 
         return pywa_types.SectionList(
-            button_title="בחר אפשרות",
+            button_title=(button_text or "בחר אפשרות")[:20],
             sections=[
                 pywa_types.Section(
                     title="אפשרויות",
@@ -271,6 +274,7 @@ class PyWaProvider(BaseWhatsAppProvider):
         text: str,
         keyboard: Optional[list[list[str]]] = None,
         footer: Optional[str] = None,
+        button_text: Optional[str] = None,
     ) -> None:
         """שליחת טקסט דרך Cloud API עם retry ו-circuit breaker.
 
@@ -284,7 +288,7 @@ class PyWaProvider(BaseWhatsAppProvider):
         buttons = self._build_buttons(keyboard)
         list_message = None
         if buttons is None:
-            list_message = self._build_list_message(keyboard)
+            list_message = self._build_list_message(keyboard, button_text=button_text)
 
         # fallback טקסטואלי רק אם גם כפתורים וגם רשימה לא מתאימים
         text_suffix = ""

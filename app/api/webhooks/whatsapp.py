@@ -435,7 +435,10 @@ def _append_branding(text: str) -> str:
 
 
 async def send_whatsapp_message(
-    phone_number: str, text: str, keyboard: list = None
+    phone_number: str,
+    text: str,
+    keyboard: list = None,
+    button_text: str | None = None,
 ) -> None:
     """
     שליחת הודעה דרך ספק WhatsApp הפעיל — ניתוב אוטומטי לפי סוג היעד.
@@ -458,7 +461,8 @@ async def send_whatsapp_message(
     formatted_text = provider.format_text(text)
     try:
         await provider.send_text(
-            to=phone_number, text=formatted_text, keyboard=keyboard, footer=footer,
+            to=phone_number, text=formatted_text, keyboard=keyboard,
+            footer=footer, button_text=button_text,
         )
     except Exception as exc:
         logger.error(
@@ -472,7 +476,10 @@ async def send_whatsapp_message(
 
 
 async def send_whatsapp_message_raising(
-    phone_number: str, text: str, keyboard: list = None
+    phone_number: str,
+    text: str,
+    keyboard: list = None,
+    button_text: str | None = None,
 ) -> None:
     """
     שליחת הודעה דרך ספק WhatsApp הפעיל — מעלה exception בכשלון (לא fire-and-forget).
@@ -488,7 +495,8 @@ async def send_whatsapp_message_raising(
 
     formatted_text = provider.format_text(text)
     await provider.send_text(
-        to=phone_number, text=formatted_text, keyboard=keyboard, footer=footer,
+        to=phone_number, text=formatted_text, keyboard=keyboard,
+        footer=footer, button_text=button_text,
     )
 
 
@@ -1181,7 +1189,7 @@ async def send_welcome_message(phone_number: str):
         ["📞 פנייה לניהול"],
     ]
     # הברנדינג מתווסף אוטומטית כ-footer ע"י send_whatsapp_message
-    await send_whatsapp_message(phone_number, welcome_text, keyboard)
+    await send_whatsapp_message(phone_number, welcome_text, keyboard, button_text="🚗 תפריט ראשי")
 
 
 @router.post(
@@ -1523,7 +1531,7 @@ async def whatsapp_webhook(
                 response, new_state = await _route_to_role_menu_wa(user, db, state_manager)
     
                 background_tasks.add_task(
-                    send_whatsapp_message, reply_to, response.text, response.keyboard
+                    send_whatsapp_message, reply_to, response.text, response.keyboard, response.button_text
                 )
                 responses.append(
                     {"from": sender_id, "response": response.text, "new_state": new_state}
@@ -1587,7 +1595,7 @@ async def whatsapp_webhook(
                 admin_handler = AdminStateHandler(db, platform="whatsapp")
                 response, new_state = await admin_handler.handle_message(user, "תפריט", None)
                 background_tasks.add_task(
-                    send_whatsapp_message, reply_to, response.text, response.keyboard
+                    send_whatsapp_message, reply_to, response.text, response.keyboard, response.button_text
                 )
                 continue
 
@@ -1614,7 +1622,7 @@ async def whatsapp_webhook(
                     )
     
                     background_tasks.add_task(
-                        send_whatsapp_message, reply_to, response.text, response.keyboard
+                        send_whatsapp_message, reply_to, response.text, response.keyboard, response.button_text
                     )
                     responses.append(
                         {
@@ -1649,7 +1657,7 @@ async def whatsapp_webhook(
                     )
 
                     background_tasks.add_task(
-                        send_whatsapp_message, reply_to, response.text, response.keyboard
+                        send_whatsapp_message, reply_to, response.text, response.keyboard, response.button_text
                     )
                     responses.append(
                         {
@@ -1753,7 +1761,7 @@ async def whatsapp_webhook(
                         user, db, state_manager
                     )
                     background_tasks.add_task(
-                        send_whatsapp_message, reply_to, response.text, response.keyboard
+                        send_whatsapp_message, reply_to, response.text, response.keyboard, response.button_text
                     )
                     responses.append(
                         {"from": sender_id, "response": response.text, "new_state": new_state}
@@ -1824,7 +1832,7 @@ async def whatsapp_webhook(
                     )
     
                 background_tasks.add_task(
-                    send_whatsapp_message, reply_to, response.text, response.keyboard
+                    send_whatsapp_message, reply_to, response.text, response.keyboard, response.button_text
                 )
                 responses.append(
                     {"from": sender_id, "response": response.text, "new_state": new_state}
@@ -1868,7 +1876,7 @@ async def whatsapp_webhook(
                     )
     
                 background_tasks.add_task(
-                    send_whatsapp_message, reply_to, response.text, response.keyboard
+                    send_whatsapp_message, reply_to, response.text, response.keyboard, response.button_text
                 )
                 responses.append(
                     {"from": sender_id, "response": response.text, "new_state": new_state}
@@ -1947,7 +1955,7 @@ async def whatsapp_webhook(
                     )
     
                 background_tasks.add_task(
-                    send_whatsapp_message, reply_to, response.text, response.keyboard
+                    send_whatsapp_message, reply_to, response.text, response.keyboard, response.button_text
                 )
                 responses.append(
                     {"from": sender_id, "response": response.text, "new_state": new_state}
@@ -1977,7 +1985,7 @@ async def whatsapp_webhook(
                     )
 
                 background_tasks.add_task(
-                    send_whatsapp_message, reply_to, response.text, response.keyboard
+                    send_whatsapp_message, reply_to, response.text, response.keyboard, response.button_text
                 )
                 responses.append(
                     {"from": sender_id, "response": response.text, "new_state": new_state}
@@ -2003,13 +2011,13 @@ async def whatsapp_webhook(
                     # מצב מיוחד: admin_handler מחזיר _ADMIN_SWITCH_* כשצריך לנתב לתפקיד חדש
                     if isinstance(new_state, str) and new_state.startswith("_ADMIN_SWITCH_"):
                         background_tasks.add_task(
-                            send_whatsapp_message, reply_to, response.text, response.keyboard
+                            send_whatsapp_message, reply_to, response.text, response.keyboard, response.button_text
                         )
                         # _route_to_role_menu_wa שומר ומשחזר admin context אוטומטית,
                         # ומוסיף כפתור "חזרה לאדמין" לתגובה
                         response2, new_state2 = await _route_to_role_menu_wa(user, db, state_manager)
                         background_tasks.add_task(
-                            send_whatsapp_message, reply_to, response2.text, response2.keyboard
+                            send_whatsapp_message, reply_to, response2.text, response2.keyboard, response2.button_text
                         )
                         responses.append(
                             {"from": sender_id, "response": response2.text, "new_state": new_state2}
@@ -2017,7 +2025,7 @@ async def whatsapp_webhook(
                         continue
 
                     background_tasks.add_task(
-                        send_whatsapp_message, reply_to, response.text, response.keyboard
+                        send_whatsapp_message, reply_to, response.text, response.keyboard, response.button_text
                     )
                     responses.append(
                         {"from": sender_id, "response": response.text, "new_state": new_state}
@@ -2034,7 +2042,7 @@ async def whatsapp_webhook(
                 else:
                     response, new_state = await _sender_fallback_wa(user, db, state_manager)
                 background_tasks.add_task(
-                    send_whatsapp_message, reply_to, response.text, response.keyboard
+                    send_whatsapp_message, reply_to, response.text, response.keyboard, response.button_text
                 )
                 responses.append(
                     {"from": sender_id, "response": response.text, "new_state": new_state}
@@ -2075,7 +2083,7 @@ async def whatsapp_webhook(
                 if _courier_ctx_wa.get("original_role") == "admin":
                     _inject_admin_return_button_wa(response)
                 background_tasks.add_task(
-                    send_whatsapp_message, reply_to, response.text, response.keyboard
+                    send_whatsapp_message, reply_to, response.text, response.keyboard, response.button_text
                 )
                 responses.append(
                     {"from": sender_id, "response": response.text, "new_state": new_state}
@@ -2119,7 +2127,7 @@ async def whatsapp_webhook(
                     if _driver_ctx_wa.get("original_role") == "admin":
                         _inject_admin_return_button_wa(response)
                 background_tasks.add_task(
-                    send_whatsapp_message, reply_to, response.text, response.keyboard
+                    send_whatsapp_message, reply_to, response.text, response.keyboard, response.button_text
                 )
                 responses.append(
                     {"from": sender_id, "response": response.text, "new_state": new_state}
@@ -2137,7 +2145,7 @@ async def whatsapp_webhook(
                 if _sender_ctx_wa.get("original_role") == "admin":
                     _inject_admin_return_button_wa(response)
                 background_tasks.add_task(
-                    send_whatsapp_message, reply_to, response.text, response.keyboard
+                    send_whatsapp_message, reply_to, response.text, response.keyboard, response.button_text
                 )
                 responses.append(
                     {"from": sender_id, "response": response.text, "new_state": new_state}
@@ -2163,7 +2171,7 @@ async def whatsapp_webhook(
                 if _sender_ctx2_wa.get("original_role") == "admin":
                     _inject_admin_return_button_wa(response)
                 background_tasks.add_task(
-                    send_whatsapp_message, reply_to, response.text, response.keyboard
+                    send_whatsapp_message, reply_to, response.text, response.keyboard, response.button_text
                 )
                 responses.append(
                     {"from": sender_id, "response": response.text, "new_state": new_state}

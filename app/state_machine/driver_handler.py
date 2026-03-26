@@ -407,6 +407,7 @@ class DriverStateHandler:
                 "בחר את קוד הלבוש שלך:"
             ),
             keyboard=_DRESS_CODE_KEYBOARD,
+            button_text="👔 בחירת סוג לבוש",
         )
         return (
             response,
@@ -441,6 +442,7 @@ class DriverStateHandler:
             response = MessageResponse(
                 text="❌ לא זיהיתי. 👔 בחירת סוג לבוש:",
                 keyboard=_DRESS_CODE_KEYBOARD,
+                button_text="👔 בחירת סוג לבוש",
             )
             return response, DriverState.REGISTER_COLLECT_DRESS_CODE.value, {}
 
@@ -710,7 +712,7 @@ class DriverStateHandler:
             )
             return response, DriverState.MENU.value, {}
 
-        response = MessageResponse(text=text, keyboard=keyboard)
+        response = MessageResponse(text=text, keyboard=keyboard, button_text="🚗 תפריט ראשי")
         return response, DriverState.MENU.value, {}
 
     async def _handle_menu(
@@ -975,7 +977,7 @@ class DriverStateHandler:
     ) -> Tuple[MessageResponse, str, dict]:
         """בניית תגובת תפריט הגדרות — משותף ל-MENU ול-SETTINGS_VIEW"""
         text, keyboard = await self.menu_service.get_settings_menu(user.id)
-        response = MessageResponse(text=text, keyboard=keyboard)
+        response = MessageResponse(text=text, keyboard=keyboard, button_text="🛠 הגדרות")
         return response, DriverState.SETTINGS_VIEW.value, {}
 
     async def _handle_settings_view(
@@ -1022,6 +1024,7 @@ class DriverStateHandler:
         response = MessageResponse(
             text="🚙 <b>בחר סוג רכב:</b>",
             keyboard=keyboard,
+            button_text="🚗 בחירת סוג רכב",
         )
         return response, DriverState.SETTINGS_VEHICLE_TYPE.value, {}
 
@@ -1049,6 +1052,7 @@ class DriverStateHandler:
             response = MessageResponse(
                 text="❌ לא זיהיתי. 🚗 בחירת סוג רכב:",
                 keyboard=keyboard,
+                button_text="🚗 בחירת סוג רכב",
             )
             return response, DriverState.SETTINGS_VEHICLE_TYPE.value, {}
 
@@ -1074,6 +1078,7 @@ class DriverStateHandler:
         response = MessageResponse(
             text="🛣 <b>בחר סוג נסיעה:</b>",
             keyboard=keyboard,
+            button_text="🛣️ בחירת סוג נסיעה",
         )
         return response, DriverState.SETTINGS_TRIP_TYPE.value, {}
 
@@ -1098,6 +1103,7 @@ class DriverStateHandler:
             response = MessageResponse(
                 text="❌ לא זיהיתי. 🛣️ בחירת סוג נסיעה:",
                 keyboard=keyboard,
+                button_text="🛣️ בחירת סוג נסיעה",
             )
             return response, DriverState.SETTINGS_TRIP_TYPE.value, {}
 
@@ -1124,6 +1130,7 @@ class DriverStateHandler:
                 "האם להציג משלוחים בנוסף לנסיעות?"
             ),
             keyboard=[["✅ כן — הצג משלוחים"], ["❌ לא — ללא משלוחים"], ["❌ ביטול"]],
+            button_text="📦 הצגת משלוחים",
         )
         return response, DriverState.SETTINGS_SHOW_DELIVERIES.value, {}
 
@@ -1146,6 +1153,7 @@ class DriverStateHandler:
             response = MessageResponse(
                 text="❌ לא זיהיתי. 📦 הצגת משלוחים — כן או לא?",
                 keyboard=[["✅ כן — הצג משלוחים"], ["❌ לא — ללא משלוחים"], ["❌ ביטול"]],
+                button_text="📦 הצגת משלוחים",
             )
             return response, DriverState.SETTINGS_SHOW_DELIVERIES.value, {}
 
@@ -1167,6 +1175,7 @@ class DriverStateHandler:
         response = MessageResponse(
             text="🕐 <b>בחר מסגרת זמן לנסיעות קרובות:</b>",
             keyboard=keyboard,
+            button_text="⏰ בחירת טווח זמן",
         )
         return response, DriverState.SETTINGS_UPCOMING_TIMEFRAME.value, {}
 
@@ -1191,6 +1200,7 @@ class DriverStateHandler:
             response = MessageResponse(
                 text="❌ לא זיהיתי. ⏰ בחירת טווח זמן:",
                 keyboard=keyboard,
+                button_text="⏰ בחירת טווח זמן",
             )
             return response, DriverState.SETTINGS_UPCOMING_TIMEFRAME.value, {}
 
@@ -1221,6 +1231,7 @@ class DriverStateHandler:
                 "האם להפעיל חיפוש עתידי?"
             ),
             keyboard=[["✅ כן — הפעל חיפוש עתידי"], ["❌ לא — כבה חיפוש עתידי"], ["❌ ביטול"]],
+            button_text="📅 חיפוש עתידי",
         )
         return response, DriverState.SETTINGS_FUTURE_ONLY_MODE.value, {}
 
@@ -1263,6 +1274,7 @@ class DriverStateHandler:
         response = MessageResponse(
             text="❌ בחירה לא תקינה. בחר כן או לא:",
             keyboard=[["✅ כן — הפעל חיפוש עתידי"], ["❌ לא — כבה חיפוש עתידי"], ["❌ ביטול"]],
+            button_text="📅 חיפוש עתידי",
         )
         return response, DriverState.SETTINGS_FUTURE_ONLY_MODE.value, {}
 
@@ -1468,6 +1480,7 @@ class DriverStateHandler:
         response = MessageResponse(
             text="".join(text_parts),
             keyboard=keyboard,
+            button_text="🔍 ניהול חיפושים",
         )
         return response, DriverState.SEARCH_VIEW_ACTIVE.value, {}
 
@@ -1603,6 +1616,7 @@ class DriverStateHandler:
         response = MessageResponse(
             text="🗑 <b>בחר חיפוש למחיקה:</b>",
             keyboard=keyboard,
+            button_text="🗑 מחיקת חיפוש",
         )
         # שמירת מזהי חיפושים בקונטקסט לשימוש במצב SEARCH_MANAGE
         search_ids = {str(i): search.id for i, search in enumerate(searches, 1)}
@@ -1853,7 +1867,7 @@ class DriverStateHandler:
             ["🔙 חזרה לתפריט"],
         ]
 
-        response = MessageResponse(text=text, keyboard=keyboard)
+        response = MessageResponse(text=text, keyboard=keyboard, button_text="💳 רכישת מנוי")
         return response, DriverState.SUBSCRIPTION_VIEW.value, {}
 
     async def _handle_subscription_view(

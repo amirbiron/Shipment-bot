@@ -682,7 +682,7 @@ app.get('/health', async (req, res) => {
 
 // Send message endpoint
 app.post('/send', async (req, res) => {
-    const { phone, message, keyboard, footer } = req.body;
+    const { phone, message, keyboard, footer, button_text } = req.body;
 
     console.log('Send request received - phone:', phone, 'message:', message?.substring(0, 50));
     console.log('Keyboard:', keyboard);
@@ -760,7 +760,8 @@ app.post('/send', async (req, res) => {
                     buttonId: text  // Use text as buttonId for easier handling
                 }));
                 // sendButtons(chatId, title, buttons, description) — לא תומך ב-footer ישירות
-                result = await client.sendButtons(listChatId, 'בחרו אפשרות:', buttons, message);
+                const btnTitle = button_text || 'בחר אפשרות:';
+                result = await client.sendButtons(listChatId, btnTitle, buttons, message);
                 console.log('Message sent with buttons (v1 format) to:', listChatId);
             } catch (btnError) {
                 console.log('sendButtons v1 failed:', btnError.message);
@@ -786,7 +787,7 @@ app.post('/send', async (req, res) => {
                     // - description (גוף ההודעה) עד ~1024 תווים
                     // - row title עד ~24 תווים
                     // - row description עד ~72 תווים
-                    const safeButtonText = truncateByCodepoints('בחרו 👆', 20);
+                    const safeButtonText = truncateByCodepoints(button_text || 'בחר 👆', 20);
                     const safeTitle = truncateByCodepoints("משלוח בצ'יק", 24);
                     const safeDescription = truncateByCodepoints(message, 1024);
 

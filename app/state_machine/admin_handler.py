@@ -123,7 +123,7 @@ class AdminStateHandler:
         keyboard = [
             ["החלף תפקיד"],
         ]
-        return MessageResponse(text=text, keyboard=keyboard), AdminState.SELECT_ROLE.value, {}
+        return MessageResponse(text=text, keyboard=keyboard, button_text="🎭 תפריט ניהול"), AdminState.SELECT_ROLE.value, {}
 
     async def _handle_select_role(
         self, user: User, message: str, context: dict
@@ -155,7 +155,7 @@ class AdminStateHandler:
                 ["בעל תחנה"],
                 ["חזרה"],
             ]
-            return MessageResponse(text=text, keyboard=keyboard), AdminState.SELECT_ROLE.value, {}
+            return MessageResponse(text=text, keyboard=keyboard, button_text="🎭 בחירת תפקיד"), AdminState.SELECT_ROLE.value, {}
 
         # החלפת תפקיד
         return await self._switch_to_role(user, selected_role, context)
