@@ -1401,32 +1401,53 @@ class DriverStateHandler:
 
         # הצגת אישור + סיכום + מספר נהגים פנויים
         summary = DriverSearchService.format_search_summary(search)
-        active_count = await self.search_service.get_active_search_count(user.id)
         available_drivers = await self.search_service.count_available_drivers_for_destination(
             search.destination_city, exclude_user_id=user.id
         )
 
-        # שליפת חיפושים קיימים להצגה מתחת לאישור
+        # שליפת כל החיפושים הפעילים עם ספירת נהגים לכל יעד
         all_searches = await self.search_service.get_active_searches(user.id)
-        existing_list = DriverSearchService.format_searches_list(all_searches)
+        destination_cities = [s.destination_city for s in all_searches]
+        driver_counts = await self.search_service.count_available_drivers_for_destinations(
+            destination_cities, exclude_user_id=user.id
+        )
+
+        # בניית שורת נהגים פנויים עם שמות ערים מלאים
+        origin_name = search.origin_city or ""
+        dest_name = search.destination_city or ""
+        if origin_name and origin_name != "מיקום נוכחי":
+            drivers_line = (
+                f"🎲 {available_drivers} נהגים פנויים איתך "
+                f"מ{escape(origin_name)} ל{escape(dest_name)}"
+            )
+        else:
+            drivers_line = (
+                f"🎲 {available_drivers} נהגים פנויים איתך "
+                f"ל{escape(dest_name)}"
+            )
 
         text_parts = [
-            "✅ <b>החיפוש נכנס למערכת!</b>\n\n",
-            f"{summary}\n",
-            f"🎲 {available_drivers} נהגים פנויים\n\n",
-            "🔎 <b>סטטוס חיפוש:</b> המערכת סורקת כעת עשרות מקורות...\n\n",
-            f"📊 סה״כ חיפושים פעילים: {active_count}/{MAX_ACTIVE_SEARCHES_PER_USER}\n",
+            "✅ החיפוש נכנס למערכת!\n",
+            "אני על זה בשבילך\n\n",
+            f"{summary}\n\n",
+            f"{drivers_line}\n\n",
+            "מעכשיו, כל נסיעה רלוונטית שתתפרסם באחת מהקבוצות שלך "
+            "או בבוט תקפוץ לך כאן בצ׳אט 📲\n\n",
+            "📊 <b>סטטוס חיפושים</b>\n",
+            "▫️ המערכת סורקת כעת עשרות מקורות...\n",
         ]
 
-        if len(all_searches) > 1:
-            text_parts.append(f"\n📋 <b>חיפושים מוגדרים:</b>\n{existing_list}\n")
-
-        text_parts.append("\n💡 להוספת חיפוש נוסף - שלח 'פ &lt;יעד&gt;'")
-        text_parts.append("\n📋 לחזרה לתפריט שלח 'ת'")
+        # הצגת כל החיפושים הפעילים עם נהגים פנויים לכל חיפוש
+        if all_searches:
+            text_parts.append(f"\n📋 <b>חיפושים פעילים ({len(all_searches)}/{MAX_ACTIVE_SEARCHES_PER_USER})</b>\n")
+            for i, s in enumerate(all_searches, 1):
+                s_summary = DriverSearchService.format_search_summary(s)
+                s_drivers = driver_counts.get(s.destination_city, 0)
+                text_parts.append(f"{i}. {s_summary} — 🎲 {s_drivers} נהגים\n")
 
         response = MessageResponse(
             text="".join(text_parts),
-            keyboard=[["🔍 חיפושים פעילים"], ["🔙 חזרה לתפריט"]],
+            keyboard=[["🎯 תפריט ראשי"]],
         )
         return response, DriverState.MENU.value, {}
 
