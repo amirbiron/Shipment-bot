@@ -68,7 +68,7 @@ from app.domain.services.driver_menu_service import (
 )
 from app.domain.services.driver_search_service import DriverSearchService
 from app.domain.services.city_abbreviation_service import CityAbbreviationService
-from app.domain.services.ride_posting_service import RidePostingService
+from app.domain.services.ride_posting_service import ParsedRidePosting, RidePostingService
 from app.domain.services.pricing_service import PricingService
 from app.domain.services.driver_subscription_service import DriverSubscriptionService
 from app.db.models.driver_search import MAX_ACTIVE_SEARCHES_PER_USER, DriverSearchStatus
@@ -272,6 +272,8 @@ class DriverStateHandler:
             DriverState.SEARCH_VIEW_ACTIVE.value: self._handle_search_view_active,
             DriverState.SEARCH_MANAGE.value: self._handle_search_manage,
             DriverState.SEARCH_CREATE_ORIGIN.value: self._handle_search_create_location,
+            # אישור פרסום נסיעה
+            DriverState.RIDE_POSTING_CONFIRM.value: self._handle_ride_posting_confirm,
             # מנוי (סשן 8)
             DriverState.SUBSCRIPTION_VIEW.value: self._handle_subscription_view,
             DriverState.SUBSCRIPTION_PURCHASE.value: self._handle_subscription_purchase,
@@ -873,14 +875,100 @@ class DriverStateHandler:
             )
             return response, DriverState.MENU.value, {}
 
-        success, message, sent_count, total_groups = (
-            await self.ride_posting_service.post_ride(user, posting)
+        # ספירת נהגים עם חיפושים תואמים ליעד הנסיעה
+        matching_ids = await self.search_service.get_matching_driver_user_ids(
+            origin_city=posting.origin,
+            destination_city=posting.destination,
+            exclude_user_id=user.id,
         )
 
-        # שליחת הודעות פרטיות לנהגים עם חיפושים תואמים למסלול
-        # נשלח גם כששליחה לקבוצות נכשלה — התראות פרטיות הן עניין נפרד
-        notified_count = 0
-        if total_groups > 0:
+        driver_name = user.full_name or user.name or "נהג"
+        message = RidePostingService.format_ride_message(posting, driver_name)
+
+        preview = (
+            f"📋 <b>תצוגה מקדימה של הנסיעה:</b>\n\n"
+            f"{message}\n"
+            f"🎲 {len(matching_ids)} נהגים עם חיפוש תואם יקבלו התראה\n\n"
+            f"לחץ <b>✅ אישור פרסום</b> לפרסום הנסיעה,\n"
+            f"או <b>❌ ביטול</b> לחזרה לתפריט."
+        )
+
+        response = MessageResponse(
+            text=preview,
+            keyboard=[["✅ אישור פרסום"], ["❌ ביטול"]],
+        )
+        return response, DriverState.RIDE_POSTING_CONFIRM.value, {
+            "ride_origin": posting.origin,
+            "ride_destination": posting.destination,
+            "ride_seats": str(posting.seats),
+            "ride_price": str(posting.price),
+        }
+
+    async def _handle_ride_posting_confirm(
+        self, user: User, message: str, context: dict, **kwargs: object
+    ) -> Tuple[MessageResponse, str, dict]:
+        """
+        אישור או ביטול פרסום נסיעה.
+        """
+        msg = message.strip()
+
+        # ניקוי context של הנסיעה
+        _ride_context_cleanup = {
+            "ride_origin": None,
+            "ride_destination": None,
+            "ride_seats": None,
+            "ride_price": None,
+        }
+
+        # ביטול
+        if "ביטול" in msg or "חזרה" in msg:
+            response = MessageResponse(
+                text="❌ הפרסום בוטל.",
+                keyboard=[["🔙 חזרה לתפריט"]],
+            )
+            return response, DriverState.MENU.value, _ride_context_cleanup
+
+        # אישור פרסום
+        if "אישור" in msg:
+            # בדיקת מנוי פעיל — המנוי יכול לפוג בין התצוגה המקדימה לאישור
+            if not await self.subscription_service.is_subscription_active(user.id):
+                response = MessageResponse(
+                    text=(
+                        "⚠️ <b>המנוי שלך פג תוקף</b>\n\n"
+                        "רכוש מנוי כדי להמשיך לפרסם נסיעות.\n"
+                        "לחץ על כפתור 'מנוי' לפרטים."
+                    ),
+                    keyboard=[["💳 מנוי"], ["🔙 חזרה לתפריט"]],
+                )
+                return response, DriverState.MENU.value, _ride_context_cleanup
+
+            origin = context.get("ride_origin", "")
+            destination = context.get("ride_destination", "")
+            seats_str = context.get("ride_seats", "0")
+            price_str = context.get("ride_price", "0")
+
+            try:
+                seats = int(seats_str)
+                price = float(price_str)
+            except (ValueError, TypeError):
+                response = MessageResponse(
+                    text="❌ שגיאה בנתוני הנסיעה. נסה שוב.",
+                    keyboard=[["🔙 חזרה לתפריט"]],
+                )
+                return response, DriverState.MENU.value, _ride_context_cleanup
+
+            posting = ParsedRidePosting(
+                origin=origin,
+                destination=destination,
+                seats=seats,
+                price=price,
+            )
+
+            success, formatted_message, sent_count, total_groups = (
+                await self.ride_posting_service.post_ride(user, posting)
+            )
+
+            # שליחת הודעות פרטיות לנהגים עם חיפושים תואמים — תמיד, גם כשאין קבוצות
             matching_ids = await self.search_service.get_matching_driver_user_ids(
                 origin_city=posting.origin,
                 destination_city=posting.destination,
@@ -891,45 +979,52 @@ class DriverStateHandler:
                 posting, driver_name, matching_ids
             )
 
-        if sent_count > 0:
-            notified_text = ""
-            if notified_count > 0:
-                notified_text = f"📨 נשלח ל-{notified_count} נהגים עם חיפוש תואם.\n"
-            confirmation = (
-                f"✅ <b>הנסיעה פורסמה בהצלחה!</b>\n\n"
-                f"{message}\n"
-                f"📢 פורסם ב-{sent_count} קבוצות.\n"
-                f"{notified_text}\n"
-                f"📋 לחזרה לתפריט שלח 'ת'"
-            )
-        elif total_groups == 0:
-            confirmation = (
-                f"⚠️ <b>לא נמצאו קבוצות רלוונטיות</b>\n\n"
-                f"{message}\n"
-                f"לא נמצאו קבוצות מתאימות למסלול "
-                f"{escape(posting.origin)} → {escape(posting.destination)}.\n"
-                f"הנסיעה לא פורסמה.\n\n"
-                f"📋 לחזרה לתפריט שלח 'ת'"
-            )
-        else:
-            # נמצאו קבוצות אבל כל השליחות נכשלו
-            notified_text = ""
-            if notified_count > 0:
-                notified_text = f"📨 עם זאת, נשלח ל-{notified_count} נהגים עם חיפוש תואם.\n"
-            confirmation = (
-                f"❌ <b>שגיאה בפרסום הנסיעה</b>\n\n"
-                f"{message}\n"
-                f"נמצאו {total_groups} קבוצות רלוונטיות אך השליחה נכשלה.\n"
-                f"{notified_text}"
-                f"נסה שוב מאוחר יותר.\n\n"
-                f"📋 לחזרה לתפריט שלח 'ת'"
-            )
+            if sent_count > 0:
+                notified_text = ""
+                if notified_count > 0:
+                    notified_text = f"📨 נשלח ל-{notified_count} נהגים עם חיפוש תואם.\n"
+                confirmation = (
+                    f"✅ <b>הנסיעה פורסמה בהצלחה!</b>\n\n"
+                    f"{formatted_message}\n"
+                    f"📢 פורסם ב-{sent_count} קבוצות.\n"
+                    f"{notified_text}"
+                )
+            elif total_groups == 0:
+                notified_text = ""
+                if notified_count > 0:
+                    notified_text = f"📨 נשלח ל-{notified_count} נהגים עם חיפוש תואם.\n"
+                confirmation = (
+                    f"⚠️ <b>לא נמצאו קבוצות רלוונטיות</b>\n\n"
+                    f"{formatted_message}\n"
+                    f"לא נמצאו קבוצות מתאימות למסלול "
+                    f"{escape(posting.origin)} → {escape(posting.destination)}.\n"
+                    f"{notified_text}"
+                )
+            else:
+                # נמצאו קבוצות אבל כל השליחות נכשלו
+                notified_text = ""
+                if notified_count > 0:
+                    notified_text = f"📨 עם זאת, נשלח ל-{notified_count} נהגים עם חיפוש תואם.\n"
+                confirmation = (
+                    f"❌ <b>שגיאה בפרסום הנסיעה</b>\n\n"
+                    f"{formatted_message}\n"
+                    f"נמצאו {total_groups} קבוצות רלוונטיות אך השליחה נכשלה.\n"
+                    f"{notified_text}"
+                    f"נסה שוב מאוחר יותר."
+                )
 
+            response = MessageResponse(
+                text=confirmation,
+                keyboard=[["🔙 חזרה לתפריט"]],
+            )
+            return response, DriverState.MENU.value, _ride_context_cleanup
+
+        # לא זוהתה פקודה — חזרה לאישור
         response = MessageResponse(
-            text=confirmation,
-            keyboard=[["🔙 חזרה לתפריט"]],
+            text="לחץ <b>✅ אישור פרסום</b> לפרסום, או <b>❌ ביטול</b> לחזרה.",
+            keyboard=[["✅ אישור פרסום"], ["❌ ביטול"]],
         )
-        return response, DriverState.MENU.value, {}
+        return response, DriverState.RIDE_POSTING_CONFIRM.value, None
 
     def _handle_pricing_command(
         self, text: str
@@ -1401,32 +1496,51 @@ class DriverStateHandler:
 
         # הצגת אישור + סיכום + מספר נהגים פנויים
         summary = DriverSearchService.format_search_summary(search)
-        active_count = await self.search_service.get_active_search_count(user.id)
-        available_drivers = await self.search_service.count_available_drivers_for_destination(
-            search.destination_city, exclude_user_id=user.id
-        )
 
-        # שליפת חיפושים קיימים להצגה מתחת לאישור
+        # שליפת כל החיפושים הפעילים עם ספירת נהגים לכל יעד — שאילתה אחת
         all_searches = await self.search_service.get_active_searches(user.id)
-        existing_list = DriverSearchService.format_searches_list(all_searches)
+        destination_cities = [s.destination_city for s in all_searches]
+        driver_counts = await self.search_service.count_available_drivers_for_destinations(
+            destination_cities, exclude_user_id=user.id
+        )
+        available_drivers = driver_counts.get(search.destination_city, 0)
+
+        # בניית שורת נהגים פנויים עם שמות ערים מלאים
+        origin_name = search.origin_city or ""
+        dest_name = search.destination_city or ""
+        if origin_name and origin_name != "מיקום נוכחי":
+            drivers_line = (
+                f"🎲 {available_drivers} נהגים פנויים איתך "
+                f"מ{escape(origin_name)} ל{escape(dest_name)}"
+            )
+        else:
+            drivers_line = (
+                f"🎲 {available_drivers} נהגים פנויים איתך "
+                f"ל{escape(dest_name)}"
+            )
 
         text_parts = [
-            "✅ <b>החיפוש נכנס למערכת!</b>\n\n",
-            f"{summary}\n",
-            f"🎲 {available_drivers} נהגים פנויים\n\n",
-            "🔎 <b>סטטוס חיפוש:</b> המערכת סורקת כעת עשרות מקורות...\n\n",
-            f"📊 סה״כ חיפושים פעילים: {active_count}/{MAX_ACTIVE_SEARCHES_PER_USER}\n",
+            "✅ החיפוש נכנס למערכת!\n",
+            "אני על זה בשבילך\n\n",
+            f"{summary}\n\n",
+            f"{drivers_line}\n\n",
+            "מעכשיו, כל נסיעה רלוונטית שתתפרסם באחת מהקבוצות שלך "
+            "או בבוט תקפוץ לך כאן בצ׳אט 📲\n\n",
+            "📊 <b>סטטוס חיפושים</b>\n",
+            "▫️ המערכת סורקת כעת עשרות מקורות...\n",
         ]
 
-        if len(all_searches) > 1:
-            text_parts.append(f"\n📋 <b>חיפושים מוגדרים:</b>\n{existing_list}\n")
-
-        text_parts.append("\n💡 להוספת חיפוש נוסף - שלח 'פ &lt;יעד&gt;'")
-        text_parts.append("\n📋 לחזרה לתפריט שלח 'ת'")
+        # הצגת כל החיפושים הפעילים עם נהגים פנויים לכל חיפוש
+        if all_searches:
+            text_parts.append(f"\n📋 <b>חיפושים פעילים ({len(all_searches)}/{MAX_ACTIVE_SEARCHES_PER_USER})</b>\n")
+            for i, s in enumerate(all_searches, 1):
+                s_summary = DriverSearchService.format_search_summary(s)
+                s_drivers = driver_counts.get(s.destination_city, 0)
+                text_parts.append(f"{i}. {s_summary} — 🎲 {s_drivers} נהגים\n")
 
         response = MessageResponse(
             text="".join(text_parts),
-            keyboard=[["🔍 חיפושים פעילים"], ["🔙 חזרה לתפריט"]],
+            keyboard=[["🎯 תפריט ראשי"]],
         )
         return response, DriverState.MENU.value, {}
 

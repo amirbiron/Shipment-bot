@@ -574,11 +574,11 @@ class DriverSearchService:
         area_marker = " (אזורי)" if search.is_area_search else ""
         if search.origin_city and search.origin_city != "מיקום נוכחי":
             return (
-                f"📍 {esc(search.destination_city)}{esc(area_marker)} ← "
-                f"{esc(search.origin_city)}"
+                f"📍 {esc(search.origin_city)} ⬅️ "
+                f"{esc(search.destination_city)}{esc(area_marker)}"
             )
         if search.latitude is not None and search.longitude is not None:
-            return f"📍 {esc(search.destination_city)}{esc(area_marker)} ← מיקום GPS"
+            return f"📍 מיקום GPS ⬅️ {esc(search.destination_city)}{esc(area_marker)}"
         return f"📍 {esc(search.destination_city)}{esc(area_marker)}"
 
     @staticmethod

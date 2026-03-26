@@ -420,7 +420,7 @@ class TestDriverRidePostingHandler:
     async def test_ride_posting_no_groups(
         self, db_session, user_factory
     ) -> None:
-        """פרסום נסיעה ללא קבוצות — אישור עם 0 קבוצות"""
+        """פרסום נסיעה ללא קבוצות — שלב אישור ואז פרסום עם 0 קבוצות"""
         user, _ = await _create_registered_driver(
             db_session, user_factory, "+972505007010"
         )
@@ -430,8 +430,16 @@ class TestDriverRidePostingHandler:
             user.id, "telegram", DriverState.MENU.value, context={}
         )
 
+        # שלב 1: תצוגה מקדימה
         response, new_state = await handler.handle_message(
             user, "בב ים 5 מק 150 ש״ח"
+        )
+        assert new_state == DriverState.RIDE_POSTING_CONFIRM.value
+        assert "תצוגה מקדימה" in response.text
+
+        # שלב 2: אישור פרסום
+        response, new_state = await handler.handle_message(
+            user, "✅ אישור פרסום"
         )
         assert new_state == DriverState.MENU.value
         # בלי קבוצות — הודעה ברורה שלא נמצאו קבוצות
@@ -451,14 +459,20 @@ class TestDriverRidePostingHandler:
             user.id, "telegram", DriverState.MENU.value, context={}
         )
 
-        # מדמה מצב שבו יש קבוצות אבל כולן נכשלות
+        # שלב 1: תצוגה מקדימה
+        response, new_state = await handler.handle_message(
+            user, "בב ים 5 מק 150 ש״ח"
+        )
+        assert new_state == DriverState.RIDE_POSTING_CONFIRM.value
+
+        # שלב 2: אישור — מדמה מצב שבו יש קבוצות אבל כולן נכשלות
         with patch.object(
             handler.ride_posting_service,
             "post_ride",
             return_value=(True, "הודעת נסיעה", 0, 3),
         ):
             response, new_state = await handler.handle_message(
-                user, "בב ים 5 מק 150 ש״ח"
+                user, "✅ אישור פרסום"
             )
         assert new_state == DriverState.MENU.value
         # חייב להציג הודעת שגיאה ולא "לא נמצאו קבוצות"
