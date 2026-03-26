@@ -426,7 +426,7 @@ def _is_group_target(identifier: str) -> bool:
     return identifier.endswith("@g.us")
 
 
-_WHATSAPP_BRANDING = "איי דרייבר 🤖 – מסדר לך את הדרך"
+_WHATSAPP_BRANDING = "iDriver • איי דרייבר 🤖"
 
 
 def _append_branding(text: str) -> str:
