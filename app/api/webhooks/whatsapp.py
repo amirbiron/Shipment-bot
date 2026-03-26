@@ -2110,7 +2110,7 @@ async def whatsapp_webhook(
                     )
                 _driver_handler = _DH(db, platform="whatsapp")
                 response, new_state = await _driver_handler.handle_message(
-                    user, text, None,
+                    user, text, photo_file_id,
                     location_lat=location_lat, location_lng=location_lng,
                 )
                 # שחזור admin context אחרי ה-handler
