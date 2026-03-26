@@ -930,6 +930,18 @@ class DriverStateHandler:
 
         # אישור פרסום
         if "אישור" in msg:
+            # בדיקת מנוי פעיל — המנוי יכול לפוג בין התצוגה המקדימה לאישור
+            if not await self.subscription_service.is_subscription_active(user.id):
+                response = MessageResponse(
+                    text=(
+                        "⚠️ <b>המנוי שלך פג תוקף</b>\n\n"
+                        "רכוש מנוי כדי להמשיך לפרסם נסיעות.\n"
+                        "לחץ על כפתור 'מנוי' לפרטים."
+                    ),
+                    keyboard=[["💳 מנוי"], ["🔙 חזרה לתפריט"]],
+                )
+                return response, DriverState.MENU.value, _ride_context_cleanup
+
             origin = context.get("ride_origin", "")
             destination = context.get("ride_destination", "")
             seats_str = context.get("ride_seats", "0")
