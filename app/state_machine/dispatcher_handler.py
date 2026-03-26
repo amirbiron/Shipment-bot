@@ -335,6 +335,7 @@ class DispatcherStateHandler:
                 ["📞 פנייה לניהול"],
                 ["🔙 חזרה לתפריט ראשי"],
             ],
+            button_text="🏪 תפריט סדרן",
         )
         return response, DispatcherState.MENU.value, {}
 
@@ -572,7 +573,9 @@ class DispatcherStateHandler:
         )
 
         response = MessageResponse(
-            summary, keyboard=[["✅ אישור ושליחה", "❌ ביטול"]]
+            summary,
+            keyboard=[["✅ אישור ושליחה", "❌ ביטול"]],
+            button_text="📦 לאשר משלוח?",
         )
         return response, DispatcherState.ADD_SHIPMENT_CONFIRM.value, {"fee": fee}
 
@@ -778,7 +781,9 @@ class DispatcherStateHandler:
         )
 
         response = MessageResponse(
-            summary, keyboard=[["✅ אישור", "❌ ביטול"]]
+            summary,
+            keyboard=[["✅ אישור", "❌ ביטול"]],
+            button_text="💳 לאשר חיוב?",
         )
         return (
             response,
@@ -965,7 +970,9 @@ class DispatcherStateHandler:
         )
 
         response = MessageResponse(
-            summary, keyboard=[["✅ אישור ופרסום", "❌ ביטול"]]
+            summary,
+            keyboard=[["✅ אישור ופרסום", "❌ ביטול"]],
+            button_text="🚗 לאשר נסיעה?",
         )
         return (
             response,
@@ -1112,7 +1119,7 @@ class DispatcherStateHandler:
             text += "לביטול נסיעה, לחצו על הכפתור המתאים."
         keyboard.append(["🔙 חזרה לתפריט סדרן"])
 
-        response = MessageResponse(text, keyboard=keyboard)
+        response = MessageResponse(text, keyboard=keyboard, button_text="🛣 ניהול נסיעות")
         return response, DispatcherState.VIEW_POSTED_RIDES.value, {}
 
     async def _handle_view_posted_rides(

@@ -147,6 +147,7 @@ class WPPConnectProvider(BaseWhatsAppProvider):
         text: str,
         keyboard: Optional[list[list[str]]] = None,
         footer: Optional[str] = None,
+        button_text: Optional[str] = None,
     ) -> None:
         """שליחת טקסט דרך WPPConnect Gateway עם retry ו-circuit breaker.
 
@@ -165,6 +166,9 @@ class WPPConnectProvider(BaseWhatsAppProvider):
         # footer מוצג בגופן קטן ואפור — פעיל רק עם כפתורים
         if footer and keyboard:
             payload["footer"] = footer
+        # טקסט הכפתור הכחול שפותח רשימת בחירה
+        if button_text and keyboard:
+            payload["button_text"] = button_text
 
         async def _send() -> None:
             await self._request_with_retry("send", payload, "שליחת WhatsApp")

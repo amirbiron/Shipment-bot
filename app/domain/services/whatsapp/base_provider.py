@@ -30,6 +30,7 @@ class BaseWhatsAppProvider(ABC):
         text: str,
         keyboard: Optional[list[list[str]]] = None,
         footer: Optional[str] = None,
+        button_text: Optional[str] = None,
     ) -> None:
         """
         שליחת הודעת טקסט.
@@ -44,6 +45,8 @@ class BaseWhatsAppProvider(ABC):
                       כל שורה = רשימת מחרוזות. לדוגמה: [["כן", "לא"], ["ביטול"]]
             footer: טקסט תחתון (footer) — מוצג בגופן קטן ואפור מתחת לגוף ההודעה,
                     מעל הכפתורים. עד 60 תווים. פעיל רק כש-keyboard מסופק.
+            button_text: טקסט הכפתור הכחול שפותח רשימת בחירה (list message).
+                         אם None — הספק ישתמש ב-default.
 
         Raises:
             WhatsAppError: בכשלון שליחה.

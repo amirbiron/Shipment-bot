@@ -178,6 +178,7 @@ class StationOwnerStateHandler:
                 ["🏪 הגדרות תחנה"],
                 ["📞 פנייה לניהול"],
             ],
+            button_text="🏢 תפריט תחנה",
         )
         return response, StationOwnerState.MENU.value, {}
 
@@ -237,6 +238,7 @@ class StationOwnerStateHandler:
                 ["➕ הוספת בעלים", "➖ הסרת בעלים"],
                 ["🔙 חזרה לתפריט"],
             ],
+            button_text="👤 ניהול בעלים",
         )
         return response, StationOwnerState.MANAGE_OWNERS.value, {}
 
@@ -270,6 +272,7 @@ class StationOwnerStateHandler:
                 ["➕ הוספת בעלים", "➖ הסרת בעלים"],
                 ["🔙 חזרה לתפריט"],
             ],
+            button_text="👤 ניהול בעלים",
         )
         return response, StationOwnerState.MANAGE_OWNERS.value, {}
 
@@ -303,7 +306,7 @@ class StationOwnerStateHandler:
 
         keyboard_items.append(["🔙 חזרה"])
 
-        response = MessageResponse(text, keyboard=keyboard_items)
+        response = MessageResponse(text, keyboard=keyboard_items, button_text="👤 בחר בעלים")
         return (
             response,
             StationOwnerState.REMOVE_OWNER_SELECT.value,
@@ -408,6 +411,7 @@ class StationOwnerStateHandler:
                 ["➕ הוספת סדרן", "➖ הסרת סדרן"],
                 ["🔙 חזרה לתפריט"],
             ],
+            button_text="👥 ניהול סדרנים",
         )
         return response, StationOwnerState.MANAGE_DISPATCHERS.value, {}
 
@@ -441,6 +445,7 @@ class StationOwnerStateHandler:
                 ["➕ הוספת סדרן", "➖ הסרת סדרן"],
                 ["🔙 חזרה לתפריט"],
             ],
+            button_text="👥 ניהול סדרנים",
         )
         return response, StationOwnerState.MANAGE_DISPATCHERS.value, {}
 
@@ -472,7 +477,7 @@ class StationOwnerStateHandler:
 
         keyboard_items.append(["🔙 חזרה"])
 
-        response = MessageResponse(text, keyboard=keyboard_items)
+        response = MessageResponse(text, keyboard=keyboard_items, button_text="👥 בחר סדרן")
         return (
             response,
             StationOwnerState.REMOVE_DISPATCHER_SELECT.value,
@@ -618,7 +623,7 @@ class StationOwnerStateHandler:
         )
 
         keyboard = self._commission_rate_keyboard()
-        response = MessageResponse(text, keyboard=keyboard)
+        response = MessageResponse(text, keyboard=keyboard, button_text="💰 בחר אחוז עמלה")
         return response, StationOwnerState.SET_COMMISSION_RATE.value, {}
 
     async def _handle_set_commission_rate(
@@ -732,6 +737,7 @@ class StationOwnerStateHandler:
                 ["➕ הוספת נהג לרשימה", "➖ הסרת נהג מהרשימה"],
                 ["🔙 חזרה לתפריט"],
             ],
+            button_text="🚫 רשימה שחורה",
         )
         return response, StationOwnerState.VIEW_BLACKLIST.value, {}
 
@@ -792,6 +798,7 @@ class StationOwnerStateHandler:
                 ["➕ הוספת נהג לרשימה", "➖ הסרת נהג מהרשימה"],
                 ["🔙 חזרה לתפריט"],
             ],
+            button_text="🚫 רשימה שחורה",
         )
         return response, StationOwnerState.VIEW_BLACKLIST.value, {}
 
@@ -825,7 +832,7 @@ class StationOwnerStateHandler:
 
         keyboard_items.append(["🔙 חזרה"])
 
-        response = MessageResponse(text, keyboard=keyboard_items)
+        response = MessageResponse(text, keyboard=keyboard_items, button_text="🚫 בחר להסרה")
         return (
             response,
             StationOwnerState.REMOVE_BLACKLIST_SELECT.value,
@@ -931,6 +938,7 @@ class StationOwnerStateHandler:
                 ["📢 הגדרת קבוצה ציבורית", "🔒 הגדרת קבוצה פרטית"],
                 ["🔙 חזרה לתפריט"],
             ],
+            button_text="⚙️ הגדרות קבוצות",
         )
         return response, StationOwnerState.GROUP_SETTINGS.value, {}
 
@@ -988,6 +996,7 @@ class StationOwnerStateHandler:
                 ["📢 הגדרת קבוצה ציבורית", "🔒 הגדרת קבוצה פרטית"],
                 ["🔙 חזרה לתפריט"],
             ],
+            button_text="⚙️ הגדרות קבוצות",
         )
         return response, StationOwnerState.GROUP_SETTINGS.value, {}
 
@@ -1015,6 +1024,7 @@ class StationOwnerStateHandler:
                 ["📢 הגדרת קבוצה ציבורית", "🔒 הגדרת קבוצה פרטית"],
                 ["🔙 חזרה לתפריט"],
             ],
+            button_text="⚙️ הגדרות קבוצות",
         )
         return response, StationOwnerState.GROUP_SETTINGS.value, {}
 
@@ -1082,6 +1092,7 @@ class StationOwnerStateHandler:
                 ["🕐 שעות פעילות", "📍 אזורי שירות"],
                 ["🔙 חזרה לתפריט"],
             ],
+            button_text="🏪 הגדרות תחנה",
         )
         return response, StationOwnerState.STATION_SETTINGS.value, {}
 

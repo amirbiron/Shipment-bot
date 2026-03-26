@@ -23,9 +23,13 @@ class MessageResponse:
         self,
         text: str,
         keyboard: Optional[list] = None,
+        button_text: Optional[str] = None,
     ):
         self.text = text
         self.keyboard = keyboard
+        # טקסט הכפתור הכחול שפותח רשימת בחירה בווטסאפ (WPPConnect list message).
+        # אם None — הספק ישתמש ב-default.
+        self.button_text = button_text
 
 
 class SenderStateHandler:
@@ -199,6 +203,7 @@ class SenderStateHandler:
                 "1. יצירת משלוח חדש\n"
                 "2. צפייה במשלוחים שלי",
                 keyboard=[["📦 המשלוחים שלי"], ["➕ משלוח חדש"]],
+                button_text="📦 תפריט ראשי",
             )
             return response, SenderState.MENU.value, {}
 
@@ -299,6 +304,7 @@ class SenderStateHandler:
             "1. יצירת משלוח חדש\n"
             "2. צפייה במשלוחים שלי",
             keyboard=[["📦 המשלוחים שלי"], ["➕ משלוח חדש"]],
+            button_text="📦 תפריט ראשי",
         )
         logger.info(
             "רישום שולח הושלם",
@@ -329,6 +335,7 @@ class SenderStateHandler:
                     ["🏪 הצטרפות כתחנה"],
                     ["📞 פנייה לניהול"],
                 ],
+                button_text="📦 תפריט ראשי",
             )
             return response, SenderState.MENU.value, {}
 
@@ -342,6 +349,7 @@ class SenderStateHandler:
             response = MessageResponse(
                 "המשלוחים שלך:\n(אין משלוחים עדיין)\n\n" "חזרה לתפריט:",
                 keyboard=[["📦 המשלוחים שלי"], ["➕ משלוח חדש"]],
+                button_text="📦 תפריט ראשי",
             )
             return response, SenderState.MENU.value, {}
 
@@ -354,6 +362,7 @@ class SenderStateHandler:
                 ["🏪 הצטרפות כתחנה"],
                 ["📞 פנייה לניהול"],
             ],
+            button_text="📦 תפריט ראשי",
         )
         return response, SenderState.MENU.value, {}
 
@@ -436,6 +445,7 @@ class SenderStateHandler:
             f"{safe_full_address}\n\n"
             "לאן תרצו להעביר את המשלוח?",
             keyboard=[["🏙️ בתוך העיר", "🚗 מחוץ לעיר"]],
+            button_text="📍 לאן המשלוח?",
         )
         return (
             response,
@@ -534,6 +544,7 @@ class SenderStateHandler:
         response = MessageResponse(
             f"🎯 כתובת יעד נשמרה:\n{safe_full_dropoff}\n\n" "האם המשלוח דחוף?",
             keyboard=[["🚀 מיידי", "☕ בנחת"]],
+            button_text="⏱️ מתי לשלוח?",
         )
         return (
             response,
@@ -578,6 +589,7 @@ class SenderStateHandler:
             response = MessageResponse(
                 "📍 לאן המשלוח?\n" "1. בתוך העיר\n" "2. מחוץ לעיר",
                 keyboard=[["🏙️ בתוך העיר", "🚗 מחוץ לעיר"]],
+                button_text="📍 לאן המשלוח?",
             )
             return response, SenderState.DELIVERY_LOCATION.value, {}
 
@@ -645,6 +657,7 @@ class SenderStateHandler:
             "1. 🚀 מיידי - המשלוח יתבצע בהקדם\n"
             "2. ☕ בנחת - קביעת שעה מועדפת",
             keyboard=[["🚀 מיידי", "☕ בנחת"]],
+            button_text="⏱️ מתי לשלוח?",
         )
         return response, SenderState.DELIVERY_URGENCY.value, {}
 
@@ -760,7 +773,9 @@ class SenderStateHandler:
         summary += "לאשר את המשלוח?"
 
         response = MessageResponse(
-            summary, keyboard=[["✅ אישור ושליחה", "❌ ביטול"]]
+            summary,
+            keyboard=[["✅ אישור ושליחה", "❌ ביטול"]],
+            button_text="📋 לאשר משלוח?",
         )
         return (
             response,
@@ -800,6 +815,7 @@ class SenderStateHandler:
             response = MessageResponse(
                 success_msg,
                 keyboard=[["📦 המשלוחים שלי"], ["➕ משלוח חדש"]],
+                button_text="📦 תפריט ראשי",
             )
             return response, SenderState.MENU.value, {}
 
@@ -807,6 +823,7 @@ class SenderStateHandler:
             response = MessageResponse(
                 "המשלוח בוטל.\n\n" "מה תרצו לעשות?",
                 keyboard=[["📦 המשלוחים שלי"], ["➕ משלוח חדש"]],
+                button_text="📦 תפריט ראשי",
             )
             return response, SenderState.MENU.value, {}
 
@@ -814,6 +831,7 @@ class SenderStateHandler:
         response = MessageResponse(
             "📋 לאשר את המשלוח?\n" "1. ✅ אישור ושליחה\n" "2. ❌ ביטול",
             keyboard=[["✅ אישור ושליחה", "❌ ביטול"]],
+            button_text="📋 לאשר משלוח?",
         )
         return response, SenderState.DELIVERY_CONFIRM.value, {}
 
@@ -824,6 +842,7 @@ class SenderStateHandler:
         response = MessageResponse(
             "משהו השתבש. חוזרים לתפריט הראשי.",
             keyboard=[["📦 המשלוחים שלי"], ["➕ משלוח חדש"]],
+            button_text="📦 תפריט ראשי",
         )
         return response, SenderState.MENU.value, {}
 
@@ -1330,6 +1349,7 @@ class CourierStateHandler:
             f"📍 <b>האזור שלך:</b> {safe_area}\n\n"
             "בחר פעולה:",
             keyboard=keyboard,
+            button_text="📋 תפריט שליח",
         )
         return response, CourierState.MENU.value, {}
 
@@ -1405,6 +1425,7 @@ class CourierStateHandler:
                 ["📦 3 חודשים"],
                 ["🔙 חזרה לתפריט"],
             ],
+            button_text="💳 רכישת מנוי",
         )
         return response, CourierState.DEPOSIT_REQUEST.value, {}
 

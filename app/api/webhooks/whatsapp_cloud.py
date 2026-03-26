@@ -382,7 +382,7 @@ async def _process_cloud_message(
             state_manager = StateManager(db)
             response, new_state = await _route_to_role_menu_wa(user, db, state_manager)
             background_tasks.add_task(
-                send_whatsapp_message, normalized_phone, response.text, response.keyboard
+                send_whatsapp_message, normalized_phone, response.text, response.keyboard, response.button_text
             )
             return {"from": phone_masked, "response": response.text, "new_state": new_state}
 
@@ -560,7 +560,7 @@ async def _route_message_to_handler(
             _admin_h = AdminStateHandler(db, platform="whatsapp")
             response, new_state = await _admin_h.handle_message(user, "תפריט", None)
             background_tasks.add_task(
-                send_whatsapp_message, reply_to, response.text, response.keyboard
+                send_whatsapp_message, reply_to, response.text, response.keyboard, response.button_text
             )
             return response.text, new_state
 
@@ -581,7 +581,7 @@ async def _route_message_to_handler(
             # מצב מיוחד: admin_handler מחזיר _ADMIN_SWITCH_* כשצריך לנתב לתפקיד חדש
             if isinstance(new_state, str) and new_state.startswith("_ADMIN_SWITCH_"):
                 background_tasks.add_task(
-                    send_whatsapp_message, reply_to, response.text, response.keyboard
+                    send_whatsapp_message, reply_to, response.text, response.keyboard, response.button_text
                 )
                 # _route_to_role_menu_wa שומר ומשחזר admin context אוטומטית,
                 # ומוסיף כפתור "חזרה לאדמין" לתגובה
@@ -592,7 +592,7 @@ async def _route_message_to_handler(
                 return response2.text, new_state2
 
             background_tasks.add_task(
-                send_whatsapp_message, reply_to, response.text, response.keyboard
+                send_whatsapp_message, reply_to, response.text, response.keyboard, response.button_text
             )
             return response.text, new_state
 
@@ -606,7 +606,7 @@ async def _route_message_to_handler(
         else:
             response, new_state = await _sender_fallback_wa(user, db, state_manager)
         background_tasks.add_task(
-            send_whatsapp_message, reply_to, response.text, response.keyboard
+            send_whatsapp_message, reply_to, response.text, response.keyboard, response.button_text
         )
         return response.text, new_state
 
@@ -622,7 +622,7 @@ async def _route_message_to_handler(
             handler = CourierStateHandler(db, platform="whatsapp")
             response, new_state = await handler.handle_message(user, text, photo_file_id)
             background_tasks.add_task(
-                send_whatsapp_message, reply_to, response.text, response.keyboard
+                send_whatsapp_message, reply_to, response.text, response.keyboard, response.button_text
             )
             return response.text, new_state
 
@@ -638,7 +638,7 @@ async def _route_message_to_handler(
             handler = DriverStateHandler(db, platform="whatsapp")
             response, new_state = await handler.handle_message(user, text, photo_file_id)
             background_tasks.add_task(
-                send_whatsapp_message, reply_to, response.text, response.keyboard
+                send_whatsapp_message, reply_to, response.text, response.keyboard, response.button_text
             )
             return response.text, new_state
 
@@ -705,7 +705,7 @@ async def _route_message_to_handler(
         if text and ("חזרה" in text or "תפריט" in text):
             response, new_state = await _route_to_role_menu_wa(user, db, state_manager)
             background_tasks.add_task(
-                send_whatsapp_message, reply_to, response.text, response.keyboard
+                send_whatsapp_message, reply_to, response.text, response.keyboard, response.button_text
             )
             return response.text, new_state
 
@@ -757,7 +757,7 @@ async def _route_message_to_handler(
         else:
             response, new_state = await _route_to_role_menu_wa(user, db, state_manager)
         background_tasks.add_task(
-            send_whatsapp_message, reply_to, response.text, response.keyboard
+            send_whatsapp_message, reply_to, response.text, response.keyboard, response.button_text
         )
         return response.text, new_state
 
@@ -805,7 +805,7 @@ async def _route_message_to_handler(
             )
             response, new_state = await _route_to_role_menu_wa(user, db, state_manager)
         background_tasks.add_task(
-            send_whatsapp_message, reply_to, response.text, response.keyboard
+            send_whatsapp_message, reply_to, response.text, response.keyboard, response.button_text
         )
         return response.text, new_state
 
@@ -843,7 +843,7 @@ async def _route_message_to_handler(
             response, new_state = await _route_to_role_menu_wa(user, db, state_manager)
 
         background_tasks.add_task(
-            send_whatsapp_message, reply_to, response.text, response.keyboard
+            send_whatsapp_message, reply_to, response.text, response.keyboard, response.button_text
         )
         return response.text, new_state
 
@@ -881,7 +881,7 @@ async def _route_message_to_handler(
             from app.api.webhooks._admin_context import inject_admin_return_button as _inject_btn_courier_cl
             _inject_btn_courier_cl(response)
         background_tasks.add_task(
-            send_whatsapp_message, reply_to, response.text, response.keyboard
+            send_whatsapp_message, reply_to, response.text, response.keyboard, response.button_text
         )
         return response.text, new_state
 
@@ -927,7 +927,7 @@ async def _route_message_to_handler(
             if _driver_ctx_cl.get("original_role") == "admin":
                 _inject_btn_drv_cl(response)
         background_tasks.add_task(
-            send_whatsapp_message, reply_to, response.text, response.keyboard
+            send_whatsapp_message, reply_to, response.text, response.keyboard, response.button_text
         )
         return response.text, new_state
 
@@ -952,7 +952,7 @@ async def _route_message_to_handler(
             from app.api.webhooks._admin_context import inject_admin_return_button as _inject_btn_sender_cl
             _inject_btn_sender_cl(response)
         background_tasks.add_task(
-            send_whatsapp_message, reply_to, response.text, response.keyboard
+            send_whatsapp_message, reply_to, response.text, response.keyboard, response.button_text
         )
         return response.text, new_state
 
