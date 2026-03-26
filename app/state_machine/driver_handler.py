@@ -982,7 +982,7 @@ class DriverStateHandler:
                 if notified_count > 0:
                     notified_text = f"📨 נשלח ל-{notified_count} נהגים עם חיפוש תואם.\n"
                 confirmation = (
-                    f"✅ <b>הנסיעה פורסמה!</b>\n\n"
+                    f"⚠️ <b>לא נמצאו קבוצות רלוונטיות</b>\n\n"
                     f"{formatted_message}\n"
                     f"לא נמצאו קבוצות מתאימות למסלול "
                     f"{escape(posting.origin)} → {escape(posting.destination)}.\n"
@@ -1484,16 +1484,14 @@ class DriverStateHandler:
 
         # הצגת אישור + סיכום + מספר נהגים פנויים
         summary = DriverSearchService.format_search_summary(search)
-        available_drivers = await self.search_service.count_available_drivers_for_destination(
-            search.destination_city, exclude_user_id=user.id
-        )
 
-        # שליפת כל החיפושים הפעילים עם ספירת נהגים לכל יעד
+        # שליפת כל החיפושים הפעילים עם ספירת נהגים לכל יעד — שאילתה אחת
         all_searches = await self.search_service.get_active_searches(user.id)
         destination_cities = [s.destination_city for s in all_searches]
         driver_counts = await self.search_service.count_available_drivers_for_destinations(
             destination_cities, exclude_user_id=user.id
         )
+        available_drivers = driver_counts.get(search.destination_city, 0)
 
         # בניית שורת נהגים פנויים עם שמות ערים מלאים
         origin_name = search.origin_city or ""
