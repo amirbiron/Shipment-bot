@@ -788,7 +788,7 @@ app.post('/send', async (req, res) => {
                     // - row title עד ~24 תווים
                     // - row description עד ~72 תווים
                     const safeButtonText = truncateByCodepoints(button_text || 'בחר 👆', 20);
-                    const safeTitle = truncateByCodepoints("משלוח בצ'יק", 24);
+                    const safeTitle = truncateByCodepoints("iDriver • איי דרייבר", 24);
                     const safeDescription = truncateByCodepoints(message, 1024);
 
                     const listPayload = {
