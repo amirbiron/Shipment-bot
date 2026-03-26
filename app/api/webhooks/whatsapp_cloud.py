@@ -587,7 +587,7 @@ async def _route_message_to_handler(
                 # ומוסיף כפתור "חזרה לאדמין" לתגובה
                 response2, new_state2 = await _route_to_role_menu_wa(user, db, state_manager)
                 background_tasks.add_task(
-                    send_whatsapp_message, reply_to, response2.text, response2.keyboard
+                    send_whatsapp_message, reply_to, response2.text, response2.keyboard, response2.button_text
                 )
                 return response2.text, new_state2
 
