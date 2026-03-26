@@ -1175,7 +1175,7 @@ async def _handle_courier_post_processing(
 async def send_welcome_message(phone_number: str):
     """הודעת ברוכים הבאים ותפריט ראשי [שלב 1]"""
     welcome_text = (
-        "ברוכים הבאים ל-*iDriver • איי דרייבר* 🚗\n"
+        "ברוכים הבאים ל-iDriver • איי דרייבר 🚗\n"
         "המערכת החכמה לנהגים.\n\n"
         "איך נוכל לעזור היום?\n\n"
         "בכל שלב תוכלו לחזור לתפריט הראשי על ידי הקשה של #"
