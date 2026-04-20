@@ -1037,3 +1037,146 @@ async def test_get_or_create_user_finds_by_real_phone_after_heal(
 
     assert is_new is False
     assert user.id == existing_user.id
+
+
+# ============================================================================
+# BSUID (Meta Cloud API) — dual-key lookup ב-get_or_create_user
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_user_bsuid_lookup_wins_over_phone(
+    db_session,
+):
+    """
+    כשמסופקים גם BSUID וגם מספר טלפון, ה-BSUID מנצח ומחזיר את המשתמש
+    שמזוהה ב-external_user_id — גם אם מספר הטלפון בבקשה שייך למשתמש אחר.
+    """
+    from app.api.webhooks.whatsapp import get_or_create_user
+
+    user_with_bsuid = User(
+        phone_number="+972500000001",
+        platform="whatsapp",
+        role=UserRole.SENDER,
+        external_user_id="IL.abc123bsuid",
+    )
+    user_with_only_phone = User(
+        phone_number="+972500000002",
+        platform="whatsapp",
+        role=UserRole.SENDER,
+    )
+    db_session.add_all([user_with_bsuid, user_with_only_phone])
+    await db_session.commit()
+    await db_session.refresh(user_with_bsuid)
+    await db_session.refresh(user_with_only_phone)
+
+    # הטלפון תואם ל-user השני, אבל ה-BSUID תואם ל-user הראשון — ה-BSUID מנצח.
+    user, is_new, _norm = await get_or_create_user(
+        db_session,
+        sender_identifier="+972500000002",
+        resolved_phone="972500000002",
+        external_user_id="IL.abc123bsuid",
+    )
+
+    assert is_new is False
+    assert user.id == user_with_bsuid.id
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_user_bsuid_miss_falls_back_to_phone(
+    db_session,
+):
+    """
+    BSUID שלא קיים ב-DB — נופלים ללוגיקת phone הקיימת ומחזירים את המשתמש
+    לפי מספר הטלפון.
+    """
+    from app.api.webhooks.whatsapp import get_or_create_user
+
+    existing = User(
+        phone_number="+972501111111",
+        platform="whatsapp",
+        role=UserRole.SENDER,
+    )
+    db_session.add(existing)
+    await db_session.commit()
+    await db_session.refresh(existing)
+
+    user, is_new, _norm = await get_or_create_user(
+        db_session,
+        sender_identifier="+972501111111",
+        resolved_phone="972501111111",
+        external_user_id="IL.unknown_bsuid",
+    )
+
+    assert is_new is False
+    assert user.id == existing.id
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_user_bsuid_heals_placeholder_phone(
+    db_session,
+):
+    """
+    משתמש שזוהה דרך BSUID עם phone_number של placeholder (wa:...) —
+    כשיש עכשיו מספר אמיתי, ה-phone_number מעודכן למספר האמיתי.
+    """
+    import hashlib
+
+    from app.api.webhooks.whatsapp import get_or_create_user
+
+    sender_raw = "bsuid_user_old_lid@lid"
+    digest = hashlib.sha1(sender_raw.encode("utf-8")).hexdigest()[:17]
+    placeholder = f"wa:{digest}"
+
+    existing = User(
+        phone_number=placeholder,
+        platform="whatsapp",
+        role=UserRole.SENDER,
+        external_user_id="IL.heal_test_bsuid",
+    )
+    db_session.add(existing)
+    await db_session.commit()
+    await db_session.refresh(existing)
+
+    user, is_new, norm_phone = await get_or_create_user(
+        db_session,
+        sender_identifier=sender_raw,
+        resolved_phone="972502222333",
+        external_user_id="IL.heal_test_bsuid",
+    )
+
+    assert is_new is False
+    assert user.id == existing.id
+    # המספר התעדכן מ-placeholder למספר האמיתי
+    assert user.phone_number == "+972502222333"
+    assert norm_phone == "+972502222333"
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_user_without_bsuid_uses_phone_lookup(
+    db_session,
+):
+    """
+    לקוח שלא מעביר BSUID (WPPConnect webhook) — מתנהג כמו קודם,
+    ללא regression.
+    """
+    from app.api.webhooks.whatsapp import get_or_create_user
+
+    existing = User(
+        phone_number="+972503333444",
+        platform="whatsapp",
+        role=UserRole.SENDER,
+    )
+    db_session.add(existing)
+    await db_session.commit()
+    await db_session.refresh(existing)
+
+    user, is_new, _norm = await get_or_create_user(
+        db_session,
+        sender_identifier="+972503333444",
+        resolved_phone="972503333444",
+        # ללא external_user_id — דמיית WPPConnect
+    )
+
+    assert is_new is False
+    assert user.id == existing.id

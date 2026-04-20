@@ -42,6 +42,11 @@ class User(Base):
     telegram_chat_id = Column(String(50), unique=True, nullable=True, index=True)
     # מיגרציה: ALTER TABLE users ADD COLUMN telegram_username VARCHAR(100);
     telegram_username = Column(String(100), nullable=True)  # @username בטלגרם — לזיהוי בהודעות אדמין
+    # BSUID (Business-Scoped User ID) מ-Meta Cloud API — הכנה לשינוי זהות ביוני 2026.
+    # Meta מגדירים עד 128 תווים לאחר הקידומת "CC." (2 אותיות מדינה + נקודה), סה"כ עד 131.
+    # שומרים רק את הערך הגולמי מה-webhook, ללא קידומת "whatsapp:".
+    # מיגרציה: ALTER TABLE users ADD COLUMN external_user_id VARCHAR(150) UNIQUE;
+    external_user_id = Column(String(150), unique=True, nullable=True)
 
     # Courier-specific fields
     approval_status = Column(

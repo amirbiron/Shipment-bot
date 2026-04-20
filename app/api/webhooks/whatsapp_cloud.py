@@ -149,6 +149,83 @@ def _extract_location_from_message(msg: dict) -> tuple[float | None, float | Non
     return None, None
 
 
+def _extract_bsuid_for_message(msg: dict, value: dict) -> str | None:
+    """
+    חילוץ BSUID (Business-Scoped User ID) של Meta Cloud API עבור הודעה מסוימת.
+
+    Meta BSUID (מתגלגל ביוני 2026): משתמש יכול לאמץ username ואז מספר הטלפון לא
+    יועבר ב-webhook. BSUID הוא מזהה יציב ברמת portfolio, ומופיע ב-value.contacts[].user_id.
+    ייתכן גם ב-msg.from_user_id בחלק מה-payloads העתידיים. שומרים רק במידה וקיים.
+    """
+    # עדיפות: שדה ייעודי ב-message (אם Meta יוסיפו אותו)
+    direct = msg.get("from_user_id") or msg.get("user_id")
+    if direct:
+        return str(direct).strip() or None
+
+    # חלופה: contacts[] ברמת value, מותאם לפי wa_id=msg.from
+    from_id = msg.get("from") or ""
+    for contact in value.get("contacts", []) or []:
+        if contact.get("wa_id") == from_id:
+            bsuid = contact.get("user_id")
+            if bsuid:
+                return str(bsuid).strip() or None
+    return None
+
+
+async def _persist_external_user_id(
+    db: AsyncSession, user: User, bsuid: str | None
+) -> None:
+    """
+    שמירת BSUID על המשתמש אם טרם נשמר או השתנה. פעולת best-effort —
+    כשל מכל סוג (IntegrityError, OperationalError, ProgrammingError וכו')
+    לא יעצור את עיבוד ה-webhook. כשל שאינו IntegrityError מסיים ב-rollback
+    כדי להשאיר את הסשן נקי לפעולות ה-DB הבאות ב-_process_cloud_message.
+    """
+    if not bsuid or user.external_user_id == bsuid:
+        return
+
+    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy import update as sa_update
+
+    try:
+        async with db.begin_nested():
+            await db.execute(
+                sa_update(User)
+                .where(User.id == user.id)
+                .values(external_user_id=bsuid)
+            )
+        await db.commit()
+        user.external_user_id = bsuid
+        logger.info(
+            "נשמר external_user_id (BSUID) למשתמש",
+            extra_data={"user_id": user.id},
+        )
+    except IntegrityError:
+        # משתמש אחר כבר מחזיק את אותו BSUID — לא דורסים, רק מתעדים.
+        # ה-savepoint כבר בוטל אוטומטית ע"י יציאה מ-async with.
+        logger.warning(
+            "לא ניתן לשמור external_user_id — כבר קיים אצל משתמש אחר",
+            extra_data={"user_id": user.id},
+        )
+    except Exception as exc:
+        # כשל לא צפוי (OperationalError/ProgrammingError/DisconnectionError וכו').
+        # חייב log עם exc_info כדי לא להפר את הכלל נגד except Exception: pass,
+        # ו-rollback כדי שהסשן יישאר שמיש לפעולות הבאות ב-_process_cloud_message.
+        logger.error(
+            "כשלון לא צפוי בשמירת external_user_id — ממשיכים ללא שמירה",
+            extra_data={"user_id": user.id, "error": str(exc)},
+            exc_info=True,
+        )
+        try:
+            await db.rollback()
+        except Exception:
+            logger.error(
+                "כשלון ב-rollback אחרי כשל שמירת external_user_id",
+                extra_data={"user_id": user.id},
+                exc_info=True,
+            )
+
+
 # ──────────────────────────────────────────────
 #  Webhook handler ראשי
 # ──────────────────────────────────────────────
@@ -284,13 +361,23 @@ async def _process_cloud_message(
         # נרמול: "972501234567" → "+972501234567"
         normalized_phone = f"+{from_phone}" if not from_phone.startswith("+") else from_phone
 
+        # חילוץ BSUID לפני resolve — משמש כמפתח ראשי ב-get_or_create_user
+        # (dual-key lookup: BSUID עדיפות 1, phone עדיפות 2).
+        bsuid = _extract_bsuid_for_message(msg, value)
+
         user, is_new_user, _normalized = await get_or_create_user(
             db,
             sender_identifier=normalized_phone,
             from_number=normalized_phone,
             reply_to=normalized_phone,
             resolved_phone=normalized_phone,
+            external_user_id=bsuid,
         )
+
+        # אם המשתמש נמצא/נוצר במסלול phone (ולא BSUID) — שומרים עכשיו את ה-BSUID.
+        # best-effort: _persist עושה early-return אם ה-BSUID כבר שמור.
+        if bsuid:
+            await _persist_external_user_id(db, user, bsuid)
 
         logger.info(
             "Cloud API user resolved",
@@ -299,6 +386,7 @@ async def _process_cloud_message(
                 "phone": phone_masked,
                 "is_new": is_new_user,
                 "role": user.role.value if user.role else None,
+                "has_bsuid": bool(bsuid),
             },
         )
 
