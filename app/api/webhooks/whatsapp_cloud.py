@@ -177,7 +177,9 @@ async def _persist_external_user_id(
 ) -> None:
     """
     שמירת BSUID על המשתמש אם טרם נשמר או השתנה. פעולת best-effort —
-    כשל (למשל התנגשות ייחודיות) לא שובר את עיבוד ה-webhook.
+    כשל מכל סוג (IntegrityError, OperationalError, ProgrammingError וכו')
+    לא יעצור את עיבוד ה-webhook. כשל שאינו IntegrityError מסיים ב-rollback
+    כדי להשאיר את הסשן נקי לפעולות ה-DB הבאות ב-_process_cloud_message.
     """
     if not bsuid or user.external_user_id == bsuid:
         return
@@ -200,10 +202,28 @@ async def _persist_external_user_id(
         )
     except IntegrityError:
         # משתמש אחר כבר מחזיק את אותו BSUID — לא דורסים, רק מתעדים.
+        # ה-savepoint כבר בוטל אוטומטית ע"י יציאה מ-async with.
         logger.warning(
             "לא ניתן לשמור external_user_id — כבר קיים אצל משתמש אחר",
             extra_data={"user_id": user.id},
         )
+    except Exception as exc:
+        # כשל לא צפוי (OperationalError/ProgrammingError/DisconnectionError וכו').
+        # חייב log עם exc_info כדי לא להפר את הכלל נגד except Exception: pass,
+        # ו-rollback כדי שהסשן יישאר שמיש לפעולות הבאות ב-_process_cloud_message.
+        logger.error(
+            "כשלון לא צפוי בשמירת external_user_id — ממשיכים ללא שמירה",
+            extra_data={"user_id": user.id, "error": str(exc)},
+            exc_info=True,
+        )
+        try:
+            await db.rollback()
+        except Exception:
+            logger.error(
+                "כשלון ב-rollback אחרי כשל שמירת external_user_id",
+                extra_data={"user_id": user.id},
+                exc_info=True,
+            )
 
 
 # ──────────────────────────────────────────────
