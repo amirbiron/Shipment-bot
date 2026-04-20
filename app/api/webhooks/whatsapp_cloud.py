@@ -361,18 +361,21 @@ async def _process_cloud_message(
         # נרמול: "972501234567" → "+972501234567"
         normalized_phone = f"+{from_phone}" if not from_phone.startswith("+") else from_phone
 
+        # חילוץ BSUID לפני resolve — משמש כמפתח ראשי ב-get_or_create_user
+        # (dual-key lookup: BSUID עדיפות 1, phone עדיפות 2).
+        bsuid = _extract_bsuid_for_message(msg, value)
+
         user, is_new_user, _normalized = await get_or_create_user(
             db,
             sender_identifier=normalized_phone,
             from_number=normalized_phone,
             reply_to=normalized_phone,
             resolved_phone=normalized_phone,
+            external_user_id=bsuid,
         )
 
-        # שמירת BSUID (אם סופק ב-payload) — הכנה ל-rollout של יוני 2026.
-        # לא משנה לוגיקת lookup/שליחה; לשימוש עתידי כשהמשתמש יאמץ username ומספר הטלפון
-        # לא יופיע ב-webhook. בוצעת best-effort ואינה מכשילה את העיבוד.
-        bsuid = _extract_bsuid_for_message(msg, value)
+        # אם המשתמש נמצא/נוצר במסלול phone (ולא BSUID) — שומרים עכשיו את ה-BSUID.
+        # best-effort: _persist עושה early-return אם ה-BSUID כבר שמור.
         if bsuid:
             await _persist_external_user_id(db, user, bsuid)
 

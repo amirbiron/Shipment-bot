@@ -243,6 +243,7 @@ async def get_or_create_user(
     from_number: str | None = None,
     reply_to: str | None = None,
     resolved_phone: str | None = None,
+    external_user_id: str | None = None,
 ) -> tuple[User, bool, str | None]:
     """
     Get existing user or create new one. Returns (user, is_new, normalized_phone)
@@ -250,6 +251,10 @@ async def get_or_create_user(
     בווטסאפ לא תמיד יש מספר טלפון יציב (למשל @lid), לכן אנחנו משתמשים במזהה שולח יציב
     בתור ה-"phone_number" במודל לצורך זיהוי ושמירת session.
     normalized_phone מוחזר כדי למנוע חישוב כפול בקוד הקורא.
+
+    external_user_id (BSUID מ-Meta Cloud API): אם סופק, משמש כמזהה ראשוני (עדיפות
+    עליונה) כי הוא יציב ברמת portfolio גם כאשר המשתמש מאמץ username ומספר הטלפון
+    לא מגיע ב-webhook. אם BSUID לא סופק או לא נמצא — חוזרים ללוגיקה הקיימת.
     """
     import hashlib
 
@@ -274,6 +279,43 @@ async def get_or_create_user(
         or _extract_real_phone(from_number)
         or _extract_real_phone(reply_to)
     )
+
+    # עדיפות 1 — חיפוש לפי BSUID. מזהה יציב ברמת portfolio של Meta; גם אם משתמש
+    # מחליף טלפון או מסתיר אותו (username), ה-BSUID נשאר עוגן הזיהוי. מצליחים
+    # כאן — חוזרים מיד, כולל healing של phone_number אם נמצא placeholder.
+    bsuid_clean = (external_user_id or "").strip() or None
+    if bsuid_clean:
+        result = await db.execute(
+            select(User).where(User.external_user_id == bsuid_clean).limit(1)
+        )
+        user_by_bsuid = result.scalar_one_or_none()
+        if user_by_bsuid:
+            # healing: יש מספר אמיתי ועכשיו אפשר להחליף placeholder wa:... ללא לגרור כפילות
+            if (
+                normalized_phone
+                and user_by_bsuid.phone_number
+                and user_by_bsuid.phone_number.startswith("wa:")
+            ):
+                try:
+                    async with db.begin_nested():
+                        user_by_bsuid.phone_number = normalized_phone
+                    await db.commit()
+                    await db.refresh(user_by_bsuid)
+                    logger.info(
+                        "עדכון phone_number מ-placeholder למספר אמיתי לאחר זיהוי BSUID",
+                        extra_data={
+                            "user_id": user_by_bsuid.id,
+                            "phone": PhoneNumberValidator.mask(normalized_phone),
+                        },
+                    )
+                except IntegrityError:
+                    # משתמש אחר כבר מחזיק את המספר — לא דורסים, ממשיכים עם ה-placeholder.
+                    await db.refresh(user_by_bsuid)
+                    logger.warning(
+                        "לא ניתן לעדכן phone_number אחרי זיהוי BSUID — כבר קיים אצל אחר",
+                        extra_data={"user_id": user_by_bsuid.id},
+                    )
+            return user_by_bsuid, False, normalized_phone
 
     # חיפוש לפי מזהה שיחה יציב: משתמשים באותו placeholder גם ב-lookup וגם ביצירה
     # כדי למנוע מצב שבו sender_id ארוך נשמר כ-wa:<hash> אבל lookup מחפש את הערך הגולמי.
