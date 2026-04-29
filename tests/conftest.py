@@ -7,8 +7,10 @@ Provides fixtures for:
 - Test data factories
 """
 # הגדרת JWT_SECRET_KEY לפני ייבוא app — הולידטור דורש מפתח כש-DEBUG=False
+# הגדרת TELEGRAM_WEBHOOK_SECRET_TOKEN — בלעדיו webhook_auth חוסם בקשות כש-DEBUG=False
 import os
 os.environ.setdefault("JWT_SECRET_KEY", "test-jwt-secret-key-for-testing-only-do-not-use-in-production")
+os.environ.setdefault("TELEGRAM_WEBHOOK_SECRET_TOKEN", "test-webhook-secret-for-testing-only")
 
 import pytest
 from typing import AsyncGenerator
@@ -120,8 +122,18 @@ async def test_client(db_session: AsyncSession, async_engine):
     )
 
     transport = ASGITransport(app=app)
+    # כותרת אימות webhook — נשלחת אוטומטית בכל בקשה כדי לעבור את verify_telegram_webhook_token
+    webhook_secret = os.environ.get("TELEGRAM_WEBHOOK_SECRET_TOKEN", "")
+    default_headers = {}
+    if webhook_secret:
+        default_headers["X-Telegram-Bot-Api-Secret-Token"] = webhook_secret
+
     with patch("app.api.routes.panel.alerts.AsyncSessionLocal", test_session_maker):
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://test",
+            headers=default_headers,
+        ) as client:
             yield client
 
     app.dependency_overrides.clear()
